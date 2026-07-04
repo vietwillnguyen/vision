@@ -307,6 +307,7 @@ score_weights    -- user_id, scene_weight, audio_weight, motion_weight (defaults
 
 ```
 vision/
+  supabase/          -- Postgres migrations + pgTAP tests (shared schema, RLS, storage buckets)
   firmware/          -- Python daemon + systemd unit + onboarding scripts
   pipeline/          -- Serverless AI pipeline (Python, deployable to Lambda or Supabase Edge)
   app/               -- React Native / Expo mobile app
@@ -314,6 +315,7 @@ vision/
   docs/
     superpowers/
       specs/         -- This file
+      plans/         -- Executable implementation plans (one per epic)
 ```
 
 ---

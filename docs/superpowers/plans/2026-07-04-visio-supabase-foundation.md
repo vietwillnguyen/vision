@@ -8,6 +8,15 @@
 
 **Tech Stack:** Supabase CLI, Postgres, pgTAP.
 
+> **Status: implemented.**
+> All 9 tasks are complete; the migrations under `supabase/migrations/` are the source of truth and deviate from this plan's literal SQL in a few deliberate ways:
+>
+> - An explicit `grant` block in the RLS migration (`20260704120500`), because Supabase CLI 2.x no longer auto-grants DML on new tables to the app roles (`anon` intentionally gets no grants, and `authenticated` writes are restricted to owned columns).
+> - `auth.uid()` is wrapped as `(select auth.uid())` in every policy so Postgres evaluates it once per query (initplan) instead of per row.
+> - Bucket inserts use `on conflict (id) do nothing` and storage policies qualify `objects.name`.
+> - An extra migration (`20260704120800_add_fk_indexes.sql`) adds indexes on `devices.user_id`, `segments.device_id`, and `reels.device_id`.
+> - `supabase migration up` is run between the red and green test steps to apply each new migration.
+
 ## Global Constraints
 
 - Schema must match the spec's Data Model section exactly: tables `devices`, `device_status`, `segments`, `reels`, `score_weights`.
@@ -603,4 +612,4 @@ git commit -m "feat: add push_token column to devices"
 
 ## Handoff
 
-Once all 8 tasks pass, run the full suite one more time (`supabase test db`) and confirm every file passes, then note the local `API URL`, `anon key`, and `service_role key` from `supabase status` - Epics 1, 2, and 3 need these to configure their Supabase clients.
+Once all 9 tasks pass, run the full suite one more time (`supabase test db`) and confirm every file passes, then note the local `API URL`, `anon key`, and `service_role key` from `supabase status` - Epics 1, 2, and 3 need these to configure their Supabase clients.
