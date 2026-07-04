@@ -13,7 +13,7 @@ insert into public.reels (id, device_id, date, s3_key, duration_sec) values
 insert into public.score_weights (user_id) values
   ('00000000-0000-0000-0000-0000000000a1');
 
-select plan(10);
+select plan(18);
 
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000a2", "role": "authenticated"}';
@@ -68,6 +68,64 @@ select isnt_empty(
 select isnt_empty(
   $$select 1 from public.score_weights where user_id = '00000000-0000-0000-0000-0000000000a1'$$,
   'the owning user should see their own score weights'
+);
+
+select lives_ok(
+  $$update public.devices set push_token = 'expo-token'
+    where device_id = '00000000-0000-0000-0000-0000000000b1'$$,
+  'the owning user should be able to update their own device'
+);
+
+select lives_ok(
+  $$update public.score_weights set motion_weight = 0.5
+    where user_id = '00000000-0000-0000-0000-0000000000a1'$$,
+  'the owning user should be able to update their own score weights'
+);
+
+select lives_ok(
+  $$update public.segments set user_feedback = 'include'
+    where id = '00000000-0000-0000-0000-0000000000c1'$$,
+  'the owning user should be able to update user_feedback on their own segments'
+);
+
+select throws_ok(
+  $$update public.segments set composite_score = 0.99
+    where id = '00000000-0000-0000-0000-0000000000c1'$$,
+  '42501',
+  null,
+  'the owning user should not be able to update pipeline-owned segment scores'
+);
+
+select throws_ok(
+  $$insert into public.segments (device_id, recorded_at, duration_sec, s3_key) values
+    ('00000000-0000-0000-0000-0000000000b1', now(), 60, 'b1/seg2.mp4')$$,
+  '42501',
+  null,
+  'the owning user should not be able to insert segments directly'
+);
+
+select throws_ok(
+  $$insert into public.reels (device_id, date, s3_key, duration_sec) values
+    ('00000000-0000-0000-0000-0000000000b1', current_date, 'b1/reel2.mp4', 90)$$,
+  '42501',
+  null,
+  'the owning user should not be able to insert reels directly'
+);
+
+select throws_ok(
+  $$update public.reels set s3_key = 'b1/tampered.mp4'
+    where id = '00000000-0000-0000-0000-0000000000d1'$$,
+  '42501',
+  null,
+  'the owning user should not be able to update reels'
+);
+
+select throws_ok(
+  $$update public.device_status set battery_pct = 100
+    where device_id = '00000000-0000-0000-0000-0000000000b1'$$,
+  '42501',
+  null,
+  'the owning user should not be able to update device status directly'
 );
 
 select * from finish();
