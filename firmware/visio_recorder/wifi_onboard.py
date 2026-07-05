@@ -62,6 +62,10 @@ def render_wpa_supplicant(ssid: str, password: str) -> str:
 def _write_private_text(path: Path, content: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
+        # The mode passed to os.open only applies when the file is newly
+        # created; a pre-existing file (e.g. the stock wpa_supplicant.conf
+        # shipped at 0o644) keeps its old permissions, so tighten via the fd.
+        os.fchmod(f.fileno(), 0o600)
         f.write(content)
 
 

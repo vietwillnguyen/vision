@@ -88,6 +88,18 @@ def test_write_session_credentials_sets_restrictive_permissions(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+@pytest.mark.parametrize("writer", ["wpa_supplicant", "session_credentials"])
+def test_writers_tighten_permissions_on_pre_existing_loose_file(tmp_path, writer):
+    path = tmp_path / "target"
+    path.touch(mode=0o644)
+    path.chmod(0o644)
+    if writer == "wpa_supplicant":
+        write_wpa_supplicant(path, "HomeNet", "hunter2")
+    else:
+        write_session_credentials(path, "access-abc", "refresh-xyz")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 @pytest.mark.parametrize(
     "ssid,password",
     [
