@@ -23,10 +23,14 @@ class FakeLedDriver(LedDriver):
 
 
 class FakeCommandRunner(CommandRunner):
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
     def run(self, args: list[str]) -> None:
+        self.calls.append(args)
         # For mux_segment, create the mp4 file from the h264 input
         if "ffmpeg" in args:
-            # args format: ["ffmpeg", "-y", "-i", input_path, "-c", "copy", output_path]
+            # args format: ["ffmpeg", "-y", "-framerate", fps, "-i", input_path, "-c", "copy", output_path]
             input_idx = args.index("-i") + 1
             output_idx = args.index("copy") + 1
             input_path = Path(args[input_idx])
@@ -73,20 +77,24 @@ def test_on_segment_complete_happy_path(tmp_path):
     led = FakeLedDriver()
     storage = FakeStorageClient()
     status_client = FakeStatusClient()
+    command_runner = FakeCommandRunner()
 
     new_count = on_segment_complete(
         h264_path=h264_path,
         queue_dir=queue_dir,
-        command_runner=FakeCommandRunner(),
+        command_runner=command_runner,
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
         battery_reader=FakeBatteryReader(85),
         device_id="device-abc",
         segments_uploaded_today=41,
+        framerate=30,
     )
 
     assert new_count == 42
+    framerate_idx = command_runner.calls[0].index("-framerate") + 1
+    assert command_runner.calls[0][framerate_idx] == "30"
     assert storage.uploaded == ["device-abc/20260704_120000.mp4"]
     assert not h264_path.exists()
     assert led.calls == [
@@ -123,6 +131,7 @@ def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
         battery_reader=FakeBatteryReader(15),
         device_id="device-abc",
         segments_uploaded_today=0,
+        framerate=30,
     )
 
     assert led.calls == [

@@ -43,8 +43,9 @@ def on_segment_complete(
     battery_reader: BatteryReader,
     device_id: str,
     segments_uploaded_today: int,
+    framerate: int,
 ) -> int:
-    mp4_path = mux_segment(command_runner, h264_path)
+    mp4_path = mux_segment(command_runner, h264_path, framerate)
     h264_path.unlink()
     queued_path = enqueue(queue_dir, mp4_path)
 

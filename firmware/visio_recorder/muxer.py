@@ -13,7 +13,19 @@ class SubprocessCommandRunner:
         subprocess.run(args, check=True)
 
 
-def mux_segment(runner: CommandRunner, h264_path: Path) -> Path:
+def mux_segment(runner: CommandRunner, h264_path: Path, framerate: int) -> Path:
     mp4_path = h264_path.with_suffix(".mp4")
-    runner.run(["ffmpeg", "-y", "-i", str(h264_path), "-c", "copy", str(mp4_path)])
+    runner.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            str(framerate),
+            "-i",
+            str(h264_path),
+            "-c",
+            "copy",
+            str(mp4_path),
+        ]
+    )
     return mp4_path
