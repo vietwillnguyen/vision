@@ -1,6 +1,9 @@
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+_UNSAFE_CHARS = ('"', "\n", "\r")
 
 
 class QrDecodeError(ValueError):
@@ -18,17 +21,33 @@ class OnboardingPayload:
 def parse_onboarding_qr_payload(payload: str) -> OnboardingPayload:
     try:
         data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise QrDecodeError(
+            f"invalid onboarding QR payload: not valid JSON (length={len(payload)})"
+        ) from exc
+
+    try:
         return OnboardingPayload(
             ssid=data["ssid"],
             password=data["password"],
             user_access_token=data["user_access_token"],
             user_refresh_token=data["user_refresh_token"],
         )
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise QrDecodeError(f"invalid onboarding QR payload: {payload!r}") from exc
+    except (KeyError, TypeError) as exc:
+        field = exc.args[0] if isinstance(exc, KeyError) else "unknown"
+        raise QrDecodeError(
+            f"invalid onboarding QR payload: missing required field {field!r} "
+            f"(length={len(payload)})"
+        ) from exc
 
 
 def render_wpa_supplicant(ssid: str, password: str) -> str:
+    for name, value in (("ssid", ssid), ("password", password)):
+        if any(ch in value for ch in _UNSAFE_CHARS):
+            raise ValueError(
+                f"{name} contains an unsafe character (quote or newline); rejecting "
+                "rather than attempting to escape it for wpa_supplicant.conf"
+            )
     return (
         "country=US\n"
         "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
@@ -40,9 +59,17 @@ def render_wpa_supplicant(ssid: str, password: str) -> str:
     )
 
 
+def _write_private_text(path: Path, content: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+
+
 def write_wpa_supplicant(path: Path, ssid: str, password: str) -> None:
-    path.write_text(render_wpa_supplicant(ssid, password))
+    _write_private_text(path, render_wpa_supplicant(ssid, password))
 
 
 def write_session_credentials(path: Path, access_token: str, refresh_token: str) -> None:
-    path.write_text(json.dumps({"access_token": access_token, "refresh_token": refresh_token}))
+    _write_private_text(
+        path, json.dumps({"access_token": access_token, "refresh_token": refresh_token})
+    )

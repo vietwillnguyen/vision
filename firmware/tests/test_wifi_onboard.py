@@ -1,4 +1,5 @@
 import json
+import stat
 
 import pytest
 
@@ -29,13 +30,30 @@ def test_parse_valid_qr_payload():
 
 
 def test_parse_invalid_qr_payload_raises():
-    with pytest.raises(QrDecodeError):
-        parse_onboarding_qr_payload("not json")
+    bad_payload = "not json but contains hunter2 and refresh-xyz"
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(bad_payload)
+    message = str(exc_info.value)
+    assert "hunter2" not in message
+    assert "refresh-xyz" not in message
+    assert "not valid JSON" in message
 
 
 def test_parse_qr_payload_missing_fields_raises():
-    with pytest.raises(QrDecodeError):
-        parse_onboarding_qr_payload(json.dumps({"ssid": "HomeNet", "password": "hunter2"}))
+    payload = json.dumps(
+        {
+            "ssid": "HomeNet",
+            "password": "hunter2",
+            "user_refresh_token": "refresh-xyz",
+        }
+    )
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(payload)
+    message = str(exc_info.value)
+    assert "hunter2" not in message
+    assert "refresh-xyz" not in message
+    assert "missing required field" in message
+    assert "user_access_token" in message
 
 
 def test_render_wpa_supplicant_includes_ssid_and_password():
@@ -51,8 +69,41 @@ def test_write_wpa_supplicant_writes_file(tmp_path):
     assert 'ssid="HomeNet"' in path.read_text()
 
 
+def test_write_wpa_supplicant_sets_restrictive_permissions(tmp_path):
+    path = tmp_path / "wpa_supplicant.conf"
+    write_wpa_supplicant(path, "HomeNet", "hunter2")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_write_session_credentials_writes_json(tmp_path):
     path = tmp_path / "session.json"
     write_session_credentials(path, "access-abc", "refresh-xyz")
     saved = json.loads(path.read_text())
     assert saved == {"access_token": "access-abc", "refresh_token": "refresh-xyz"}
+
+
+def test_write_session_credentials_sets_restrictive_permissions(tmp_path):
+    path = tmp_path / "session.json"
+    write_session_credentials(path, "access-abc", "refresh-xyz")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    "ssid,password",
+    [
+        ('Home"Net', "hunter2"),
+        ("HomeNet", 'hunter"2'),
+        ("Home\nNet", "hunter2"),
+        ("HomeNet", "hunter\r2"),
+        ("Home\nNet", "hunter\r2"),
+    ],
+)
+def test_render_wpa_supplicant_rejects_unsafe_characters(ssid, password):
+    with pytest.raises(ValueError):
+        render_wpa_supplicant(ssid, password)
+
+
+def test_write_wpa_supplicant_rejects_unsafe_characters(tmp_path):
+    path = tmp_path / "wpa_supplicant.conf"
+    with pytest.raises(ValueError):
+        write_wpa_supplicant(path, 'Home"Net', "hunter2")
