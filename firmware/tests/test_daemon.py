@@ -27,6 +27,24 @@ def test_healthy_battery_proceeds_and_shows_recording_led():
     assert led.calls == [((0, 255, 0), LedPattern.SOLID)]
 
 
+def test_low_battery_proceeds_and_shows_low_battery_led():
+    led = FakeLedDriver()
+    result = run_startup_sequence(FakeBatteryReader(15), led)
+
+    assert result.proceed is True
+    assert result.battery_pct == 15
+    assert led.calls == [((255, 255, 0), LedPattern.PULSING)]
+
+
+def test_battery_at_warn_threshold_shows_recording_led():
+    led = FakeLedDriver()
+    result = run_startup_sequence(FakeBatteryReader(20), led)
+
+    assert result.proceed is True
+    assert result.battery_pct == 20
+    assert led.calls == [((0, 255, 0), LedPattern.SOLID)]
+
+
 def test_critical_battery_halts_and_shows_critical_led():
     led = FakeLedDriver()
     result = run_startup_sequence(FakeBatteryReader(5), led)

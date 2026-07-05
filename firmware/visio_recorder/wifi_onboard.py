@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-_UNSAFE_CHARS = ('"', "\n", "\r")
+_UNSAFE_CHARS = ('"', "\n", "\r", "\\")
 
 
 class QrDecodeError(ValueError):
@@ -26,27 +26,30 @@ def parse_onboarding_qr_payload(payload: str) -> OnboardingPayload:
             f"invalid onboarding QR payload: not valid JSON (length={len(payload)})"
         ) from exc
 
-    try:
-        return OnboardingPayload(
-            ssid=data["ssid"],
-            password=data["password"],
-            user_access_token=data["user_access_token"],
-            user_refresh_token=data["user_refresh_token"],
-        )
-    except (KeyError, TypeError) as exc:
-        field = exc.args[0] if isinstance(exc, KeyError) else "unknown"
-        raise QrDecodeError(
-            f"invalid onboarding QR payload: missing required field {field!r} "
-            f"(length={len(payload)})"
-        ) from exc
+    fields = {}
+    for field in ("ssid", "password", "user_access_token", "user_refresh_token"):
+        try:
+            value = data[field]
+        except (KeyError, TypeError) as exc:
+            raise QrDecodeError(
+                f"invalid onboarding QR payload: missing required field {field!r} "
+                f"(length={len(payload)})"
+            ) from exc
+        if not isinstance(value, str):
+            raise QrDecodeError(
+                f"invalid onboarding QR payload: field {field!r} is not a string "
+                f"(length={len(payload)})"
+            )
+        fields[field] = value
+    return OnboardingPayload(**fields)
 
 
 def render_wpa_supplicant(ssid: str, password: str) -> str:
     for name, value in (("ssid", ssid), ("password", password)):
         if any(ch in value for ch in _UNSAFE_CHARS):
             raise ValueError(
-                f"{name} contains an unsafe character (quote or newline); rejecting "
-                "rather than attempting to escape it for wpa_supplicant.conf"
+                f"{name} contains an unsafe character (quote, newline, or backslash); "
+                "rejecting rather than attempting to escape it for wpa_supplicant.conf"
             )
     return (
         "country=US\n"

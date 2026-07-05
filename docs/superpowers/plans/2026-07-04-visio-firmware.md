@@ -926,6 +926,24 @@ def test_healthy_battery_proceeds_and_shows_recording_led():
     assert led.calls == [((0, 255, 0), LedPattern.SOLID)]
 
 
+def test_low_battery_proceeds_and_shows_low_battery_led():
+    led = FakeLedDriver()
+    result = run_startup_sequence(FakeBatteryReader(15), led)
+
+    assert result.proceed is True
+    assert result.battery_pct == 15
+    assert led.calls == [((255, 255, 0), LedPattern.PULSING)]
+
+
+def test_battery_at_warn_threshold_shows_recording_led():
+    led = FakeLedDriver()
+    result = run_startup_sequence(FakeBatteryReader(20), led)
+
+    assert result.proceed is True
+    assert result.battery_pct == 20
+    assert led.calls == [((0, 255, 0), LedPattern.SOLID)]
+
+
 def test_critical_battery_halts_and_shows_critical_led():
     led = FakeLedDriver()
     result = run_startup_sequence(FakeBatteryReader(5), led)
@@ -961,14 +979,17 @@ def run_startup_sequence(battery_reader: BatteryReader, led_driver: LedDriver) -
     if status.should_halt:
         apply_led_state(led_driver, LedState.CRITICAL)
         return StartupResult(proceed=False, battery_pct=status.pct)
-    apply_led_state(led_driver, LedState.RECORDING)
+    if status.is_low:
+        apply_led_state(led_driver, LedState.LOW_BATTERY)
+    else:
+        apply_led_state(led_driver, LedState.RECORDING)
     return StartupResult(proceed=True, battery_pct=status.pct)
 ```
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && pytest tests/test_daemon.py -v`
-Expected: PASS (2 passed).
+Expected: PASS (4 passed).
 
 - [ ] **Step 5: Commit**
 

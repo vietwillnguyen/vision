@@ -56,6 +56,18 @@ def test_parse_qr_payload_missing_fields_raises():
     assert "user_access_token" in message
 
 
+@pytest.mark.parametrize("field", ["ssid", "password", "user_access_token", "user_refresh_token"])
+def test_parse_qr_payload_non_string_field_raises(field):
+    data = json.loads(VALID_PAYLOAD)
+    data[field] = 123
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(json.dumps(data))
+    message = str(exc_info.value)
+    assert "hunter2" not in message
+    assert "refresh-xyz" not in message
+    assert field in message
+
+
 def test_render_wpa_supplicant_includes_ssid_and_password():
     content = render_wpa_supplicant("HomeNet", "hunter2")
     assert 'ssid="HomeNet"' in content
@@ -108,6 +120,9 @@ def test_writers_tighten_permissions_on_pre_existing_loose_file(tmp_path, writer
         ("Home\nNet", "hunter2"),
         ("HomeNet", "hunter\r2"),
         ("Home\nNet", "hunter\r2"),
+        ("Home\\Net", "hunter2"),
+        ("HomeNet", "hunter\\2"),
+        ("HomeNet", "hunter2\\"),
     ],
 )
 def test_render_wpa_supplicant_rejects_unsafe_characters(ssid, password):
