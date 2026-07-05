@@ -88,6 +88,7 @@ def test_on_segment_complete_happy_path(tmp_path):
 
     assert new_count == 42
     assert storage.uploaded == ["device-abc/20260704_120000.mp4"]
+    assert not h264_path.exists()
     assert led.calls == [
         ((0, 0, 255), LedPattern.PULSING),
         ((0, 255, 0), LedPattern.SOLID),

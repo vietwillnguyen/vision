@@ -45,6 +45,7 @@ def on_segment_complete(
     segments_uploaded_today: int,
 ) -> int:
     mp4_path = mux_segment(command_runner, h264_path)
+    h264_path.unlink()
     queued_path = enqueue(queue_dir, mp4_path)
 
     battery_status = read_battery_status(battery_reader)
