@@ -1270,5 +1270,12 @@ git commit -m "feat: add visio-recorder systemd unit"
 - **Startup queue flush:** per the spec's Recording Daemon startup sequence ("flush any pending upload queue before recording starts"), call `list_pending` (Task 5) and drive each pending item through the upload half of `on_segment_complete` (Task 11) before starting a new `rpicam-vid` capture.
 - **Recording loop:** supervise `rpicam-vid` as a subprocess, and call `on_segment_complete` (Task 11) once per completed 5-minute segment, on a background thread per the spec.
 - **Real disk-usage stats:** replace the `0.0` placeholders in `on_segment_complete`'s `DeviceStatus` with real `shutil.disk_usage()` readings against the SD card mount.
+- **Upload error handling:** wrap the upload half of `on_segment_complete` in try/except.
+  On failure restore the LED via `next_led_state(..., is_uploading=False)` and leave the queued file in place - the startup queue flush is the retry mechanism.
+  Define when repeated failures escalate to the CRITICAL LED.
+- **Bookworm networking:** stock Raspberry Pi OS Bookworm uses NetworkManager, which does not honor `/etc/wpa_supplicant/wpa_supplicant.conf`.
+  Epic 5 wiring may need nmcli/NM keyfiles instead of `write_wpa_supplicant`'s output path.
+- **FLAG marker naming:** `FLAG_HHMMSS.marker` has no date component - two presses at the same wall-clock second on different days collide at the storage object path (no-upsert upload 409s and the marker never clears the queue).
+  Coordinate a rename to `FLAG_YYYYMMDD_HHMMSS.marker` with the pipeline plan (Task 11 there parses the marker name) before Epic 5.
 
 None of this has branching logic beyond what Tasks 8-11 already test in isolation - it is glue, validated on real hardware in Epic 5 rather than through additional unit tests.
