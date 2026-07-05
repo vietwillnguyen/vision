@@ -69,21 +69,21 @@ def test_parse_qr_payload_non_string_field_raises(field):
 
 
 def test_render_wpa_supplicant_includes_ssid_and_password():
-    content = render_wpa_supplicant("HomeNet", "hunter2")
+    content = render_wpa_supplicant("HomeNet", "hunter2pass")
     assert 'ssid="HomeNet"' in content
-    assert 'psk="hunter2"' in content
+    assert 'psk="hunter2pass"' in content
     assert "network={" in content
 
 
 def test_write_wpa_supplicant_writes_file(tmp_path):
     path = tmp_path / "wpa_supplicant.conf"
-    write_wpa_supplicant(path, "HomeNet", "hunter2")
+    write_wpa_supplicant(path, "HomeNet", "hunter2pass")
     assert 'ssid="HomeNet"' in path.read_text()
 
 
 def test_write_wpa_supplicant_sets_restrictive_permissions(tmp_path):
     path = tmp_path / "wpa_supplicant.conf"
-    write_wpa_supplicant(path, "HomeNet", "hunter2")
+    write_wpa_supplicant(path, "HomeNet", "hunter2pass")
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
@@ -106,7 +106,7 @@ def test_writers_tighten_permissions_on_pre_existing_loose_file(tmp_path, writer
     path.touch(mode=0o644)
     path.chmod(0o644)
     if writer == "wpa_supplicant":
-        write_wpa_supplicant(path, "HomeNet", "hunter2")
+        write_wpa_supplicant(path, "HomeNet", "hunter2pass")
     else:
         write_session_credentials(path, "access-abc", "refresh-xyz")
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -115,14 +115,14 @@ def test_writers_tighten_permissions_on_pre_existing_loose_file(tmp_path, writer
 @pytest.mark.parametrize(
     "ssid,password",
     [
-        ('Home"Net', "hunter2"),
-        ("HomeNet", 'hunter"2'),
-        ("Home\nNet", "hunter2"),
-        ("HomeNet", "hunter\r2"),
-        ("Home\nNet", "hunter\r2"),
-        ("Home\\Net", "hunter2"),
-        ("HomeNet", "hunter\\2"),
-        ("HomeNet", "hunter2\\"),
+        ('Home"Net', "hunter2pass"),
+        ("HomeNet", 'hunter"2pass'),
+        ("Home\nNet", "hunter2pass"),
+        ("HomeNet", "hunter\r2pass"),
+        ("Home\nNet", "hunter\r2pass"),
+        ("Home\\Net", "hunter2pass"),
+        ("HomeNet", "hunter\\2pass"),
+        ("HomeNet", "hunter2pass\\"),
     ],
 )
 def test_render_wpa_supplicant_rejects_unsafe_characters(ssid, password):
@@ -133,4 +133,27 @@ def test_render_wpa_supplicant_rejects_unsafe_characters(ssid, password):
 def test_write_wpa_supplicant_rejects_unsafe_characters(tmp_path):
     path = tmp_path / "wpa_supplicant.conf"
     with pytest.raises(ValueError):
-        write_wpa_supplicant(path, 'Home"Net', "hunter2")
+        write_wpa_supplicant(path, 'Home"Net', "hunter2pass")
+
+
+@pytest.mark.parametrize("password", ["", "short77", "a" * 64])
+def test_render_wpa_supplicant_rejects_out_of_range_psk_length(password):
+    with pytest.raises(ValueError) as exc_info:
+        render_wpa_supplicant("HomeNet", password)
+    message = str(exc_info.value)
+    assert "8-63" in message
+    if password:
+        assert password not in message
+
+
+@pytest.mark.parametrize("password", ["a" * 8, "a" * 63])
+def test_render_wpa_supplicant_accepts_boundary_psk_lengths(password):
+    content = render_wpa_supplicant("HomeNet", password)
+    assert f'psk="{password}"' in content
+
+
+def test_write_wpa_supplicant_rejects_out_of_range_psk_length(tmp_path):
+    path = tmp_path / "wpa_supplicant.conf"
+    with pytest.raises(ValueError):
+        write_wpa_supplicant(path, "HomeNet", "short77")
+    assert not path.exists()

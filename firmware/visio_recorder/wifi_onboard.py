@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _UNSAFE_CHARS = ('"', "\n", "\r", "\\")
+_PSK_MIN_LENGTH = 8
+_PSK_MAX_LENGTH = 63
 
 
 class QrDecodeError(ValueError):
@@ -51,6 +53,11 @@ def render_wpa_supplicant(ssid: str, password: str) -> str:
                 f"{name} contains an unsafe character (quote, newline, or backslash); "
                 "rejecting rather than attempting to escape it for wpa_supplicant.conf"
             )
+    if not _PSK_MIN_LENGTH <= len(password) <= _PSK_MAX_LENGTH:
+        raise ValueError(
+            f"password length {len(password)} is outside the 8-63 character range "
+            "required for a WPA-PSK passphrase; wpa_supplicant would reject the config"
+        )
     return (
         "country=US\n"
         "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
