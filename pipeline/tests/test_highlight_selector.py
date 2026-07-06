@@ -72,3 +72,29 @@ def test_flagged_segments_are_included_in_addition_to_clip_budget():
     selected = select_highlights(segments, target_duration_sec=15, clip_duration_sec=15)
 
     assert [s.id for s in selected] == ["top", "flagged"]
+
+
+def test_adjacent_same_location_flagged_segments_do_not_veto_unrelated_candidates():
+    segments = [
+        _segment("before", 0, 0.9, "outdoor"),
+        _segment("f1", 10, 0.1, "indoor", flagged=True),
+        _segment("f2", 15, 0.1, "indoor", flagged=True),
+        _segment("after", 30, 0.8, "outdoor"),
+    ]
+
+    selected = select_highlights(segments, target_duration_sec=30, clip_duration_sec=15)
+
+    assert [s.id for s in selected] == ["before", "f1", "f2", "after"]
+
+
+def test_candidate_adjacent_to_same_location_flagged_segment_is_still_rejected():
+    segments = [
+        _segment("f1", 10, 0.1, "indoor", flagged=True),
+        _segment("f2", 15, 0.1, "indoor", flagged=True),
+        _segment("clash", 20, 0.9, "indoor"),
+        _segment("ok", 30, 0.5, "outdoor"),
+    ]
+
+    selected = select_highlights(segments, target_duration_sec=15, clip_duration_sec=15)
+
+    assert [s.id for s in selected] == ["f1", "f2", "ok"]

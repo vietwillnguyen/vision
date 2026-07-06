@@ -22,7 +22,7 @@ def select_highlights(
             break
 
         trial = sorted(selected + [candidate], key=lambda s: s.recorded_at)
-        if _violates_diversity(trial):
+        if _candidate_creates_same_location_adjacency(trial, candidate):
             continue
 
         selected = trial
@@ -31,8 +31,15 @@ def select_highlights(
     return sorted(selected, key=lambda s: s.recorded_at)
 
 
-def _violates_diversity(chronological_segments: list[Segment]) -> bool:
-    for a, b in zip(chronological_segments, chronological_segments[1:]):
-        if a.location == b.location:
-            return True
+def _candidate_creates_same_location_adjacency(
+    chronological_segments: list[Segment], candidate: Segment
+) -> bool:
+    index = next(i for i, s in enumerate(chronological_segments) if s is candidate)
+    if index > 0 and chronological_segments[index - 1].location == candidate.location:
+        return True
+    if (
+        index < len(chronological_segments) - 1
+        and chronological_segments[index + 1].location == candidate.location
+    ):
+        return True
     return False

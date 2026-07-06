@@ -41,6 +41,25 @@ def test_parse_unexpected_location_raises():
         parse_scene_response('{"score": 8, "location": "space", "people": false}')
 
 
+@pytest.mark.parametrize(
+    "score_json",
+    ['"8"', "null", "[8]", "true"],
+)
+def test_parse_non_numeric_score_raises(score_json):
+    with pytest.raises(SceneScoreParseError):
+        parse_scene_response(
+            f'{{"score": {score_json}, "location": "indoor", "people": false}}'
+        )
+
+
+@pytest.mark.parametrize("score", [15, -3, 10.5])
+def test_parse_out_of_range_score_raises(score):
+    with pytest.raises(SceneScoreParseError):
+        parse_scene_response(
+            f'{{"score": {score}, "location": "indoor", "people": false}}'
+        )
+
+
 class FakeVisionClient:
     def __init__(self, response: str) -> None:
         self.response = response

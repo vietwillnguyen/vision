@@ -37,6 +37,12 @@ def parse_scene_response(raw_json: str) -> SceneScore:
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise SceneScoreParseError(f"invalid scene scoring response: {raw_json!r}") from exc
 
+    if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
+        raise SceneScoreParseError(f"non-numeric score value: {raw_score!r}")
+
+    if not 0 <= raw_score <= 10:
+        raise SceneScoreParseError(f"score out of range 0-10: {raw_score!r}")
+
     if location not in ("indoor", "outdoor"):
         raise SceneScoreParseError(f"unexpected location value: {location!r}")
 
