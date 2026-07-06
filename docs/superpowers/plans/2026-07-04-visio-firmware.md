@@ -53,17 +53,21 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
 
+[tool.setuptools]
+packages = ["visio_recorder"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 ```
 
 - [ ] **Step 3: Install and verify pytest runs with zero tests**
 
+Dependencies are managed with [`uv`](https://docs.astral.sh/uv/) rather than a hand-rolled venv, so the lockfile (`firmware/uv.lock`) stays reproducible across dev machines and deployed devices:
+
 ```bash
 cd firmware
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
+uv sync --extra dev
+uv run pytest
 ```
 Expected: `no tests ran` (exit 0/5 depending on pytest version - either is fine at this stage).
 
@@ -120,7 +124,7 @@ def test_battery_below_halt_threshold_should_halt():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_battery.py -v`
+Run: `cd firmware && uv run pytest tests/test_battery.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.battery'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -157,7 +161,7 @@ def read_battery_status(reader: BatteryReader) -> BatteryStatus:
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_battery.py -v`
+Run: `cd firmware && uv run pytest tests/test_battery.py -v`
 Expected: PASS (3 passed).
 
 - [ ] **Step 5: Commit**
@@ -219,7 +223,7 @@ def test_critical_state_is_flashing_red():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_led.py -v`
+Run: `cd firmware && uv run pytest tests/test_led.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.led'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -268,7 +272,7 @@ def apply_led_state(driver: LedDriver, state: LedState) -> None:
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_led.py -v`
+Run: `cd firmware && uv run pytest tests/test_led.py -v`
 Expected: PASS (4 passed).
 
 - [ ] **Step 5: Commit**
@@ -287,7 +291,7 @@ git commit -m "feat: add LED state machine"
 - Test: `firmware/tests/test_muxer.py`
 
 **Interfaces:**
-- Produces: `CommandRunner` Protocol (`run(args: list[str]) -> None`), `SubprocessCommandRunner` (real implementation, not unit tested), `mux_segment(runner: CommandRunner, h264_path: Path) -> Path`.
+- Produces: `CommandRunner` Protocol (`run(args: list[str]) -> None`), `SubprocessCommandRunner` (real implementation, not unit tested), `mux_segment(runner: CommandRunner, h264_path: Path, framerate: int) -> Path`. The capture framerate is threaded through explicitly (`ffmpeg -framerate <fps> -i ...`) rather than assumed, since `rpicam-vid` can be configured to capture at rates other than the nominal default and a mismatched `-framerate` produces a corrupted-looking MP4 without `ffmpeg` erroring.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -308,26 +312,34 @@ class FakeCommandRunner(CommandRunner):
 
 def test_mux_segment_returns_mp4_path():
     runner = FakeCommandRunner()
-    result = mux_segment(runner, Path("/data/20260704_120000.h264"))
+    result = mux_segment(runner, Path("/data/20260704_120000.h264"), framerate=30)
     assert result == Path("/data/20260704_120000.mp4")
 
 
-def test_mux_segment_invokes_ffmpeg_with_copy_codec():
+def test_mux_segment_invokes_ffmpeg_with_input_framerate_and_copy_codec():
     runner = FakeCommandRunner()
-    mux_segment(runner, Path("/data/20260704_120000.h264"))
+    mux_segment(runner, Path("/data/20260704_120000.h264"), framerate=30)
     assert runner.calls == [
         [
             "ffmpeg", "-y",
+            "-framerate", "30",
             "-i", "/data/20260704_120000.h264",
             "-c", "copy",
             "/data/20260704_120000.mp4",
         ]
     ]
+
+
+def test_mux_segment_threads_through_the_given_framerate():
+    runner = FakeCommandRunner()
+    mux_segment(runner, Path("/data/20260704_120000.h264"), framerate=25)
+    framerate_idx = runner.calls[0].index("-framerate") + 1
+    assert runner.calls[0][framerate_idx] == "25"
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_muxer.py -v`
+Run: `cd firmware && uv run pytest tests/test_muxer.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.muxer'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -349,16 +361,28 @@ class SubprocessCommandRunner:
         subprocess.run(args, check=True)
 
 
-def mux_segment(runner: CommandRunner, h264_path: Path) -> Path:
+def mux_segment(runner: CommandRunner, h264_path: Path, framerate: int) -> Path:
     mp4_path = h264_path.with_suffix(".mp4")
-    runner.run(["ffmpeg", "-y", "-i", str(h264_path), "-c", "copy", str(mp4_path)])
+    runner.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            str(framerate),
+            "-i",
+            str(h264_path),
+            "-c",
+            "copy",
+            str(mp4_path),
+        ]
+    )
     return mp4_path
 ```
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_muxer.py -v`
-Expected: PASS (2 passed).
+Run: `cd firmware && uv run pytest tests/test_muxer.py -v`
+Expected: PASS (3 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -430,7 +454,7 @@ def test_mark_uploaded_deletes_file(tmp_path):
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_upload_queue.py -v`
+Run: `cd firmware && uv run pytest tests/test_upload_queue.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.upload_queue'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -460,7 +484,7 @@ def mark_uploaded(path: Path) -> None:
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_upload_queue.py -v`
+Run: `cd firmware && uv run pytest tests/test_upload_queue.py -v`
 Expected: PASS (4 passed).
 
 - [ ] **Step 5: Commit**
@@ -519,7 +543,7 @@ def test_upload_segment_also_uploads_flag_marker_files():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_uploader.py -v`
+Run: `cd firmware && uv run pytest tests/test_uploader.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.uploader'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -543,7 +567,7 @@ def upload_segment(client: StorageClient, device_id: str, local_path: Path) -> s
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_uploader.py -v`
+Run: `cd firmware && uv run pytest tests/test_uploader.py -v`
 Expected: PASS (2 passed).
 
 - [ ] **Step 5: Commit**
@@ -591,7 +615,7 @@ def test_write_flag_marker_creates_queue_dir_if_missing(tmp_path):
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_flag_button.py -v`
+Run: `cd firmware && uv run pytest tests/test_flag_button.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.flag_button'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -611,7 +635,7 @@ def write_flag_marker(queue_dir: Path, pressed_at: datetime) -> Path:
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_flag_button.py -v`
+Run: `cd firmware && uv run pytest tests/test_flag_button.py -v`
 Expected: PASS (2 passed).
 
 - [ ] **Step 5: Commit**
@@ -634,11 +658,14 @@ git commit -m "feat: add manual flag marker writer"
 
 The QR payload the mobile app displays during pairing carries the user's own (already-authenticated) Supabase session alongside the WiFi credentials, per this plan's Global Constraints note on device auth. `write_session_credentials` persists that session so the daemon can authenticate its Supabase client on every subsequent boot without re-pairing.
 
+Hardening applied after the initial implementation (see review commits `ea25bae`, `c812901`): `QrDecodeError` messages never embed the raw payload (only whether JSON parsing failed, or which field was missing/non-string, plus payload length) since the payload contains the WiFi password and Supabase tokens and would otherwise leak into journald; `render_wpa_supplicant` rejects `ssid`/`password` containing a quote, newline, carriage return, or backslash instead of interpolating them unescaped into `wpa_supplicant.conf`, and rejects passwords outside the 8-63 character range required for a WPA-PSK passphrase; `write_wpa_supplicant` and `write_session_credentials` create their target files atomically at `0o600` via `os.open`, and tighten permissions via `fchmod` even when the target file already existed with looser permissions.
+
 - [ ] **Step 1: Write the failing tests**
 
 `firmware/tests/test_wifi_onboard.py`:
 ```python
 import json
+import stat
 
 import pytest
 
@@ -669,26 +696,61 @@ def test_parse_valid_qr_payload():
 
 
 def test_parse_invalid_qr_payload_raises():
-    with pytest.raises(QrDecodeError):
-        parse_onboarding_qr_payload("not json")
+    bad_payload = "not json but contains hunter2 and refresh-xyz"
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(bad_payload)
+    message = str(exc_info.value)
+    assert "hunter2" not in message
+    assert "refresh-xyz" not in message
+    assert "not valid JSON" in message
 
 
 def test_parse_qr_payload_missing_fields_raises():
-    with pytest.raises(QrDecodeError):
-        parse_onboarding_qr_payload(json.dumps({"ssid": "HomeNet", "password": "hunter2"}))
+    payload = json.dumps(
+        {
+            "ssid": "HomeNet",
+            "password": "hunter2",
+            "user_refresh_token": "refresh-xyz",
+        }
+    )
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(payload)
+    message = str(exc_info.value)
+    assert "hunter2" not in message
+    assert "refresh-xyz" not in message
+    assert "missing required field" in message
+    assert "user_access_token" in message
+
+
+@pytest.mark.parametrize("field", ["ssid", "password", "user_access_token", "user_refresh_token"])
+def test_parse_qr_payload_non_string_field_raises(field):
+    data = json.loads(VALID_PAYLOAD)
+    data[field] = 123
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(json.dumps(data))
+    message = str(exc_info.value)
+    assert "hunter2" not in message
+    assert "refresh-xyz" not in message
+    assert field in message
 
 
 def test_render_wpa_supplicant_includes_ssid_and_password():
-    content = render_wpa_supplicant("HomeNet", "hunter2")
+    content = render_wpa_supplicant("HomeNet", "hunter2pass")
     assert 'ssid="HomeNet"' in content
-    assert 'psk="hunter2"' in content
+    assert 'psk="hunter2pass"' in content
     assert "network={" in content
 
 
 def test_write_wpa_supplicant_writes_file(tmp_path):
     path = tmp_path / "wpa_supplicant.conf"
-    write_wpa_supplicant(path, "HomeNet", "hunter2")
+    write_wpa_supplicant(path, "HomeNet", "hunter2pass")
     assert 'ssid="HomeNet"' in path.read_text()
+
+
+def test_write_wpa_supplicant_sets_restrictive_permissions(tmp_path):
+    path = tmp_path / "wpa_supplicant.conf"
+    write_wpa_supplicant(path, "HomeNet", "hunter2pass")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_write_session_credentials_writes_json(tmp_path):
@@ -696,11 +758,76 @@ def test_write_session_credentials_writes_json(tmp_path):
     write_session_credentials(path, "access-abc", "refresh-xyz")
     saved = json.loads(path.read_text())
     assert saved == {"access_token": "access-abc", "refresh_token": "refresh-xyz"}
+
+
+def test_write_session_credentials_sets_restrictive_permissions(tmp_path):
+    path = tmp_path / "session.json"
+    write_session_credentials(path, "access-abc", "refresh-xyz")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("writer", ["wpa_supplicant", "session_credentials"])
+def test_writers_tighten_permissions_on_pre_existing_loose_file(tmp_path, writer):
+    path = tmp_path / "target"
+    path.touch(mode=0o644)
+    path.chmod(0o644)
+    if writer == "wpa_supplicant":
+        write_wpa_supplicant(path, "HomeNet", "hunter2pass")
+    else:
+        write_session_credentials(path, "access-abc", "refresh-xyz")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    "ssid,password",
+    [
+        ('Home"Net', "hunter2pass"),
+        ("HomeNet", 'hunter"2pass'),
+        ("Home\nNet", "hunter2pass"),
+        ("HomeNet", "hunter\r2pass"),
+        ("Home\nNet", "hunter\r2pass"),
+        ("Home\\Net", "hunter2pass"),
+        ("HomeNet", "hunter\\2pass"),
+        ("HomeNet", "hunter2pass\\"),
+    ],
+)
+def test_render_wpa_supplicant_rejects_unsafe_characters(ssid, password):
+    with pytest.raises(ValueError):
+        render_wpa_supplicant(ssid, password)
+
+
+def test_write_wpa_supplicant_rejects_unsafe_characters(tmp_path):
+    path = tmp_path / "wpa_supplicant.conf"
+    with pytest.raises(ValueError):
+        write_wpa_supplicant(path, 'Home"Net', "hunter2pass")
+
+
+@pytest.mark.parametrize("password", ["", "short77", "a" * 64])
+def test_render_wpa_supplicant_rejects_out_of_range_psk_length(password):
+    with pytest.raises(ValueError) as exc_info:
+        render_wpa_supplicant("HomeNet", password)
+    message = str(exc_info.value)
+    assert "8-63" in message
+    if password:
+        assert password not in message
+
+
+@pytest.mark.parametrize("password", ["a" * 8, "a" * 63])
+def test_render_wpa_supplicant_accepts_boundary_psk_lengths(password):
+    content = render_wpa_supplicant("HomeNet", password)
+    assert f'psk="{password}"' in content
+
+
+def test_write_wpa_supplicant_rejects_out_of_range_psk_length(tmp_path):
+    path = tmp_path / "wpa_supplicant.conf"
+    with pytest.raises(ValueError):
+        write_wpa_supplicant(path, "HomeNet", "short77")
+    assert not path.exists()
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_wifi_onboard.py -v`
+Run: `cd firmware && uv run pytest tests/test_wifi_onboard.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.wifi_onboard'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -708,8 +835,13 @@ Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.wifi_onbo
 `firmware/visio_recorder/wifi_onboard.py`:
 ```python
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+_UNSAFE_CHARS = ('"', "\n", "\r", "\\")
+_PSK_MIN_LENGTH = 8
+_PSK_MAX_LENGTH = 63
 
 
 class QrDecodeError(ValueError):
@@ -727,17 +859,41 @@ class OnboardingPayload:
 def parse_onboarding_qr_payload(payload: str) -> OnboardingPayload:
     try:
         data = json.loads(payload)
-        return OnboardingPayload(
-            ssid=data["ssid"],
-            password=data["password"],
-            user_access_token=data["user_access_token"],
-            user_refresh_token=data["user_refresh_token"],
-        )
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise QrDecodeError(f"invalid onboarding QR payload: {payload!r}") from exc
+    except json.JSONDecodeError as exc:
+        raise QrDecodeError(
+            f"invalid onboarding QR payload: not valid JSON (length={len(payload)})"
+        ) from exc
+
+    fields = {}
+    for field in ("ssid", "password", "user_access_token", "user_refresh_token"):
+        try:
+            value = data[field]
+        except (KeyError, TypeError) as exc:
+            raise QrDecodeError(
+                f"invalid onboarding QR payload: missing required field {field!r} "
+                f"(length={len(payload)})"
+            ) from exc
+        if not isinstance(value, str):
+            raise QrDecodeError(
+                f"invalid onboarding QR payload: field {field!r} is not a string "
+                f"(length={len(payload)})"
+            )
+        fields[field] = value
+    return OnboardingPayload(**fields)
 
 
 def render_wpa_supplicant(ssid: str, password: str) -> str:
+    for name, value in (("ssid", ssid), ("password", password)):
+        if any(ch in value for ch in _UNSAFE_CHARS):
+            raise ValueError(
+                f"{name} contains an unsafe character (quote, newline, or backslash); "
+                "rejecting rather than attempting to escape it for wpa_supplicant.conf"
+            )
+    if not _PSK_MIN_LENGTH <= len(password) <= _PSK_MAX_LENGTH:
+        raise ValueError(
+            f"password length {len(password)} is outside the 8-63 character range "
+            "required for a WPA-PSK passphrase; wpa_supplicant would reject the config"
+        )
     return (
         "country=US\n"
         "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
@@ -749,18 +905,30 @@ def render_wpa_supplicant(ssid: str, password: str) -> str:
     )
 
 
+def _write_private_text(path: Path, content: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        # The mode passed to os.open only applies when the file is newly
+        # created; a pre-existing file (e.g. the stock wpa_supplicant.conf
+        # shipped at 0o644) keeps its old permissions, so tighten via the fd.
+        os.fchmod(f.fileno(), 0o600)
+        f.write(content)
+
+
 def write_wpa_supplicant(path: Path, ssid: str, password: str) -> None:
-    path.write_text(render_wpa_supplicant(ssid, password))
+    _write_private_text(path, render_wpa_supplicant(ssid, password))
 
 
 def write_session_credentials(path: Path, access_token: str, refresh_token: str) -> None:
-    path.write_text(json.dumps({"access_token": access_token, "refresh_token": refresh_token}))
+    _write_private_text(
+        path, json.dumps({"access_token": access_token, "refresh_token": refresh_token})
+    )
 ```
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_wifi_onboard.py -v`
-Expected: PASS (6 passed).
+Run: `cd firmware && uv run pytest tests/test_wifi_onboard.py -v`
+Expected: PASS (29 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -780,12 +948,16 @@ git commit -m "feat: add wifi and auth onboarding via qr code"
 **Interfaces:**
 - Produces: `load_or_create_device_id(state_path: Path) -> str` (returns the persisted UUID if `state_path` exists, otherwise generates a new UUID4, persists it, and returns it), `DeviceRegistrationClient` Protocol (`upsert_device(device_id: str, name: str) -> None`), `register_device(client: DeviceRegistrationClient, device_id: str, name: str) -> None`.
 
+Hardening applied after the initial implementation (see review commit `1a5cd23`): the write is atomic - the new UUID is written to a `.tmp` sibling file, `fsync`'d, then moved into place with `os.replace`, so a power loss mid-write (common on a headless Pi that loses power without a clean shutdown) can never leave `state_path` truncated or partially written. A pre-existing state file that fails to parse (empty, truncated JSON, or missing the `device_id` key) is treated the same as a missing file - a fresh UUID is generated and persisted - rather than raising, since a corrupt identity file should self-heal rather than crash the daemon on every boot.
+
 - [ ] **Step 1: Write the failing tests**
 
 `firmware/tests/test_device_identity.py`:
 ```python
 import json
 import uuid
+
+import pytest
 
 from visio_recorder.device_identity import (
     DeviceRegistrationClient,
@@ -819,6 +991,25 @@ def test_load_or_create_device_id_reads_a_pre_existing_file(tmp_path):
     assert load_or_create_device_id(state_path) == "11111111-1111-1111-1111-111111111111"
 
 
+@pytest.mark.parametrize("corrupt_content", ["", '{"device_id', '{"other": 1}'])
+def test_load_or_create_device_id_recovers_from_a_corrupt_file(tmp_path, corrupt_content):
+    state_path = tmp_path / "device_id.json"
+    state_path.write_text(corrupt_content)
+
+    device_id = load_or_create_device_id(state_path)
+
+    assert uuid.UUID(device_id)
+    assert json.loads(state_path.read_text()) == {"device_id": device_id}
+
+
+def test_load_or_create_device_id_leaves_no_temp_files(tmp_path):
+    state_path = tmp_path / "device_id.json"
+
+    load_or_create_device_id(state_path)
+
+    assert [p.name for p in tmp_path.iterdir()] == ["device_id.json"]
+
+
 class FakeDeviceRegistrationClient(DeviceRegistrationClient):
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -837,7 +1028,7 @@ def test_register_device_calls_client_with_id_and_name():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_device_identity.py -v`
+Run: `cd firmware && uv run pytest tests/test_device_identity.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.device_identity'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -845,18 +1036,35 @@ Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.device_id
 `firmware/visio_recorder/device_identity.py`:
 ```python
 import json
+import os
 import uuid
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
+
+
+def _read_stored_device_id(state_path: Path) -> Optional[str]:
+    try:
+        device_id = json.loads(state_path.read_text())["device_id"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return device_id if isinstance(device_id, str) else None
 
 
 def load_or_create_device_id(state_path: Path) -> str:
     if state_path.exists():
-        return json.loads(state_path.read_text())["device_id"]
+        stored = _read_stored_device_id(state_path)
+        if stored is not None:
+            return stored
 
     device_id = str(uuid.uuid4())
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"device_id": device_id}))
+    tmp_path = state_path.with_name(state_path.name + ".tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps({"device_id": device_id}))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, state_path)
     return device_id
 
 
@@ -871,8 +1079,8 @@ def register_device(client: DeviceRegistrationClient, device_id: str, name: str)
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_device_identity.py -v`
-Expected: PASS (4 passed).
+Run: `cd firmware && uv run pytest tests/test_device_identity.py -v`
+Expected: PASS (8 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -955,7 +1163,7 @@ def test_critical_battery_halts_and_shows_critical_led():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_daemon.py -v`
+Run: `cd firmware && uv run pytest tests/test_daemon.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.daemon'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -988,7 +1196,7 @@ def run_startup_sequence(battery_reader: BatteryReader, led_driver: LedDriver) -
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_daemon.py -v`
+Run: `cd firmware && uv run pytest tests/test_daemon.py -v`
 Expected: PASS (4 passed).
 
 - [ ] **Step 5: Commit**
@@ -1008,7 +1216,7 @@ git commit -m "feat: add startup sequence orchestration"
 
 **Interfaces:**
 - Consumes: `BatteryReader`, `read_battery_status` from Task 2; `LedDriver`, `LedState`, `apply_led_state` from Task 3; `CommandRunner`, `mux_segment` from Task 4; `enqueue`, `list_pending`, `mark_uploaded` from Task 5; `StorageClient`, `upload_segment` from Task 6.
-- Produces: `DeviceStatus` dataclass (`device_id: str`, `battery_pct: int`, `storage_used_gb: float`, `storage_free_gb: float`, `segments_pending: int`, `segments_uploaded_today: int`, `recording_active: bool`), `StatusClient` Protocol (`upsert_device_status(status: dict) -> None`), `next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState` (battery takes priority: low battery always wins over the uploading indicator), `on_segment_complete(h264_path: Path, queue_dir: Path, command_runner: CommandRunner, storage_client: StorageClient, status_client: StatusClient, led_driver: LedDriver, battery_reader: BatteryReader, device_id: str, segments_uploaded_today: int) -> int` (returns the new `segments_uploaded_today` count) - this is what runs once per completed 5-minute segment, per the spec's Recording Loop section.
+- Produces: `DeviceStatus` dataclass (`device_id: str`, `battery_pct: int`, `storage_used_gb: float`, `storage_free_gb: float`, `segments_pending: int`, `segments_uploaded_today: int`, `recording_active: bool`), `StatusClient` Protocol (`upsert_device_status(status: dict) -> None`), `next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState` (battery takes priority: low battery always wins over the uploading indicator), `on_segment_complete(h264_path: Path, queue_dir: Path, command_runner: CommandRunner, storage_client: StorageClient, status_client: StatusClient, led_driver: LedDriver, battery_reader: BatteryReader, device_id: str, segments_uploaded_today: int, framerate: int) -> int` (returns the new `segments_uploaded_today` count) - this is what runs once per completed 5-minute segment, per the spec's Recording Loop section. `framerate` is forwarded to `mux_segment` (Task 4), and the raw `.h264` is deleted once the mux succeeds so raw capture footage doesn't accumulate on the SD card alongside the muxed `.mp4`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1039,8 +1247,21 @@ class FakeLedDriver(LedDriver):
 
 
 class FakeCommandRunner(CommandRunner):
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
     def run(self, args: list[str]) -> None:
-        pass
+        self.calls.append(args)
+        # For mux_segment, create the mp4 file from the h264 input
+        if "ffmpeg" in args:
+            # args format: ["ffmpeg", "-y", "-framerate", fps, "-i", input_path, "-c", "copy", output_path]
+            input_idx = args.index("-i") + 1
+            output_idx = args.index("copy") + 1
+            input_path = Path(args[input_idx])
+            output_path = Path(args[output_idx])
+            # Copy the h264 file as mp4
+            if input_path.exists():
+                output_path.write_bytes(input_path.read_bytes())
 
 
 class FakeStorageClient(StorageClient):
@@ -1080,21 +1301,26 @@ def test_on_segment_complete_happy_path(tmp_path):
     led = FakeLedDriver()
     storage = FakeStorageClient()
     status_client = FakeStatusClient()
+    command_runner = FakeCommandRunner()
 
     new_count = on_segment_complete(
         h264_path=h264_path,
         queue_dir=queue_dir,
-        command_runner=FakeCommandRunner(),
+        command_runner=command_runner,
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
         battery_reader=FakeBatteryReader(85),
         device_id="device-abc",
         segments_uploaded_today=41,
+        framerate=30,
     )
 
     assert new_count == 42
+    framerate_idx = command_runner.calls[0].index("-framerate") + 1
+    assert command_runner.calls[0][framerate_idx] == "30"
     assert storage.uploaded == ["device-abc/20260704_120000.mp4"]
+    assert not h264_path.exists()
     assert led.calls == [
         ((0, 0, 255), LedPattern.PULSING),
         ((0, 255, 0), LedPattern.SOLID),
@@ -1129,6 +1355,7 @@ def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
         battery_reader=FakeBatteryReader(15),
         device_id="device-abc",
         segments_uploaded_today=0,
+        framerate=30,
     )
 
     assert led.calls == [
@@ -1139,7 +1366,7 @@ def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd firmware && pytest tests/test_recording_loop.py -v`
+Run: `cd firmware && uv run pytest tests/test_recording_loop.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.recording_loop'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -1191,8 +1418,10 @@ def on_segment_complete(
     battery_reader: BatteryReader,
     device_id: str,
     segments_uploaded_today: int,
+    framerate: int,
 ) -> int:
-    mp4_path = mux_segment(command_runner, h264_path)
+    mp4_path = mux_segment(command_runner, h264_path, framerate)
+    h264_path.unlink()
     queued_path = enqueue(queue_dir, mp4_path)
 
     battery_status = read_battery_status(battery_reader)
@@ -1222,13 +1451,13 @@ def on_segment_complete(
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd firmware && pytest tests/test_recording_loop.py -v`
+Run: `cd firmware && uv run pytest tests/test_recording_loop.py -v`
 Expected: PASS (5 passed).
 
 - [ ] **Step 5: Run the full firmware test suite**
 
-Run: `cd firmware && pytest -v`
-Expected: all tests across Tasks 2-11 pass (34 passed).
+Run: `cd firmware && uv run pytest -v`
+Expected: all tests across Tasks 2-11 pass (64 passed).
 
 - [ ] **Step 6: Commit**
 
