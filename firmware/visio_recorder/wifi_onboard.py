@@ -83,7 +83,9 @@ def write_wpa_supplicant(path: Path, ssid: str, password: str) -> None:
     _write_private_text(path, render_wpa_supplicant(ssid, password))
 
 
-def write_session_credentials(path: Path, access_token: str, refresh_token: str) -> None:
+def write_session_credentials(
+    path: Path, access_token: str, refresh_token: str
+) -> None:
     _write_private_text(
         path, json.dumps({"access_token": access_token, "refresh_token": refresh_token})
     )

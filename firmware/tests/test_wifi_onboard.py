@@ -56,7 +56,9 @@ def test_parse_qr_payload_missing_fields_raises():
     assert "user_access_token" in message
 
 
-@pytest.mark.parametrize("field", ["ssid", "password", "user_access_token", "user_refresh_token"])
+@pytest.mark.parametrize(
+    "field", ["ssid", "password", "user_access_token", "user_refresh_token"]
+)
 def test_parse_qr_payload_non_string_field_raises(field):
     data = json.loads(VALID_PAYLOAD)
     data[field] = 123

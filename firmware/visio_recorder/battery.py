@@ -6,8 +6,7 @@ LOW_BATTERY_WARN_PCT = 20
 
 
 class BatteryReader(Protocol):
-    def get_charge_pct(self) -> int:
-        ...
+    def get_charge_pct(self) -> int: ...
 
 
 @dataclass

@@ -32,9 +32,10 @@ def load_or_create_device_id(state_path: Path) -> str:
 
 
 class DeviceRegistrationClient(Protocol):
-    def upsert_device(self, device_id: str, name: str) -> None:
-        ...
+    def upsert_device(self, device_id: str, name: str) -> None: ...
 
 
-def register_device(client: DeviceRegistrationClient, device_id: str, name: str) -> None:
+def register_device(
+    client: DeviceRegistrationClient, device_id: str, name: str
+) -> None:
     client.upsert_device(device_id, name)

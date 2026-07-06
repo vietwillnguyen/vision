@@ -21,8 +21,7 @@ class DeviceStatus:
 
 
 class StatusClient(Protocol):
-    def upsert_device_status(self, status: dict) -> None:
-        ...
+    def upsert_device_status(self, status: dict) -> None: ...
 
 
 def next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState:
@@ -50,13 +49,17 @@ def on_segment_complete(
     queued_path = enqueue(queue_dir, mp4_path)
 
     battery_status = read_battery_status(battery_reader)
-    apply_led_state(led_driver, next_led_state(battery_status.is_low, is_uploading=True))
+    apply_led_state(
+        led_driver, next_led_state(battery_status.is_low, is_uploading=True)
+    )
 
     upload_segment(storage_client, device_id, queued_path)
     mark_uploaded(queued_path)
     segments_uploaded_today += 1
 
-    apply_led_state(led_driver, next_led_state(battery_status.is_low, is_uploading=False))
+    apply_led_state(
+        led_driver, next_led_state(battery_status.is_low, is_uploading=False)
+    )
 
     # Real disk-usage stats (shutil.disk_usage) are wired in Epic 5 against
     # the actual SD card; there is no meaningful fake for a syscall here.

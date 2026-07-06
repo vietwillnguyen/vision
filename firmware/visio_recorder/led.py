@@ -16,8 +16,7 @@ class LedPattern(Enum):
 
 
 class LedDriver(Protocol):
-    def set(self, color: tuple[int, int, int], pattern: LedPattern) -> None:
-        ...
+    def set(self, color: tuple[int, int, int], pattern: LedPattern) -> None: ...
 
 
 GREEN = (0, 255, 0)

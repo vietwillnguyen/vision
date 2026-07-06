@@ -22,10 +22,14 @@ def test_mux_segment_invokes_ffmpeg_with_input_framerate_and_copy_codec():
     mux_segment(runner, Path("/data/20260704_120000.h264"), framerate=30)
     assert runner.calls == [
         [
-            "ffmpeg", "-y",
-            "-framerate", "30",
-            "-i", "/data/20260704_120000.h264",
-            "-c", "copy",
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            "30",
+            "-i",
+            "/data/20260704_120000.h264",
+            "-c",
+            "copy",
             "/data/20260704_120000.mp4",
         ]
     ]

@@ -4,8 +4,7 @@ from typing import Protocol
 
 
 class CommandRunner(Protocol):
-    def run(self, args: list[str]) -> None:
-        ...
+    def run(self, args: list[str]) -> None: ...
 
 
 class SubprocessCommandRunner:

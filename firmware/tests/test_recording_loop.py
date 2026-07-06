@@ -57,8 +57,12 @@ class FakeStatusClient:
 
 
 def test_next_led_state_prioritizes_low_battery_over_uploading():
-    assert next_led_state(battery_is_low=True, is_uploading=True) == LedState.LOW_BATTERY
-    assert next_led_state(battery_is_low=True, is_uploading=False) == LedState.LOW_BATTERY
+    assert (
+        next_led_state(battery_is_low=True, is_uploading=True) == LedState.LOW_BATTERY
+    )
+    assert (
+        next_led_state(battery_is_low=True, is_uploading=False) == LedState.LOW_BATTERY
+    )
 
 
 def test_next_led_state_shows_uploading_when_battery_is_healthy():
@@ -66,7 +70,9 @@ def test_next_led_state_shows_uploading_when_battery_is_healthy():
 
 
 def test_next_led_state_shows_recording_when_idle_and_healthy():
-    assert next_led_state(battery_is_low=False, is_uploading=False) == LedState.RECORDING
+    assert (
+        next_led_state(battery_is_low=False, is_uploading=False) == LedState.RECORDING
+    )
 
 
 def test_on_segment_complete_happy_path(tmp_path):

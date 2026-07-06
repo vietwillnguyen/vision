@@ -30,13 +30,19 @@ def test_load_or_create_device_id_returns_the_same_id_on_subsequent_calls(tmp_pa
 
 def test_load_or_create_device_id_reads_a_pre_existing_file(tmp_path):
     state_path = tmp_path / "device_id.json"
-    state_path.write_text(json.dumps({"device_id": "11111111-1111-1111-1111-111111111111"}))
+    state_path.write_text(
+        json.dumps({"device_id": "11111111-1111-1111-1111-111111111111"})
+    )
 
-    assert load_or_create_device_id(state_path) == "11111111-1111-1111-1111-111111111111"
+    assert (
+        load_or_create_device_id(state_path) == "11111111-1111-1111-1111-111111111111"
+    )
 
 
 @pytest.mark.parametrize("corrupt_content", ["", '{"device_id', '{"other": 1}'])
-def test_load_or_create_device_id_recovers_from_a_corrupt_file(tmp_path, corrupt_content):
+def test_load_or_create_device_id_recovers_from_a_corrupt_file(
+    tmp_path, corrupt_content
+):
     state_path = tmp_path / "device_id.json"
     state_path.write_text(corrupt_content)
 

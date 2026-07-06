@@ -32,6 +32,7 @@ def test_list_pending_returns_sorted_queue_contents(tmp_path):
 
 def test_list_pending_on_missing_dir_returns_empty():
     from pathlib import Path
+
     assert list_pending(Path("/nonexistent/queue")) == []
 
 

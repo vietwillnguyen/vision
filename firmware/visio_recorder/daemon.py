@@ -10,7 +10,9 @@ class StartupResult:
     battery_pct: int
 
 
-def run_startup_sequence(battery_reader: BatteryReader, led_driver: LedDriver) -> StartupResult:
+def run_startup_sequence(
+    battery_reader: BatteryReader, led_driver: LedDriver
+) -> StartupResult:
     status = read_battery_status(battery_reader)
     if status.should_halt:
         apply_led_state(led_driver, LedState.CRITICAL)
