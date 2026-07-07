@@ -69,7 +69,12 @@ def test_apply_flag_markers_flags_the_containing_segment():
         device_id="device-abc",
     )
 
-    _, rejected = apply_flag_markers(segments, date(2026, 7, 4), ["device-abc/FLAG_120300.marker"])
+    _, rejected = apply_flag_markers(
+        segments,
+        date(2026, 7, 4),
+        ["device-abc/FLAG_120300.marker"],
+        device_id="device-abc",
+    )
 
     assert rejected == []
     assert segments[0].manually_flagged is True
@@ -81,7 +86,12 @@ def test_apply_flag_markers_ignores_markers_outside_any_segment_window():
         ["device-abc/20260704_120000.mp4"], device_id="device-abc"
     )
 
-    apply_flag_markers(segments, date(2026, 7, 4), ["device-abc/FLAG_235900.marker"])
+    apply_flag_markers(
+        segments,
+        date(2026, 7, 4),
+        ["device-abc/FLAG_235900.marker"],
+        device_id="device-abc",
+    )
 
     assert segments[0].manually_flagged is False
 
@@ -95,7 +105,24 @@ def test_apply_flag_markers_rejects_unparseable_markers_without_raising():
         segments,
         date(2026, 7, 4),
         ["device-abc/FLAG_garbage.marker", "device-abc/FLAG_120100.marker"],
+        device_id="device-abc",
     )
 
     assert rejected == ["device-abc/FLAG_garbage.marker"]
+    assert segments[0].manually_flagged is True
+
+
+def test_apply_flag_markers_rejects_markers_outside_the_device_prefix():
+    segments, _ = build_segments_from_object_keys(
+        ["device-abc/20260704_120000.mp4"], device_id="device-abc"
+    )
+
+    _, rejected = apply_flag_markers(
+        segments,
+        date(2026, 7, 4),
+        ["device-xyz/FLAG_120100.marker", "device-abc/FLAG_120200.marker"],
+        device_id="device-abc",
+    )
+
+    assert rejected == ["device-xyz/FLAG_120100.marker"]
     assert segments[0].manually_flagged is True

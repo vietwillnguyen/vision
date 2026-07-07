@@ -47,12 +47,16 @@ def build_segments_from_object_keys(
 
 
 def apply_flag_markers(
-    segments: list[Segment], day: date, flag_marker_keys: list[str]
+    segments: list[Segment], day: date, flag_marker_keys: list[str], device_id: str
 ) -> tuple[list[Segment], list[str]]:
+    device_prefix = f"{device_id}/"
     rejected_keys = []
     for key in flag_marker_keys:
         filename = key.split("/")[-1]
         if not filename.endswith(".marker"):
+            continue
+        if not key.startswith(device_prefix):
+            rejected_keys.append(key)
             continue
         try:
             flag_time = parse_flag_marker_filename(filename)
