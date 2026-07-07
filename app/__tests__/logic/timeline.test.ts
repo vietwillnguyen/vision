@@ -41,4 +41,11 @@ describe('buildTimelineSlots', () => {
     const slots = buildTimelineSlots([seg], dayStart);
     expect(slots.every((slot) => slot.segment === null)).toBe(true);
   });
+
+  it('keeps the later-listed segment when two segments fall in the same slot', () => {
+    const first = segment({ id: 'seg-1', recordedAt: '2026-07-04T00:06:00.000Z' });
+    const second = segment({ id: 'seg-2', recordedAt: '2026-07-04T00:08:00.000Z' });
+    const slots = buildTimelineSlots([first, second], dayStart);
+    expect(slots[1].segment).toBe(second);
+  });
 });
