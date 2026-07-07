@@ -49,6 +49,13 @@ def build_segments_from_object_keys(
 def apply_flag_markers(
     segments: list[Segment], day: date, flag_marker_keys: list[str], device_id: str
 ) -> tuple[list[Segment], list[str], list[str]]:
+    """Flag segments whose window contains a marker's time of day.
+
+    Marker filenames (FLAG_HHMMSS.marker) carry no date, so every marker is
+    attributed to ``day``. Callers must pass listings scoped to a single day
+    and retry unmatched markers with their original day recorded, or a stale
+    or cross-day-retried marker will flag the wrong day's segment.
+    """
     device_prefix = f"{device_id}/"
     rejected_keys = []
     unmatched_keys = []
