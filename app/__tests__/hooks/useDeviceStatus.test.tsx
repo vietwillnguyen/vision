@@ -5,6 +5,8 @@ import { useDeviceStatus } from '../../src/hooks/useDeviceStatus';
 
 function createFakeClient(initialRow: Record<string, unknown> | null) {
   let onUpdate: ((payload: { new: Record<string, unknown> }) => void) | null = null;
+  let subscribeCalled = false;
+  let removeChannelCalls = 0;
 
   const client = {
     from: () => ({
@@ -21,15 +23,24 @@ function createFakeClient(initialRow: Record<string, unknown> | null) {
         callback: (payload: { new: Record<string, unknown> }) => void,
       ) => {
         onUpdate = callback;
-        return { subscribe: () => ({}) };
+        return {
+          subscribe: () => {
+            subscribeCalled = true;
+            return {};
+          },
+        };
       },
     }),
-    removeChannel: () => {},
+    removeChannel: () => {
+      removeChannelCalls += 1;
+    },
   };
 
   return {
     client: client as unknown as SupabaseClient,
     triggerUpdate: (row: Record<string, unknown>) => act(() => onUpdate?.({ new: row })),
+    getSubscribeCalled: () => subscribeCalled,
+    getRemoveChannelCalls: () => removeChannelCalls,
   };
 }
 
@@ -68,5 +79,18 @@ describe('useDeviceStatus', () => {
     triggerUpdate({ ...ROW, battery_pct: 65 });
 
     expect(result.current?.batteryPct).toBe(65);
+  });
+
+  it('subscribes on mount and removes the channel on unmount', async () => {
+    const { client, getSubscribeCalled, getRemoveChannelCalls } = createFakeClient(ROW);
+    const { result, unmount } = renderHook(() => useDeviceStatus(client, 'device-abc'));
+
+    await waitFor(() => expect(result.current).not.toBeNull());
+    expect(getSubscribeCalled()).toBe(true);
+    expect(getRemoveChannelCalls()).toBe(0);
+
+    unmount();
+
+    expect(getRemoveChannelCalls()).toBe(1);
   });
 });
