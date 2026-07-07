@@ -3,8 +3,7 @@ from typing import Protocol
 
 
 class PushClient(Protocol):
-    def send(self, to_token: str, title: str, body: str) -> None:
-        ...
+    def send(self, to_token: str, title: str, body: str) -> None: ...
 
 
 def notify_reel_ready(client: PushClient, push_token: str, reel_date: date) -> None:

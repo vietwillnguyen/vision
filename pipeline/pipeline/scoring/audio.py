@@ -17,8 +17,7 @@ class TranscriptionClient(Protocol):
     rather than a direct provider SDK.
     """
 
-    def transcribe(self, audio_path: Path) -> TranscriptionResult:
-        ...
+    def transcribe(self, audio_path: Path) -> TranscriptionResult: ...
 
 
 def compute_audio_activity(result: TranscriptionResult) -> float:

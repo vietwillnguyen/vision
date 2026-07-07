@@ -12,7 +12,9 @@ def select_highlights(
 
     flagged = [s for s in segments if s.manually_flagged]
     unflagged = [s for s in segments if not s.manually_flagged]
-    ranked_unflagged = sorted(unflagged, key=lambda s: (-s.composite_score, s.recorded_at))
+    ranked_unflagged = sorted(
+        unflagged, key=lambda s: (-s.composite_score, s.recorded_at)
+    )
 
     selected: list[Segment] = list(flagged)
     unflagged_added = 0

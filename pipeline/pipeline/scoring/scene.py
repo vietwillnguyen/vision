@@ -25,8 +25,7 @@ class VisionClient(Protocol):
     ``parse_scene_response`` is defense-in-depth, not the primary contract.
     """
 
-    def score_frames(self, frame_paths: list[Path], prompt: str) -> str:
-        ...
+    def score_frames(self, frame_paths: list[Path], prompt: str) -> str: ...
 
 
 SCENE_SCORING_PROMPT = (
@@ -54,7 +53,9 @@ def parse_scene_response(raw_json: str) -> SceneScore:
         location = data["location"]
         people = data["people"]
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise SceneScoreParseError(f"invalid scene scoring response: {raw_json!r}") from exc
+        raise SceneScoreParseError(
+            f"invalid scene scoring response: {raw_json!r}"
+        ) from exc
 
     if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
         raise SceneScoreParseError(f"non-numeric score value: {raw_score!r}")
@@ -65,7 +66,9 @@ def parse_scene_response(raw_json: str) -> SceneScore:
     if location not in ("indoor", "outdoor"):
         raise SceneScoreParseError(f"unexpected location value: {location!r}")
 
-    return SceneScore(novelty=raw_score / 10.0, location=location, people_present=bool(people))
+    return SceneScore(
+        novelty=raw_score / 10.0, location=location, people_present=bool(people)
+    )
 
 
 def score_scene(client: VisionClient, frame_paths: list[Path]) -> SceneScore:

@@ -18,8 +18,12 @@ class FakeVisionClient:
 
 
 def test_high_motion_segment_runs_scene_scoring():
-    transcription = TranscriptionResult(speech_presence_ratio=0.5, silence_ratio=0.5, has_exclamation=False)
-    vision_client = FakeVisionClient('{"score": 10, "location": "outdoor", "people": true}')
+    transcription = TranscriptionResult(
+        speech_presence_ratio=0.5, silence_ratio=0.5, has_exclamation=False
+    )
+    vision_client = FakeVisionClient(
+        '{"score": 10, "location": "outdoor", "people": true}'
+    )
 
     composite, location = score_segment(
         transcription=transcription,
@@ -36,8 +40,12 @@ def test_high_motion_segment_runs_scene_scoring():
 
 
 def test_low_motion_segment_skips_scene_scoring():
-    transcription = TranscriptionResult(speech_presence_ratio=0.0, silence_ratio=1.0, has_exclamation=False)
-    vision_client = FakeVisionClient('{"score": 10, "location": "outdoor", "people": true}')
+    transcription = TranscriptionResult(
+        speech_presence_ratio=0.0, silence_ratio=1.0, has_exclamation=False
+    )
+    vision_client = FakeVisionClient(
+        '{"score": 10, "location": "outdoor", "people": true}'
+    )
 
     composite, location = score_segment(
         transcription=transcription,

@@ -9,7 +9,9 @@ from pipeline.ingestion import (
 
 
 def test_parse_segment_filename():
-    assert parse_segment_filename("20260704_120000.mp4") == datetime(2026, 7, 4, 12, 0, 0)
+    assert parse_segment_filename("20260704_120000.mp4") == datetime(
+        2026, 7, 4, 12, 0, 0
+    )
 
 
 def test_parse_flag_marker_filename():
