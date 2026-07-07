@@ -16,6 +16,15 @@ class SceneScore:
 
 
 class VisionClient(Protocol):
+    """Scores frames with a vision LLM and returns the raw JSON response text.
+
+    Production adapters must go through LiteLLM (provider-agnostic routing,
+    Claude Haiku as the default routed model) and request structured outputs
+    via ``response_format`` with a ``json_schema`` so the response is
+    schema-guaranteed JSON; the code-fence stripping in
+    ``parse_scene_response`` is defense-in-depth, not the primary contract.
+    """
+
     def score_frames(self, frame_paths: list[Path], prompt: str) -> str:
         ...
 
@@ -28,9 +37,19 @@ SCENE_SCORING_PROMPT = (
 )
 
 
+def strip_code_fences(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines[1:]).strip()
+
+
 def parse_scene_response(raw_json: str) -> SceneScore:
     try:
-        data = json.loads(raw_json)
+        data = json.loads(strip_code_fences(raw_json))
         raw_score = data["score"]
         location = data["location"]
         people = data["people"]

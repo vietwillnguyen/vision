@@ -12,7 +12,8 @@ def test_score_weights_defaults_match_spec():
 
 def test_segment_defaults_composite_score_and_manually_flagged():
     segment = Segment(
-        id="seg-1",
+        id="device-abc/20260704_120000",
+        device_id="device-abc",
         recorded_at=datetime(2026, 7, 4, 12, 0, 0),
         duration_sec=300,
         s3_key="device-abc/20260704_120000.mp4",

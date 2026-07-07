@@ -17,36 +17,85 @@ def test_parse_flag_marker_filename():
 
 
 def test_build_segments_from_object_keys_ignores_marker_files():
-    segments = build_segments_from_object_keys(
+    segments, rejected = build_segments_from_object_keys(
         ["device-abc/20260704_120000.mp4", "device-abc/FLAG_120300.marker"],
         device_id="device-abc",
     )
 
+    assert rejected == []
     assert len(segments) == 1
-    assert segments[0].id == "20260704_120000"
+    assert segments[0].id == "device-abc/20260704_120000"
+    assert segments[0].device_id == "device-abc"
     assert segments[0].recorded_at == datetime(2026, 7, 4, 12, 0, 0)
     assert segments[0].duration_sec == 300
     assert segments[0].s3_key == "device-abc/20260704_120000.mp4"
     assert segments[0].manually_flagged is False
 
 
+def test_build_segments_rejects_malformed_mp4_keys_without_raising():
+    segments, rejected = build_segments_from_object_keys(
+        ["device-abc/20260704_120000.mp4", "device-abc/partial-upload.mp4"],
+        device_id="device-abc",
+    )
+
+    assert [s.id for s in segments] == ["device-abc/20260704_120000"]
+    assert rejected == ["device-abc/partial-upload.mp4"]
+
+
+def test_build_segments_rejects_keys_outside_the_device_prefix():
+    segments, rejected = build_segments_from_object_keys(
+        ["device-abc/20260704_120000.mp4", "device-xyz/20260704_120000.mp4"],
+        device_id="device-abc",
+    )
+
+    assert [s.id for s in segments] == ["device-abc/20260704_120000"]
+    assert rejected == ["device-xyz/20260704_120000.mp4"]
+
+
+def test_segment_ids_are_device_scoped_so_same_timestamp_ids_cannot_collide():
+    abc_segments, _ = build_segments_from_object_keys(
+        ["device-abc/20260704_120000.mp4"], device_id="device-abc"
+    )
+    xyz_segments, _ = build_segments_from_object_keys(
+        ["device-xyz/20260704_120000.mp4"], device_id="device-xyz"
+    )
+
+    assert abc_segments[0].id != xyz_segments[0].id
+
+
 def test_apply_flag_markers_flags_the_containing_segment():
-    segments = build_segments_from_object_keys(
+    segments, _ = build_segments_from_object_keys(
         ["device-abc/20260704_120000.mp4", "device-abc/20260704_120500.mp4"],
         device_id="device-abc",
     )
 
-    apply_flag_markers(segments, date(2026, 7, 4), ["device-abc/FLAG_120300.marker"])
+    _, rejected = apply_flag_markers(segments, date(2026, 7, 4), ["device-abc/FLAG_120300.marker"])
 
+    assert rejected == []
     assert segments[0].manually_flagged is True
     assert segments[1].manually_flagged is False
 
 
 def test_apply_flag_markers_ignores_markers_outside_any_segment_window():
-    segments = build_segments_from_object_keys(
+    segments, _ = build_segments_from_object_keys(
         ["device-abc/20260704_120000.mp4"], device_id="device-abc"
     )
 
     apply_flag_markers(segments, date(2026, 7, 4), ["device-abc/FLAG_235900.marker"])
 
     assert segments[0].manually_flagged is False
+
+
+def test_apply_flag_markers_rejects_unparseable_markers_without_raising():
+    segments, _ = build_segments_from_object_keys(
+        ["device-abc/20260704_120000.mp4"], device_id="device-abc"
+    )
+
+    _, rejected = apply_flag_markers(
+        segments,
+        date(2026, 7, 4),
+        ["device-abc/FLAG_garbage.marker", "device-abc/FLAG_120100.marker"],
+    )
+
+    assert rejected == ["device-abc/FLAG_garbage.marker"]
+    assert segments[0].manually_flagged is True

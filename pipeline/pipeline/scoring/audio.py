@@ -11,6 +11,12 @@ class TranscriptionResult:
 
 
 class TranscriptionClient(Protocol):
+    """Transcribes a segment's audio track into activity features.
+
+    Production adapters must go through LiteLLM (provider-agnostic routing)
+    rather than a direct provider SDK.
+    """
+
     def transcribe(self, audio_path: Path) -> TranscriptionResult:
         ...
 

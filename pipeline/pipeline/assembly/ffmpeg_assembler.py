@@ -15,13 +15,13 @@ def build_trim_command(
         "-ss", str(offset_sec),
         "-i", str(input_path),
         "-t", str(clip_duration_sec),
-        "-c", "copy",
+        "-c:v", "libx264",
         str(output_path),
     ]
 
 
 def render_concat_file_content(segment_paths: list[Path]) -> str:
-    return "".join(f"file '{p}'\n" for p in segment_paths)
+    return "".join("file '{}'\n".format(str(p).replace("'", "'\\''")) for p in segment_paths)
 
 
 def build_assembly_command(concat_file: Path, output_path: Path, vintage: bool) -> list[str]:

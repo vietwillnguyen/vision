@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+DEFAULT_LOCATION = "indoor"
+
 
 @dataclass
 class ScoreWeights:
@@ -12,6 +14,7 @@ class ScoreWeights:
 @dataclass
 class Segment:
     id: str
+    device_id: str
     recorded_at: datetime
     duration_sec: int
     s3_key: str

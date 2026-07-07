@@ -1,12 +1,10 @@
 from pathlib import Path
 
-from pipeline.models import ScoreWeights
+from pipeline.models import DEFAULT_LOCATION, ScoreWeights
 from pipeline.scoring.audio import TranscriptionResult, compute_audio_activity
 from pipeline.scoring.composite import compute_composite_score
 from pipeline.scoring.motion import compute_motion_intensity, should_run_scene_scoring
 from pipeline.scoring.scene import VisionClient, score_scene
-
-DEFAULT_LOCATION = "indoor"
 
 
 def score_segment(

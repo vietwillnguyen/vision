@@ -7,6 +7,7 @@ from pipeline.selection.highlight_selector import select_highlights
 def _segment(id_, minute, score, location, flagged=False):
     return Segment(
         id=id_,
+        device_id="device",
         recorded_at=datetime(2026, 7, 4, 12, minute, 0),
         duration_sec=300,
         s3_key=f"device/{id_}.mp4",

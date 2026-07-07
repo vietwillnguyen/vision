@@ -19,7 +19,7 @@ def test_compute_clip_offset_clamps_to_zero_when_segment_shorter_than_clip():
     assert compute_clip_offset_sec(segment_duration_sec=10, clip_duration_sec=15) == 0.0
 
 
-def test_build_trim_command_extracts_the_clip_window():
+def test_build_trim_command_reencodes_for_frame_accurate_cuts():
     args = build_trim_command(
         Path("/tmp/segment.mp4"), Path("/tmp/clip.mp4"), offset_sec=142.5, clip_duration_sec=15
     )
@@ -28,7 +28,7 @@ def test_build_trim_command_extracts_the_clip_window():
         "-ss", "142.5",
         "-i", "/tmp/segment.mp4",
         "-t", "15",
-        "-c", "copy",
+        "-c:v", "libx264",
         "/tmp/clip.mp4",
     ]
 
@@ -36,6 +36,11 @@ def test_build_trim_command_extracts_the_clip_window():
 def test_render_concat_file_content_lists_each_clip():
     content = render_concat_file_content([Path("/tmp/a.mp4"), Path("/tmp/b.mp4")])
     assert content == "file '/tmp/a.mp4'\nfile '/tmp/b.mp4'\n"
+
+
+def test_render_concat_file_content_escapes_single_quotes_in_paths():
+    content = render_concat_file_content([Path("/tmp/dad's reel.mp4")])
+    assert content == "file '/tmp/dad'\\''s reel.mp4'\n"
 
 
 def test_build_assembly_command_clean_style():

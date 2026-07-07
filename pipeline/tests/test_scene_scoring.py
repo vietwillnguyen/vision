@@ -26,9 +26,28 @@ def test_parse_valid_response_normalizes_score_to_0_1():
     assert result.people_present is True
 
 
+@pytest.mark.parametrize(
+    "fenced",
+    [
+        '```json\n{"score": 8, "location": "outdoor", "people": true}\n```',
+        '```\n{"score": 8, "location": "outdoor", "people": true}\n```',
+        '  ```json\n{"score": 8, "location": "outdoor", "people": true}\n```  ',
+    ],
+)
+def test_parse_strips_markdown_code_fences(fenced):
+    result = parse_scene_response(fenced)
+    assert result.novelty == 0.8
+    assert result.location == "outdoor"
+
+
 def test_parse_invalid_json_raises():
     with pytest.raises(SceneScoreParseError):
         parse_scene_response("not json")
+
+
+def test_parse_fenced_invalid_json_still_raises():
+    with pytest.raises(SceneScoreParseError):
+        parse_scene_response("```json\nnot json\n```")
 
 
 def test_parse_missing_field_raises():
