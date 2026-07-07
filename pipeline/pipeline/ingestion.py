@@ -48,9 +48,10 @@ def build_segments_from_object_keys(
 
 def apply_flag_markers(
     segments: list[Segment], day: date, flag_marker_keys: list[str], device_id: str
-) -> tuple[list[Segment], list[str]]:
+) -> tuple[list[Segment], list[str], list[str]]:
     device_prefix = f"{device_id}/"
     rejected_keys = []
+    unmatched_keys = []
     for key in flag_marker_keys:
         filename = key.split("/")[-1]
         if not filename.endswith(".marker"):
@@ -69,4 +70,6 @@ def apply_flag_markers(
             if segment.recorded_at <= flag_at < window_end:
                 segment.manually_flagged = True
                 break
-    return segments, rejected_keys
+        else:
+            unmatched_keys.append(key)
+    return segments, rejected_keys, unmatched_keys
