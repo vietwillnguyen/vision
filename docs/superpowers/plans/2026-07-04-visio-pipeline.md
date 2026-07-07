@@ -4,9 +4,13 @@
 
 **Goal:** Build the nightly pipeline that scores recorded segments (speech, motion, scene novelty), selects a diverse highlight set, assembles the final reel with FFmpeg, and delivers a push notification.
 
-**Architecture:** Every stage is a pure function or a function taking an injectable client `Protocol` (`TranscriptionClient`, `VisionClient`, `PushClient`) so tests never call OpenAI, Anthropic, or Expo. The only stage that isn't fully pure is FFmpeg command construction, which is tested by asserting on the generated command list rather than running `ffmpeg`.
+**Architecture:** Every stage is a pure function or a function taking an injectable client `Protocol` (`TranscriptionClient`, `VisionClient`, `PushClient`) so tests never call LiteLLM-routed providers or Expo. The only stage that isn't fully pure is FFmpeg command construction, which is tested by asserting on the generated command list rather than running `ffmpeg`.
 
-**Tech Stack:** Python 3.11, pytest, `openai` (Whisper), `anthropic` (Claude Haiku vision), FFmpeg CLI, Expo Push API.
+**Tech Stack:** Python 3.11, pytest, `litellm` (provider-agnostic LLM routing: Whisper transcription, Claude Haiku vision as the default routed models), FFmpeg CLI, Expo Push API.
+
+**As-built note:** post-execution code review hardened the implementation beyond some inline snippets below; where they differ, the `pipeline/` source is authoritative.
+The deltas: `build_trim_command` re-encodes with `libx264` instead of `-c copy` so clip trims are frame-accurate; `build_segments_from_object_keys` and `apply_flag_markers` return `rejected_keys` (and, for markers, `unmatched_keys`) lists instead of silently skipping bad keys, and `apply_flag_markers` takes a `device_id` to scope markers to the device's prefix; `parse_scene_response` also validates the score's numeric type and 0-10 range and strips Markdown code fences; and the selection diversity veto only considers adjacency created by the candidate itself, so same-location adjacency between always-included flagged segments no longer vetoes unrelated candidates.
+The Handoff section reflects the final contracts.
 
 ## Global Constraints
 
@@ -51,8 +55,7 @@ name = "visio-pipeline"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=1.30.0",
-    "anthropic>=0.30.0",
+    "litellm>=1.40.0",
 ]
 
 [project.optional-dependencies]
