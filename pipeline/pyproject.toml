@@ -1,0 +1,13 @@
+[project]
+name = "visio-pipeline"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "litellm>=1.40.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
