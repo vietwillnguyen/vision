@@ -18,13 +18,19 @@ firmware/            -- Epic 1: visio-recorder Python systemd daemon
 pipeline/            -- Epic 2: nightly cloud AI pipeline (Python package)
   pipeline/          -- ingestion, scoring, selection, assembly, delivery stages
   tests/             -- pytest suites run via `uv run --extra dev pytest`
+app/                 -- Epic 3: React Native (Expo) mobile companion app
+  src/logic/         -- pure TypeScript calculation (no React imports)
+  src/hooks/         -- Supabase data hooks (client injected for testing)
+  src/screens/       -- presentational screens (props in, JSX out)
+  src/components/    -- presentational components (timeline, segment preview)
+  __tests__/         -- Jest suites run via `npm test`
 docs/
   superpowers/
     specs/           -- approved design spec
     plans/           -- executable implementation plans (one per epic)
 ```
 
-The `app/` subsystem from the spec's repository structure is planned but not yet implemented (Epic 3).
+All three software subsystems (Epics 1-3) are implemented; their remaining device/UI wiring is deferred to Epic 5 per each plan's Handoff section.
 
 ## Supabase foundation (Epic 0)
 
@@ -82,4 +88,22 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 ```bash
 cd pipeline
 uv run --extra dev pytest   # run the unit test suite
+```
+
+## Mobile companion app (Epic 3)
+
+The React Native (Expo, TypeScript) app foundation: auth form validation, regenerate-preferences validation, timeline bucketing, archive heat-map cells, segment preview/export, and a realtime device-status hook.
+
+- Strict layering: `src/logic/` is pure TypeScript with zero React imports, hooks take an injected `SupabaseClient` (tested with a fake client, never a real network call), and screens/components are presentational.
+- Screen wiring is deferred to Epic 5 per the plan's Handoff section: the bottom tab navigator, container screens, real Supabase Auth, video playback, and timeline thumbnails.
+- The Supabase client reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` from `app/.env` (gitignored).
+
+### Local development
+
+```bash
+cd app
+npm install         # install dependencies
+npm test            # run the Jest test suites
+npx tsc --noEmit    # type-check
+npx expo start      # launch the Expo dev server
 ```
