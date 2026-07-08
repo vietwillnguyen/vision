@@ -7,7 +7,10 @@ function createFakeClient(
   initialRow: Record<string, unknown> | null,
   options: { deferInitialFetch?: boolean; initialFetchError?: Error } = {},
 ) {
-  let onUpdate: ((payload: { new: Record<string, unknown> }) => void) | null = null;
+  const registrations: {
+    event: string;
+    callback: (payload: { new: Record<string, unknown> }) => void;
+  }[] = [];
   let subscribeCalled = false;
   let removeChannelCalls = 0;
 
@@ -30,11 +33,11 @@ function createFakeClient(
     }),
     channel: () => ({
       on: (
-        _event: string,
-        _filter: unknown,
+        _type: string,
+        filter: { event: string },
         callback: (payload: { new: Record<string, unknown> }) => void,
       ) => {
-        onUpdate = callback;
+        registrations.push({ event: filter.event, callback });
         return {
           subscribe: () => {
             subscribeCalled = true;
@@ -48,9 +51,19 @@ function createFakeClient(
     },
   };
 
+  const deliver = (eventType: string, row: Record<string, unknown>) =>
+    act(() => {
+      for (const { event, callback } of registrations) {
+        if (event === '*' || event === eventType) {
+          callback({ new: row });
+        }
+      }
+    });
+
   return {
     client: client as unknown as SupabaseClient,
-    triggerUpdate: (row: Record<string, unknown>) => act(() => onUpdate?.({ new: row })),
+    triggerUpdate: (row: Record<string, unknown>) => deliver('UPDATE', row),
+    triggerInsert: (row: Record<string, unknown>) => deliver('INSERT', row),
     resolveInitialFetch: () =>
       act(async () => {
         resolveInitialFetch();
@@ -122,6 +135,18 @@ describe('useDeviceStatus', () => {
     );
     expect(result.current).toBeNull();
     errorSpy.mockRestore();
+  });
+
+  it('shows status from a first-ever INSERT when no row existed at mount', async () => {
+    const { client, triggerInsert, getSubscribeCalled } = createFakeClient(null);
+    const { result } = renderHook(() => useDeviceStatus(client, 'device-abc'));
+
+    await waitFor(() => expect(getSubscribeCalled()).toBe(true));
+    expect(result.current).toBeNull();
+
+    triggerInsert(ROW);
+
+    expect(result.current?.batteryPct).toBe(72);
   });
 
   it('subscribes on mount and removes the channel on unmount', async () => {

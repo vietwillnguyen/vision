@@ -26,11 +26,13 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
         },
       );
 
+    // '*' rather than UPDATE: the device's first-ever status upsert arrives
+    // as an INSERT, and the initial fetch above finds no row on first boot.
     const channel = client
       .channel(`device_status:${deviceId}`)
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'device_status', filter: `device_id=eq.${deviceId}` },
+        { event: '*', schema: 'public', table: 'device_status', filter: `device_id=eq.${deviceId}` },
         (payload: { new: Record<string, unknown> }) => {
           if (isMounted) {
             realtimeUpdateArrived = true;
