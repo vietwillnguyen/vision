@@ -11,6 +11,10 @@ Visio pendant - a wearable camera that records your day and turns it into a nigh
 supabase/            -- Epic 0: Postgres migrations, pgTAP tests, local stack config
   migrations/        -- schema, RLS policies, storage buckets
   tests/database/    -- pgTAP test suites run via `supabase test db`
+firmware/            -- Epic 1: visio-recorder Python systemd daemon
+  visio_recorder/    -- battery, LED, muxer, upload queue, uploader, wifi/device onboarding, recording loop
+  tests/             -- pytest suite (fakes for every hardware/network Protocol)
+  systemd/           -- installable systemd unit
 pipeline/            -- Epic 2: nightly cloud AI pipeline (Python package)
   pipeline/          -- ingestion, scoring, selection, assembly, delivery stages
   tests/             -- pytest suites run via `uv run --extra dev pytest`
@@ -20,7 +24,7 @@ docs/
     plans/           -- executable implementation plans (one per epic)
 ```
 
-The `firmware/` and `app/` subsystems from the spec's repository structure are planned but not yet implemented (Epics 1 and 3).
+The `app/` subsystem from the spec's repository structure is planned but not yet implemented (Epic 3).
 
 ## Supabase foundation (Epic 0)
 
@@ -40,6 +44,22 @@ Requires the [Supabase CLI](https://supabase.com/docs/guides/local-development) 
 supabase start      # start the local stack
 supabase db reset   # recreate the database from migrations
 supabase test db    # run the pgTAP test suites
+```
+
+## Firmware (Epic 1)
+
+**Plan:** [`docs/superpowers/plans/2026-07-04-visio-firmware.md`](docs/superpowers/plans/2026-07-04-visio-firmware.md)
+
+The `visio-recorder` Python systemd daemon: boot-time battery check, WiFi + Supabase auth onboarding via QR code, rolling 5-minute H.264-to-MP4 segment capture and upload, a manual flag button, an LED state machine, and per-segment `device_status` reporting. Every hardware or network boundary (PiJuice, GPIO, WS2812B LEDs, `ffmpeg`/`rpicam-vid`, Supabase) is a small `Protocol` with a fake used in tests; `daemon.py` is the only module that wires real implementations together, and currently only implements the startup battery/LED sequence - the remaining wiring (process supervision, threading, real disk-usage stats) is deferred to Epic 5 (see the plan's Handoff section).
+
+### Local development
+
+Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/). The committed `uv.lock` is the reproducibility contract for firmware deployed to devices.
+
+```bash
+cd firmware
+uv sync --extra dev   # install dependencies from uv.lock
+uv run pytest         # run the test suite
 ```
 
 ## Cloud AI pipeline (Epic 2)
