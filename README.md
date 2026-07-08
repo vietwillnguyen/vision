@@ -11,13 +11,19 @@ Visio pendant - a wearable camera that records your day and turns it into a nigh
 supabase/            -- Epic 0: Postgres migrations, pgTAP tests, local stack config
   migrations/        -- schema, RLS policies, storage buckets
   tests/database/    -- pgTAP test suites run via `supabase test db`
+app/                 -- Epic 3: React Native (Expo) mobile companion app
+  src/logic/         -- pure TypeScript calculation (no React imports)
+  src/hooks/         -- Supabase data hooks (client injected for testing)
+  src/screens/       -- presentational screens (props in, JSX out)
+  src/components/    -- presentational components (timeline, segment preview)
+  __tests__/         -- Jest suites run via `npm test`
 docs/
   superpowers/
     specs/           -- approved design spec
     plans/           -- executable implementation plans (one per epic)
 ```
 
-The `firmware/`, `pipeline/`, and `app/` subsystems from the spec's repository structure are planned but not yet implemented (Epics 1-3).
+The `firmware/` and `pipeline/` subsystems from the spec's repository structure are planned but not yet implemented (Epics 1 and 2).
 
 ## Supabase foundation (Epic 0)
 
@@ -37,4 +43,22 @@ Requires the [Supabase CLI](https://supabase.com/docs/guides/local-development) 
 supabase start      # start the local stack
 supabase db reset   # recreate the database from migrations
 supabase test db    # run the pgTAP test suites
+```
+
+## Mobile companion app (Epic 3)
+
+The React Native (Expo, TypeScript) app foundation: auth form validation, regenerate-preferences validation, timeline bucketing, archive heat-map cells, segment preview/export, and a realtime device-status hook.
+
+- Strict layering: `src/logic/` is pure TypeScript with zero React imports, hooks take an injected `SupabaseClient` (tested with a fake client, never a real network call), and screens/components are presentational.
+- Screen wiring is deferred to Epic 5 per the plan's Handoff section: the bottom tab navigator, container screens, real Supabase Auth, video playback, and timeline thumbnails.
+- The Supabase client reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` from `app/.env` (gitignored).
+
+### Local development
+
+```bash
+cd app
+npm install         # install dependencies
+npm test            # run the Jest test suites
+npx tsc --noEmit    # type-check
+npx expo start      # launch the Expo dev server
 ```
