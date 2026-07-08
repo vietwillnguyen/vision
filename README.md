@@ -32,6 +32,12 @@ docs/
 
 All three software subsystems (Epics 1-3) are implemented; their remaining device/UI wiring is deferred to Epic 5 per each plan's Handoff section.
 
+## Continuous integration
+
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs all three test suites on every pull request targeting `main` and every push to `main`.
+The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
+The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
+
 ## Supabase foundation (Epic 0)
 
 The shared database contract every other subsystem codes against:
