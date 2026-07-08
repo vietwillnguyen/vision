@@ -13,7 +13,7 @@ export function buildTimelineSlots(
   dayStart: Date,
   slotMinutes: number = 5,
 ): TimelineSlot[] {
-  const slotCount = MINUTES_PER_DAY / slotMinutes;
+  const slotCount = Math.ceil(MINUTES_PER_DAY / slotMinutes);
   const slots: TimelineSlot[] = Array.from({ length: slotCount }, (_, i) => ({
     startMinute: i * slotMinutes,
     segment: null,

@@ -48,4 +48,12 @@ describe('buildTimelineSlots', () => {
     const slots = buildTimelineSlots([first, second], dayStart);
     expect(slots[1].segment).toBe(second);
   });
+
+  it('places an end-of-day segment when slotMinutes does not divide the day evenly', () => {
+    const seg = segment({ recordedAt: '2026-07-04T23:59:00.000Z' });
+    const slots = buildTimelineSlots([seg], dayStart, 7);
+    expect(slots).toHaveLength(206);
+    expect(slots[205].startMinute).toBe(1435);
+    expect(slots[205].segment).toBe(seg);
+  });
 });

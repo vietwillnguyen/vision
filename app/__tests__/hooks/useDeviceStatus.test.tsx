@@ -3,16 +3,28 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useDeviceStatus } from '../../src/hooks/useDeviceStatus';
 
-function createFakeClient(initialRow: Record<string, unknown> | null) {
+function createFakeClient(
+  initialRow: Record<string, unknown> | null,
+  options: { deferInitialFetch?: boolean; initialFetchError?: Error } = {},
+) {
   let onUpdate: ((payload: { new: Record<string, unknown> }) => void) | null = null;
   let subscribeCalled = false;
   let removeChannelCalls = 0;
+
+  let resolveInitialFetch: () => void = () => {};
+  const initialFetch: Promise<{ data: Record<string, unknown> | null }> = options.initialFetchError
+    ? Promise.reject(options.initialFetchError)
+    : options.deferInitialFetch
+      ? new Promise((resolve) => {
+          resolveInitialFetch = () => resolve({ data: initialRow });
+        })
+      : Promise.resolve({ data: initialRow });
 
   const client = {
     from: () => ({
       select: () => ({
         eq: () => ({
-          single: () => Promise.resolve({ data: initialRow }),
+          single: () => initialFetch,
         }),
       }),
     }),
@@ -39,6 +51,10 @@ function createFakeClient(initialRow: Record<string, unknown> | null) {
   return {
     client: client as unknown as SupabaseClient,
     triggerUpdate: (row: Record<string, unknown>) => act(() => onUpdate?.({ new: row })),
+    resolveInitialFetch: () =>
+      act(async () => {
+        resolveInitialFetch();
+      }),
     getSubscribeCalled: () => subscribeCalled,
     getRemoveChannelCalls: () => removeChannelCalls,
   };
@@ -79,6 +95,33 @@ describe('useDeviceStatus', () => {
     triggerUpdate({ ...ROW, battery_pct: 65 });
 
     expect(result.current?.batteryPct).toBe(65);
+  });
+
+  it('does not overwrite a realtime update with a slower initial fetch', async () => {
+    const { client, triggerUpdate, resolveInitialFetch } = createFakeClient(ROW, {
+      deferInitialFetch: true,
+    });
+    const { result } = renderHook(() => useDeviceStatus(client, 'device-abc'));
+
+    triggerUpdate({ ...ROW, battery_pct: 55 });
+    expect(result.current?.batteryPct).toBe(55);
+
+    await resolveInitialFetch();
+
+    expect(result.current?.batteryPct).toBe(55);
+  });
+
+  it('logs the error and stays null when the initial fetch fails', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const fetchError = new Error('network down');
+    const { client } = createFakeClient(null, { initialFetchError: fetchError });
+    const { result } = renderHook(() => useDeviceStatus(client, 'device-abc'));
+
+    await waitFor(() =>
+      expect(errorSpy).toHaveBeenCalledWith('useDeviceStatus: initial fetch failed', fetchError),
+    );
+    expect(result.current).toBeNull();
+    errorSpy.mockRestore();
   });
 
   it('subscribes on mount and removes the channel on unmount', async () => {

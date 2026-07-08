@@ -8,6 +8,7 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
 
   useEffect(() => {
     let isMounted = true;
+    let realtimeUpdateArrived = false;
 
     client
       .from('device_status')
@@ -16,11 +17,13 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
       .single()
       .then(
         ({ data }: { data: Record<string, unknown> | null }) => {
-          if (isMounted && data) {
+          if (isMounted && !realtimeUpdateArrived && data) {
             setStatus(mapRow(data));
           }
         },
-        () => {},
+        (error: unknown) => {
+          console.error('useDeviceStatus: initial fetch failed', error);
+        },
       );
 
     const channel = client
@@ -30,6 +33,7 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
         { event: 'UPDATE', schema: 'public', table: 'device_status', filter: `device_id=eq.${deviceId}` },
         (payload: { new: Record<string, unknown> }) => {
           if (isMounted) {
+            realtimeUpdateArrived = true;
             setStatus(mapRow(payload.new));
           }
         },
