@@ -4,9 +4,13 @@
 
 **Goal:** Build the nightly pipeline that scores recorded segments (speech, motion, scene novelty), selects a diverse highlight set, assembles the final reel with FFmpeg, and delivers a push notification.
 
-**Architecture:** Every stage is a pure function or a function taking an injectable client `Protocol` (`TranscriptionClient`, `VisionClient`, `PushClient`) so tests never call OpenAI, Anthropic, or Expo. The only stage that isn't fully pure is FFmpeg command construction, which is tested by asserting on the generated command list rather than running `ffmpeg`.
+**Architecture:** Every stage is a pure function or a function taking an injectable client `Protocol` (`TranscriptionClient`, `VisionClient`, `PushClient`) so tests never call LiteLLM-routed providers or Expo. The only stage that isn't fully pure is FFmpeg command construction, which is tested by asserting on the generated command list rather than running `ffmpeg`.
 
-**Tech Stack:** Python 3.11, pytest, `openai` (Whisper), `anthropic` (Claude Haiku vision), FFmpeg CLI, Expo Push API.
+**Tech Stack:** Python 3.11, pytest, `litellm` (provider-agnostic LLM routing: Whisper transcription, Claude Haiku vision as the default routed models), FFmpeg CLI, Expo Push API.
+
+**As-built note:** post-execution code review hardened the implementation beyond some inline snippets below; where they differ, the `pipeline/` source is authoritative.
+The deltas: `build_trim_command` re-encodes with `libx264` instead of `-c copy` so clip trims are frame-accurate; `build_segments_from_object_keys` and `apply_flag_markers` return `rejected_keys` (and, for markers, `unmatched_keys`) lists instead of silently skipping bad keys, and `apply_flag_markers` takes a `device_id` to scope markers to the device's prefix; `parse_scene_response` also validates the score's numeric type and 0-10 range and strips Markdown code fences; and the selection diversity veto only considers adjacency created by the candidate itself, so same-location adjacency between always-included flagged segments no longer vetoes unrelated candidates.
+The Handoff section reflects the final contracts.
 
 ## Global Constraints
 
@@ -51,8 +55,7 @@ name = "visio-pipeline"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=1.30.0",
-    "anthropic>=0.30.0",
+    "litellm>=1.40.0",
 ]
 
 [project.optional-dependencies]
@@ -1231,6 +1234,12 @@ git commit -m "feat: add segment ingestion and flag marker matching"
 
 ## Handoff
 
-The nightly job entrypoint (deployed as a Supabase Edge Function or AWS Lambda, triggered by cron or pending-segment-count threshold per the spec) wires the tasks above in this order: list a device's objects in the `segments` storage bucket, build `segments` rows with `build_segments_from_object_keys` and apply `apply_flag_markers` (Task 11), persist any not-yet-seen rows to the database, run `score_segment` (Task 10) across them, feed the results into `select_highlights` (Task 7), download each selected segment once and trim it to its clip window with `build_trim_command` (Task 8), concatenate the trimmed clips with `build_assembly_command` (Task 8), upload the result to the `reels` bucket, write a `reels` row, and call `notify_reel_ready` (Task 9) with the push token from the device's `devices.push_token` column. This wiring composes already-tested units against real Supabase/OpenAI/Anthropic/Expo clients and is validated via Epic 5's integration checklist rather than additional unit tests.
+The nightly job entrypoint (deployed as a Supabase Edge Function or AWS Lambda, triggered by cron or pending-segment-count threshold per the spec) wires the tasks above in this order: list a device's objects in the `segments` storage bucket, build `segments` rows with `build_segments_from_object_keys` and apply `apply_flag_markers` (Task 11), persist any not-yet-seen rows to the database, run `score_segment` (Task 10) across them, feed the results into `select_highlights` (Task 7), download each selected segment once and trim it to its clip window with `build_trim_command` (Task 8), concatenate the trimmed clips with `build_assembly_command` (Task 8), upload the result to the `reels` bucket, write a `reels` row, and call `notify_reel_ready` (Task 9) with the push token from the device's `devices.push_token` column. This wiring composes already-tested units against real Supabase/LiteLLM/Expo clients (LLM calls are provider-agnostic via LiteLLM, with Claude Haiku as the default routed model and vision scoring using `response_format` `json_schema` structured outputs) and is validated via Epic 5's integration checklist rather than additional unit tests.
+
+Both ingestion functions skip keys they cannot parse (or that fall outside the device's prefix) and return them as a second `rejected_keys` list rather than raising. `apply_flag_markers` additionally returns a third `unmatched_keys` list for well-formed, in-prefix markers whose timestamp falls outside every segment window (e.g. the marker uploaded before its segment mp4), so they can be retried instead of silently dropped. The orchestrator is expected to persist rejected and unmatched keys with attempt counts for DLQ-style retry, and to flag the user once a key exhausts its max retries; that retry/escalation policy is orchestrator follow-up work, not part of this plan.
+
+Because flag marker keys carry only a time of day (`FLAG_HHMMSS.marker`, no date), day attribution rests entirely on the `day` argument passed to `apply_flag_markers`, so the orchestrator retry policy above has two hard requirements.
+First, markers must be consumed (deleted from the bucket) as part of each nightly run once processed, so a leftover marker can never be re-listed and attributed to a later day.
+Second, DLQ retry state for unmatched markers must record the marker's original day, and retries must re-run `apply_flag_markers` with that recorded day, so a retry can never flag a later day's segment that happens to occupy the same time-of-day window.
 
 On-demand regeneration (the mobile app's "Regenerate" button, target length/style/mood - see [`2026-07-04-visio-app.md`](2026-07-04-visio-app.md) Task 9) has no backend consumer in this plan. Building it means mapping the mood weighting onto a `ScoreWeights` adjustment and exposing an on-demand trigger (versus the nightly cron); this is out of scope here and should be treated as follow-up work, not a silent gap in Epic 5's checklist.
