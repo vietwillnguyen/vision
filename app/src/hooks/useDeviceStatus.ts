@@ -14,11 +14,14 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
       .select('*')
       .eq('device_id', deviceId)
       .single()
-      .then(({ data }: { data: Record<string, unknown> | null }) => {
-        if (isMounted && data) {
-          setStatus(mapRow(data));
-        }
-      });
+      .then(
+        ({ data }: { data: Record<string, unknown> | null }) => {
+          if (isMounted && data) {
+            setStatus(mapRow(data));
+          }
+        },
+        () => {},
+      );
 
     const channel = client
       .channel(`device_status:${deviceId}`)
