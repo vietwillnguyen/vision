@@ -130,7 +130,7 @@ A single Python systemd service manages the full device lifecycle.
 
 **Manual flag button:**
 
-A single press inserts a `FLAG_HHMMSS.marker` file into the upload queue.
+A single press inserts a `FLAG_YYYYMMDD_HHMMSS.marker` file into the upload queue.
 The cloud pipeline reads this marker and boosts the composite score for the surrounding timestamp.
 Flagged moments are always included in the highlight reel.
 

@@ -23,8 +23,8 @@ def test_upload_segment_uses_segments_bucket_and_device_prefixed_path():
 
 def test_upload_segment_also_uploads_flag_marker_files():
     client = FakeStorageClient()
-    local_path = Path("/queue/FLAG_120300.marker")
+    local_path = Path("/queue/FLAG_20260704_120300.marker")
 
     object_path = upload_segment(client, "device-abc", local_path)
 
-    assert object_path == "device-abc/FLAG_120300.marker"
+    assert object_path == "device-abc/FLAG_20260704_120300.marker"

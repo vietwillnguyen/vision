@@ -98,7 +98,7 @@ No separate detailed plan - this is a checklist run once Epics 0-4 are done, usi
 - [ ] Flash the device from Epic 4 with the Epic 1 firmware image; confirm it boots and reaches "Recording" LED state.
 - [ ] Onboard the device to WiFi via the Epic 3 app's QR flow; confirm `wpa_supplicant.conf` is written and the device reconnects.
 - [ ] Record for at least 15 minutes; confirm segments appear in Supabase Storage and `segments` rows are created.
-- [ ] Press the flag button during recording; confirm a `FLAG_HHMMSS.marker` reaches the upload queue and the corresponding segment is later marked `manually_flagged`.
+- [ ] Press the flag button during recording; confirm a `FLAG_YYYYMMDD_HHMMSS.marker` reaches the upload queue and the corresponding segment is later marked `manually_flagged`.
 - [ ] Trigger the Epic 2 pipeline manually (not waiting for the nightly cron) against the recorded segments; confirm a `reels` row and push notification are produced.
 - [ ] Open the Epic 3 app; confirm the reel plays, the device tab shows live battery/storage, and the archive tab shows today's entry.
 - [ ] Drain the battery below 20% (or fake it via PiJuice API for a faster check) and confirm the LED transitions to pulsing yellow, then red/halt below 10%.
