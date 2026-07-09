@@ -8,12 +8,15 @@
 
 **Tech Stack:** Python 3.11, pytest, `pigpio`/`rpi_ws281x` (real LED driver, not exercised in tests), `pijuice` (real battery driver, not exercised in tests), `supabase-py` client, `ffmpeg`/`rpicam-vid` CLI tools.
 
+**As-built note:** a later coordinated rename (issue #9, ahead of Epic 5, per this plan's Handoff) changed flag marker filenames from `FLAG_HHMMSS.marker` to dated `FLAG_YYYYMMDD_HHMMSS.marker` names.
+Inline task snippets showing the undated format are historical; the `firmware/` source is authoritative where they differ.
+
 ## Global Constraints
 
 - Segments are 5-minute rolling H.264 files named `YYYYMMDD_HHMMSS.h264`, muxed to MP4 with `ffmpeg -i seg.h264 -c copy seg.mp4`.
 - Battery halt threshold: `< 10%`. Battery low-warning threshold: `< 20%`.
 - LED states: Recording = solid green, Uploading = pulsing blue, Low battery (<20%) = pulsing yellow, Critical/error = red flash. Low battery takes priority over whatever else is happening (uploading on a low battery still shows yellow, not blue).
-- Manual flag creates `FLAG_HHMMSS.marker` in the upload queue, which is uploaded to Supabase Storage the same way a segment is - the cloud pipeline (see [`2026-07-04-visio-pipeline.md`](2026-07-04-visio-pipeline.md) Task 11) is what turns it into a `manually_flagged` update on the matching `segments` row.
+- Manual flag creates `FLAG_YYYYMMDD_HHMMSS.marker` in the upload queue, which is uploaded to Supabase Storage the same way a segment is - the cloud pipeline (see [`2026-07-04-visio-pipeline.md`](2026-07-04-visio-pipeline.md) Task 11) is what turns it into a `manually_flagged` update on the matching `segments` row.
 - On successful upload, the local file is deleted to free SD space.
 - Device status upsert happens after each successful segment upload, targeting the `device_status` table from [`2026-07-04-visio-supabase-foundation.md`](2026-07-04-visio-supabase-foundation.md).
 - Every device is linked to a user account via a `device_id` UUID generated on first boot (spec, Mobile Companion App > Auth). Since every table is RLS-scoped to `auth.uid()` ([`2026-07-04-visio-supabase-foundation.md`](2026-07-04-visio-supabase-foundation.md) Task 7), the device cannot write to Supabase as an anonymous client - it needs an authenticated session. This plan's onboarding flow (Task 8) carries a Supabase user session (access + refresh token) inside the same QR payload that carries the WiFi credentials, captured during pairing while the user's own phone is already signed in. This is the simplest mechanism that satisfies RLS without provisioning a separate device-credential system, and should be confirmed with the spec owner before Epic 5 if a more formal device-credential flow is wanted later.
@@ -1525,7 +1528,6 @@ git commit -m "feat: add visio-recorder systemd unit"
   Define when repeated failures escalate to the CRITICAL LED.
 - **Bookworm networking:** stock Raspberry Pi OS Bookworm uses NetworkManager, which does not honor `/etc/wpa_supplicant/wpa_supplicant.conf`.
   Epic 5 wiring may need nmcli/NM keyfiles instead of `write_wpa_supplicant`'s output path.
-- **FLAG marker naming:** `FLAG_HHMMSS.marker` has no date component - two presses at the same wall-clock second on different days collide at the storage object path (no-upsert upload 409s and the marker never clears the queue).
-  Coordinate a rename to `FLAG_YYYYMMDD_HHMMSS.marker` with the pipeline plan (Task 11 there parses the marker name) before Epic 5.
+- **FLAG marker naming:** resolved (issue #9) - `write_flag_marker` now writes dated `FLAG_YYYYMMDD_HHMMSS.marker` names matching the pipeline's `parse_flag_marker_filename` contract (Task 11 there), so same-second presses on different days no longer collide at the storage object path.
 
 None of this has branching logic beyond what Tasks 8-11 already test in isolation - it is glue, validated on real hardware in Epic 5 rather than through additional unit tests.

@@ -10,6 +10,7 @@
 
 **As-built note:** post-execution code review hardened the implementation beyond some inline snippets below; where they differ, the `pipeline/` source is authoritative.
 The deltas: `build_trim_command` re-encodes with `libx264` instead of `-c copy` so clip trims are frame-accurate; `build_segments_from_object_keys` and `apply_flag_markers` return `rejected_keys` (and, for markers, `unmatched_keys`) lists instead of silently skipping bad keys, and `apply_flag_markers` takes a `device_id` to scope markers to the device's prefix; `parse_scene_response` also validates the score's numeric type and 0-10 range and strips Markdown code fences; and the selection diversity veto only considers adjacency created by the candidate itself, so same-location adjacency between always-included flagged segments no longer vetoes unrelated candidates.
+A later coordinated rename (issue #9, ahead of Epic 5) changed flag marker filenames from `FLAG_HHMMSS.marker` to dated `FLAG_YYYYMMDD_HHMMSS.marker` names and dropped `apply_flag_markers`' `day` parameter, so inline snippets showing the undated format or the `day` argument are historical.
 The Handoff section reflects the final contracts.
 
 ## Global Constraints
@@ -1238,8 +1239,8 @@ The nightly job entrypoint (deployed as a Supabase Edge Function or AWS Lambda, 
 
 Both ingestion functions skip keys they cannot parse (or that fall outside the device's prefix) and return them as a second `rejected_keys` list rather than raising. `apply_flag_markers` additionally returns a third `unmatched_keys` list for well-formed, in-prefix markers whose timestamp falls outside every segment window (e.g. the marker uploaded before its segment mp4), so they can be retried instead of silently dropped. The orchestrator is expected to persist rejected and unmatched keys with attempt counts for DLQ-style retry, and to flag the user once a key exhausts its max retries; that retry/escalation policy is orchestrator follow-up work, not part of this plan.
 
-Because flag marker keys carry only a time of day (`FLAG_HHMMSS.marker`, no date), day attribution rests entirely on the `day` argument passed to `apply_flag_markers`, so the orchestrator retry policy above has two hard requirements.
-First, markers must be consumed (deleted from the bucket) as part of each nightly run once processed, so a leftover marker can never be re-listed and attributed to a later day.
-Second, DLQ retry state for unmatched markers must record the marker's original day, and retries must re-run `apply_flag_markers` with that recorded day, so a retry can never flag a later day's segment that happens to occupy the same time-of-day window.
+Flag marker keys carry their full date (`FLAG_YYYYMMDD_HHMMSS.marker`, renamed from the undated `FLAG_HHMMSS.marker` format in issue #9), and `apply_flag_markers` takes no `day` argument, so day attribution comes from the marker name itself and a stale or cross-day-retried marker can never flag another day's segment.
+The orchestrator can therefore retry unmatched markers as-is, with no need to record their original day.
+Undated legacy-format markers are rejected into `rejected_keys` rather than silently attributed to the processed day.
 
 On-demand regeneration (the mobile app's "Regenerate" button, target length/style/mood - see [`2026-07-04-visio-app.md`](2026-07-04-visio-app.md) Task 9) has no backend consumer in this plan. Building it means mapping the mood weighting onto a `ScoreWeights` adjustment and exposing an on-demand trigger (versus the nightly cron); this is out of scope here and should be treated as follow-up work, not a silent gap in Epic 5's checklist.
