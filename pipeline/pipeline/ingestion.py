@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, timedelta
 
 from pipeline.models import DEFAULT_LOCATION, Segment
 
@@ -10,9 +10,9 @@ def parse_segment_filename(filename: str) -> datetime:
     return datetime.strptime(stem, "%Y%m%d_%H%M%S")
 
 
-def parse_flag_marker_filename(filename: str) -> time:
+def parse_flag_marker_filename(filename: str) -> datetime:
     stem = filename.removeprefix("FLAG_").removesuffix(".marker")
-    return datetime.strptime(stem, "%H%M%S").time()
+    return datetime.strptime(stem, "%Y%m%d_%H%M%S")
 
 
 def build_segments_from_object_keys(
@@ -47,14 +47,14 @@ def build_segments_from_object_keys(
 
 
 def apply_flag_markers(
-    segments: list[Segment], day: date, flag_marker_keys: list[str], device_id: str
+    segments: list[Segment], flag_marker_keys: list[str], device_id: str
 ) -> tuple[list[Segment], list[str], list[str]]:
-    """Flag segments whose window contains a marker's time of day.
+    """Flag segments whose window contains a marker's timestamp.
 
-    Marker filenames (FLAG_HHMMSS.marker) carry no date, so every marker is
-    attributed to ``day``. Callers must pass listings scoped to a single day
-    and retry unmatched markers with their original day recorded, or a stale
-    or cross-day-retried marker will flag the wrong day's segment.
+    Marker filenames (FLAG_YYYYMMDD_HHMMSS.marker) carry their full date, so a
+    stale or cross-day-retried marker can never flag another day's segment: a
+    marker whose date falls outside every segment window is returned as
+    unmatched for DLQ-style retry, and undated legacy markers are rejected.
     """
     device_prefix = f"{device_id}/"
     rejected_keys = []
@@ -67,11 +67,10 @@ def apply_flag_markers(
             rejected_keys.append(key)
             continue
         try:
-            flag_time = parse_flag_marker_filename(filename)
+            flag_at = parse_flag_marker_filename(filename)
         except ValueError:
             rejected_keys.append(key)
             continue
-        flag_at = datetime.combine(day, flag_time)
         for segment in segments:
             window_end = segment.recorded_at + timedelta(seconds=segment.duration_sec)
             if segment.recorded_at <= flag_at < window_end:

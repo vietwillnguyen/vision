@@ -19,14 +19,14 @@ def test_list_pending_returns_sorted_queue_contents(tmp_path):
     queue_dir.mkdir()
     (queue_dir / "20260704_120500.mp4").write_bytes(b"")
     (queue_dir / "20260704_120000.mp4").write_bytes(b"")
-    (queue_dir / "FLAG_120300.marker").touch()
+    (queue_dir / "FLAG_20260704_120300.marker").touch()
 
     pending = list_pending(queue_dir)
 
     assert [p.name for p in pending] == [
         "20260704_120000.mp4",
         "20260704_120500.mp4",
-        "FLAG_120300.marker",
+        "FLAG_20260704_120300.marker",
     ]
 
 

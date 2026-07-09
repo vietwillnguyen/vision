@@ -1,4 +1,6 @@
-from datetime import date, datetime, time
+from datetime import datetime
+
+import pytest
 
 from pipeline.ingestion import (
     apply_flag_markers,
@@ -15,12 +17,19 @@ def test_parse_segment_filename():
 
 
 def test_parse_flag_marker_filename():
-    assert parse_flag_marker_filename("FLAG_120300.marker") == time(12, 3, 0)
+    assert parse_flag_marker_filename("FLAG_20260704_120300.marker") == datetime(
+        2026, 7, 4, 12, 3, 0
+    )
+
+
+def test_parse_flag_marker_filename_rejects_undated_legacy_format():
+    with pytest.raises(ValueError):
+        parse_flag_marker_filename("FLAG_120300.marker")
 
 
 def test_build_segments_from_object_keys_ignores_marker_files():
     segments, rejected = build_segments_from_object_keys(
-        ["device-abc/20260704_120000.mp4", "device-abc/FLAG_120300.marker"],
+        ["device-abc/20260704_120000.mp4", "device-abc/FLAG_20260704_120300.marker"],
         device_id="device-abc",
     )
 
@@ -73,8 +82,7 @@ def test_apply_flag_markers_flags_the_containing_segment():
 
     _, rejected, unmatched = apply_flag_markers(
         segments,
-        date(2026, 7, 4),
-        ["device-abc/FLAG_120300.marker"],
+        ["device-abc/FLAG_20260704_120300.marker"],
         device_id="device-abc",
     )
 
@@ -91,13 +99,44 @@ def test_apply_flag_markers_reports_markers_outside_any_segment_window_as_unmatc
 
     _, rejected, unmatched = apply_flag_markers(
         segments,
-        date(2026, 7, 4),
-        ["device-abc/FLAG_235900.marker"],
+        ["device-abc/FLAG_20260704_235900.marker"],
         device_id="device-abc",
     )
 
     assert rejected == []
-    assert unmatched == ["device-abc/FLAG_235900.marker"]
+    assert unmatched == ["device-abc/FLAG_20260704_235900.marker"]
+    assert segments[0].manually_flagged is False
+
+
+def test_apply_flag_markers_does_not_flag_a_same_time_segment_from_another_day():
+    segments, _ = build_segments_from_object_keys(
+        ["device-abc/20260704_120000.mp4"], device_id="device-abc"
+    )
+
+    _, rejected, unmatched = apply_flag_markers(
+        segments,
+        ["device-abc/FLAG_20260705_120100.marker"],
+        device_id="device-abc",
+    )
+
+    assert rejected == []
+    assert unmatched == ["device-abc/FLAG_20260705_120100.marker"]
+    assert segments[0].manually_flagged is False
+
+
+def test_apply_flag_markers_rejects_undated_legacy_markers_instead_of_guessing_the_day():
+    segments, _ = build_segments_from_object_keys(
+        ["device-abc/20260704_120000.mp4"], device_id="device-abc"
+    )
+
+    _, rejected, unmatched = apply_flag_markers(
+        segments,
+        ["device-abc/FLAG_120100.marker"],
+        device_id="device-abc",
+    )
+
+    assert rejected == ["device-abc/FLAG_120100.marker"]
+    assert unmatched == []
     assert segments[0].manually_flagged is False
 
 
@@ -108,8 +147,10 @@ def test_apply_flag_markers_rejects_unparseable_markers_without_raising():
 
     _, rejected, unmatched = apply_flag_markers(
         segments,
-        date(2026, 7, 4),
-        ["device-abc/FLAG_garbage.marker", "device-abc/FLAG_120100.marker"],
+        [
+            "device-abc/FLAG_garbage.marker",
+            "device-abc/FLAG_20260704_120100.marker",
+        ],
         device_id="device-abc",
     )
 
@@ -125,11 +166,13 @@ def test_apply_flag_markers_rejects_markers_outside_the_device_prefix():
 
     _, rejected, unmatched = apply_flag_markers(
         segments,
-        date(2026, 7, 4),
-        ["device-xyz/FLAG_120100.marker", "device-abc/FLAG_120200.marker"],
+        [
+            "device-xyz/FLAG_20260704_120100.marker",
+            "device-abc/FLAG_20260704_120200.marker",
+        ],
         device_id="device-abc",
     )
 
-    assert rejected == ["device-xyz/FLAG_120100.marker"]
+    assert rejected == ["device-xyz/FLAG_20260704_120100.marker"]
     assert unmatched == []
     assert segments[0].manually_flagged is True
