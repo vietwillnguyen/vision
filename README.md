@@ -37,6 +37,7 @@ All three software subsystems (Epics 1-3) are implemented; their remaining devic
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs all three test suites on every pull request targeting `main` and every push to `main`.
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
+The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
 
 ## Supabase foundation (Epic 0)
 

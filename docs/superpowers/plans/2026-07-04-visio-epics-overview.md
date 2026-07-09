@@ -87,6 +87,7 @@ Filed 2026-07-09 after the review and merge of PRs #2 (Epic 1), #3 (Epic 2), and
 
 - [#5 Pipeline: nightly orchestrator, entrypoint, and real adapters](https://github.com/vietwillnguyen/vision/issues/5) - blocks the "trigger the pipeline manually" checklist step below.
 - [#6 CI: run firmware, pipeline, and app test suites on PRs](https://github.com/vietwillnguyen/vision/issues/6) - landed as `.github/workflows/tests.yml`; all three suites now gate PRs to main alongside GitGuardian.
+  Hardened per [#12](https://github.com/vietwillnguyen/vision/issues/12): the app job's `npm ci` now retries registry fetches (5 retries, 10-60s backoff) after a transient ECONNRESET flaked the post-merge run for PR #11, so a red main during Epic 5 integration means a real regression.
 - [#7 Firmware: Epic 5 daemon glue](https://github.com/vietwillnguyen/vision/issues/7) - rpicam-vid supervision, the `YYYYMMDD_HHMMSS.mp4` segment naming contract, real disk stats, and a `__main__` entry for the systemd unit.
 - [#8 App: Epic 5 screen wiring](https://github.com/vietwillnguyen/vision/issues/8) - navigation, real auth, `expo-video` playback, styling/accessibility, and realtime channel-error handling.
 - [#9 Cross-epic: add date component to FLAG marker filename](https://github.com/vietwillnguyen/vision/issues/9) - coordinated firmware writer + pipeline parser rename before flag-button integration testing.
