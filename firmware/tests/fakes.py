@@ -61,11 +61,22 @@ class FakeCommandRunner(CommandRunner):
     ``on_record`` is invoked (with the running record count) after each
     ``rpicam-vid`` call, letting tests drive cycle counts deterministically
     from the main loop thread.
+
+    ``mux_gate``, when given, blocks each ``ffmpeg`` call until the event is
+    set. The mux is the first thing the upload worker does per segment, so a
+    gate holds the entire worker back until the main loop reaches a known
+    point (e.g. to guarantee segments are still queued when a battery halt is
+    observed).
     """
 
-    def __init__(self, on_record: Callable[[int], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_record: Callable[[int], None] | None = None,
+        mux_gate: threading.Event | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._on_record = on_record
+        self._mux_gate = mux_gate
         self.calls: list[list[str]] = []
         self.record_count = 0
 
@@ -80,6 +91,8 @@ class FakeCommandRunner(CommandRunner):
             if self._on_record is not None:
                 self._on_record(self.record_count)
         elif "ffmpeg" in args:
+            if self._mux_gate is not None:
+                assert self._mux_gate.wait(timeout=5), "mux_gate never opened"
             input_path = Path(args[args.index("-i") + 1])
             output_path = Path(args[args.index("copy") + 1])
             if input_path.exists():

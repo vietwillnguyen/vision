@@ -63,7 +63,9 @@ def run_recording_loop(
     The main thread only records and enqueues. A single worker thread owns all
     upload state (segment count, consecutive failures) and every LED call except
     the halt CRITICAL applied here at exit. Both the halt and stop paths drain
-    the queue via a ``None`` sentinel before joining the worker.
+    the queue via a ``None`` sentinel before joining the worker; on halt, the
+    CRITICAL LED is applied after the drain so it is the final LED state and
+    cannot be overwritten by the drained segments' LED restores.
     """
     work: "queue.Queue[Path | None]" = queue.Queue()
 
@@ -93,16 +95,20 @@ def run_recording_loop(
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
-                if consecutive_failures == UPLOAD_FAILURES_TO_CRITICAL:
+                # ">=" so a sustained outage re-applies CRITICAL after every
+                # failure past the threshold; on_segment_complete has already
+                # restored a normal LED state by this point.
+                if consecutive_failures >= UPLOAD_FAILURES_TO_CRITICAL:
                     apply_led_state(deps.led_driver, LedState.CRITICAL)
 
     worker_thread = threading.Thread(target=worker)
     worker_thread.start()
+    halted = False
     try:
         while True:
             battery_status = read_battery_status(deps.battery_reader)
             if battery_status.should_halt:
-                apply_led_state(deps.led_driver, LedState.CRITICAL)
+                halted = True
                 break
             if stop.is_set():
                 break
@@ -117,3 +123,5 @@ def run_recording_loop(
     finally:
         work.put(None)
         worker_thread.join(timeout=5)
+    if halted:
+        apply_led_state(deps.led_driver, LedState.CRITICAL)

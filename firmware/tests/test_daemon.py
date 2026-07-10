@@ -18,6 +18,9 @@ from tests.fakes import (
 from visio_recorder.recording_loop import DiskStats
 
 CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)
+RECORDING_LED = ((0, 255, 0), LedPattern.SOLID)
+UPLOADING_LED = ((0, 0, 255), LedPattern.PULSING)
+LOW_BATTERY_LED = ((255, 255, 0), LedPattern.PULSING)
 
 
 def _make_deps(
@@ -81,9 +84,17 @@ def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
     storage = FakeStorageClient()
     battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
 
-    runner = FakeCommandRunner(
-        on_record=lambda count: battery.trigger_halt() if count >= 2 else None
-    )
+    # The mux gate holds the worker back until both segments are recorded and
+    # the halt is triggered, guaranteeing the queue is still full when the
+    # main loop observes the halt: the drain provably happens after it.
+    gate = threading.Event()
+
+    def on_record(count: int) -> None:
+        if count >= 2:
+            battery.trigger_halt()
+            gate.set()
+
+    runner = FakeCommandRunner(on_record=on_record, mux_gate=gate)
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
@@ -97,19 +108,25 @@ def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
     )
 
     assert runner.record_count == 2
-    assert CRITICAL_LED in led.calls
     # Both recorded-before-halt segments were drained by the worker.
     assert len(storage.uploaded) == 2
+    # The drained segments see the halted (low) battery, so each applies
+    # LOW_BATTERY twice; the halt CRITICAL must come after the whole drain so
+    # a battery-halted device finishes red, never green/yellow.
+    assert led.calls == [LOW_BATTERY_LED] * 4 + [CRITICAL_LED]
+    assert led.calls[-1] == CRITICAL_LED
 
 
 def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_path):
     stop = threading.Event()
     led = FakeLedDriver()
-    # Segments 1-3 fail (-> CRITICAL), 4 succeeds (-> reset), 5-7 fail (-> CRITICAL).
-    storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 5, 6, 7})
+    # Segments 1-4 fail (CRITICAL at 3 and STILL CRITICAL at 4: a sustained
+    # outage must stay red, not blip red once), 5 succeeds (reset), 6-8 fail
+    # (counter climbs back to the threshold at 8).
+    storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 4, 6, 7, 8})
 
     runner = FakeCommandRunner(
-        on_record=lambda count: stop.set() if count >= 7 else None
+        on_record=lambda count: stop.set() if count >= 8 else None
     )
     deps = _make_deps(
         tmp_path,
@@ -123,12 +140,25 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
         deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
     )
 
-    # Recording continued past the first CRITICAL: all seven cycles ran.
-    assert runner.record_count == 7
-    # The one success (segment 4) reset the counter, so the threshold was
-    # reached twice: after segments 3 and 7.
-    assert led.calls.count(CRITICAL_LED) == 2
-    assert storage.uploaded == ["device-abc/20260704_120003.mp4"]
+    # Recording continued past the first CRITICAL: all eight cycles ran.
+    assert runner.record_count == 8
+    assert storage.uploaded == ["device-abc/20260704_120004.mp4"]
+    # All LED calls come from the single worker in FIFO order, so the exact
+    # sequence is deterministic. on_segment_complete applies UPLOADING then a
+    # restore per segment; the worker must re-apply CRITICAL after every
+    # failure at-or-past the threshold (segments 3, 4, and 8), so the LED
+    # state after draining each of those segments is CRITICAL.
+    per_segment = [UPLOADING_LED, RECORDING_LED]
+    assert led.calls == (
+        per_segment  # 1: fail (1 consecutive)
+        + per_segment  # 2: fail (2)
+        + per_segment + [CRITICAL_LED]  # 3: fail (3 -> threshold)
+        + per_segment + [CRITICAL_LED]  # 4: fail (4 -> stays critical)
+        + per_segment  # 5: success (reset)
+        + per_segment  # 6: fail (1)
+        + per_segment  # 7: fail (2)
+        + per_segment + [CRITICAL_LED]  # 8: fail (3 -> threshold again)
+    )
 
 
 def test_setting_stop_exits_after_in_flight_cycle_and_joins_worker(tmp_path):
