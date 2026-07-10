@@ -36,6 +36,26 @@ def test_run_onboarding_writes_keyfile_and_session_on_first_good_scan(tmp_path):
     }
 
 
+def test_run_onboarding_treats_invalid_credentials_as_failed_attempt(tmp_path):
+    payload_with_short_password = json.dumps(
+        {
+            "ssid": "HomeNet",
+            "password": "short",
+            "user_access_token": "at-123",
+            "user_refresh_token": "rt-456",
+        }
+    )
+    scanner = FakeScanner([payload_with_short_password])
+    keyfile = tmp_path / "visio.nmconnection"
+    session = tmp_path / "session.json"
+
+    payload = run_onboarding(scanner, keyfile, session, max_attempts=1)
+
+    assert payload is None
+    assert not keyfile.exists()
+    assert not session.exists()
+
+
 def test_run_onboarding_gives_up_after_max_attempts(tmp_path):
     scanner = FakeScanner([None, "garbage"])
 

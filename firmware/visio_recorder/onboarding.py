@@ -48,9 +48,12 @@ def run_onboarding(
             payload = parse_onboarding_qr_payload(raw)
         except QrDecodeError:
             continue
-        write_nm_keyfile(nm_keyfile_path, payload.ssid, payload.password)
-        write_session_credentials(
-            session_path, payload.user_access_token, payload.user_refresh_token
-        )
+        try:
+            write_nm_keyfile(nm_keyfile_path, payload.ssid, payload.password)
+            write_session_credentials(
+                session_path, payload.user_access_token, payload.user_refresh_token
+            )
+        except ValueError:
+            continue
         return payload
     return None
