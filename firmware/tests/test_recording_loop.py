@@ -2,7 +2,12 @@ from pathlib import Path
 
 from visio_recorder.led import LedDriver, LedPattern, LedState
 from visio_recorder.muxer import CommandRunner
-from visio_recorder.recording_loop import next_led_state, on_segment_complete
+from visio_recorder.recording_loop import (
+    DiskStats,
+    ShutilDiskStatsReader,
+    next_led_state,
+    on_segment_complete,
+)
 from visio_recorder.uploader import StorageClient
 
 
@@ -56,6 +61,14 @@ class FakeStatusClient:
         self.upserts.append(status)
 
 
+class FakeDiskStatsReader:
+    def __init__(self, stats: DiskStats):
+        self._stats = stats
+
+    def usage(self, path):
+        return self._stats
+
+
 def test_next_led_state_prioritizes_low_battery_over_uploading():
     assert (
         next_led_state(battery_is_low=True, is_uploading=True) == LedState.LOW_BATTERY
@@ -96,6 +109,8 @@ def test_on_segment_complete_happy_path(tmp_path):
         device_id="device-abc",
         segments_uploaded_today=41,
         framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
     )
 
     assert new_count == 42
@@ -138,9 +153,55 @@ def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
     )
 
     assert led.calls == [
         ((255, 255, 0), LedPattern.PULSING),
         ((255, 255, 0), LedPattern.PULSING),
     ]
+
+
+def test_on_segment_complete_reports_real_disk_stats(tmp_path, monkeypatch):
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    queue_dir = tmp_path / "queue"
+    led = FakeLedDriver()
+    storage = FakeStorageClient()
+    status_client = FakeStatusClient()
+    command_runner = FakeCommandRunner()
+
+    on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=queue_dir,
+        command_runner=command_runner,
+        storage_client=storage,
+        status_client=status_client,
+        led_driver=led,
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=41,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=3.5, free_gb=25.1)),
+        data_dir=tmp_path,
+    )
+
+    assert status_client.upserts == [
+        {
+            "device_id": "device-abc",
+            "battery_pct": 85,
+            "storage_used_gb": 3.5,
+            "storage_free_gb": 25.1,
+            "segments_pending": 0,
+            "segments_uploaded_today": 42,
+            "recording_active": True,
+        }
+    ]
+
+
+def test_shutil_disk_stats_reader_converts_bytes_to_gb(tmp_path):
+    stats = ShutilDiskStatsReader().usage(tmp_path)
+    assert stats.used_gb >= 0.0
+    assert stats.free_gb > 0.0

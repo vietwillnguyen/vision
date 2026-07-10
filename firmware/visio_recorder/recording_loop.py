@@ -1,3 +1,4 @@
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -7,6 +8,27 @@ from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, mux_segment
 from visio_recorder.upload_queue import enqueue, list_pending, mark_uploaded
 from visio_recorder.uploader import StorageClient, upload_segment
+
+_BYTES_PER_GB = 1024**3
+
+
+@dataclass
+class DiskStats:
+    used_gb: float
+    free_gb: float
+
+
+class DiskStatsReader(Protocol):
+    def usage(self, path: Path) -> DiskStats: ...
+
+
+class ShutilDiskStatsReader:
+    def usage(self, path: Path) -> DiskStats:
+        usage = shutil.disk_usage(path)
+        return DiskStats(
+            used_gb=usage.used / _BYTES_PER_GB,
+            free_gb=usage.free / _BYTES_PER_GB,
+        )
 
 
 @dataclass
@@ -43,6 +65,8 @@ def on_segment_complete(
     device_id: str,
     segments_uploaded_today: int,
     framerate: int,
+    disk_stats_reader: DiskStatsReader,
+    data_dir: Path,
 ) -> int:
     mp4_path = mux_segment(command_runner, h264_path, framerate)
     h264_path.unlink()
@@ -61,13 +85,12 @@ def on_segment_complete(
         led_driver, next_led_state(battery_status.is_low, is_uploading=False)
     )
 
-    # Real disk-usage stats (shutil.disk_usage) are wired in Epic 5 against
-    # the actual SD card; there is no meaningful fake for a syscall here.
+    stats = disk_stats_reader.usage(data_dir)
     status = DeviceStatus(
         device_id=device_id,
         battery_pct=battery_status.pct,
-        storage_used_gb=0.0,
-        storage_free_gb=0.0,
+        storage_used_gb=stats.used_gb,
+        storage_free_gb=stats.free_gb,
         segments_pending=len(list_pending(queue_dir)),
         segments_uploaded_today=segments_uploaded_today,
         recording_active=True,
