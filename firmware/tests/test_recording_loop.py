@@ -5,6 +5,7 @@ from visio_recorder.muxer import CommandRunner
 from visio_recorder.recording_loop import (
     DiskStats,
     ShutilDiskStatsReader,
+    flush_pending,
     next_led_state,
     on_segment_complete,
 )
@@ -56,6 +57,17 @@ class FakeStorageClient(StorageClient):
 class FailingStorageClient(StorageClient):
     def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
         raise RuntimeError("network down")
+
+
+class FakeStorageClientFailingOn(StorageClient):
+    def __init__(self, failing_filename: str) -> None:
+        self.failing_filename = failing_filename
+        self.uploaded: list[str] = []
+
+    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
+        if local_path.name == self.failing_filename:
+            raise RuntimeError(f"upload failed for {self.failing_filename}")
+        self.uploaded.append(object_path)
 
 
 class FakeStatusClient:
@@ -281,3 +293,25 @@ def test_successful_upload_returns_ok_result(tmp_path):
 
     assert result.upload_ok is True
     assert result.segments_uploaded_today == 1
+
+
+def test_flush_pending_uploads_and_clears_all_queued_files(tmp_path):
+    (tmp_path / "20260708_235500.mp4").touch()
+    (tmp_path / "FLAG_20260708_235700.marker").touch()
+    client = FakeStorageClient()
+
+    uploaded = flush_pending(tmp_path, client, "device-abc")
+
+    assert uploaded == 2
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_flush_pending_leaves_failing_files_queued_and_continues(tmp_path):
+    (tmp_path / "20260708_235500.mp4").touch()
+    (tmp_path / "20260708_235000.mp4").touch()
+    client = FakeStorageClientFailingOn("20260708_235000.mp4")
+
+    uploaded = flush_pending(tmp_path, client, "device-abc")
+
+    assert uploaded == 1
+    assert [p.name for p in tmp_path.iterdir()] == ["20260708_235000.mp4"]

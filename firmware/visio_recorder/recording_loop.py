@@ -62,6 +62,20 @@ def next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState:
     return LedState.RECORDING
 
 
+def flush_pending(
+    queue_dir: Path, storage_client: StorageClient, device_id: str
+) -> int:
+    uploaded = 0
+    for path in list_pending(queue_dir):
+        try:
+            upload_segment(storage_client, device_id, path)
+        except Exception:
+            continue
+        mark_uploaded(path)
+        uploaded += 1
+    return uploaded
+
+
 def on_segment_complete(
     h264_path: Path,
     queue_dir: Path,
