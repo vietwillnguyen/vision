@@ -53,6 +53,11 @@ class FakeStorageClient(StorageClient):
         self.uploaded.append(object_path)
 
 
+class FailingStorageClient(StorageClient):
+    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
+        raise RuntimeError("network down")
+
+
 class FakeStatusClient:
     def __init__(self) -> None:
         self.upserts: list[dict] = []
@@ -98,7 +103,7 @@ def test_on_segment_complete_happy_path(tmp_path):
     status_client = FakeStatusClient()
     command_runner = FakeCommandRunner()
 
-    new_count = on_segment_complete(
+    result = on_segment_complete(
         h264_path=h264_path,
         queue_dir=queue_dir,
         command_runner=command_runner,
@@ -113,7 +118,7 @@ def test_on_segment_complete_happy_path(tmp_path):
         data_dir=tmp_path,
     )
 
-    assert new_count == 42
+    assert result.segments_uploaded_today == 42
     framerate_idx = command_runner.calls[0].index("-framerate") + 1
     assert command_runner.calls[0][framerate_idx] == "30"
     assert storage.uploaded == ["device-abc/20260704_120000.mp4"]
@@ -205,3 +210,74 @@ def test_shutil_disk_stats_reader_converts_bytes_to_gb(tmp_path):
     stats = ShutilDiskStatsReader().usage(tmp_path)
     assert stats.used_gb >= 0.0
     assert stats.free_gb > 0.0
+
+
+def test_failed_upload_restores_led_keeps_queued_file_and_reports_failure(tmp_path):
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    queue_dir = tmp_path / "queue"
+    led = FakeLedDriver()
+    storage = FailingStorageClient()
+    status_client = FakeStatusClient()
+    command_runner = FakeCommandRunner()
+
+    result = on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=queue_dir,
+        command_runner=command_runner,
+        storage_client=storage,
+        status_client=status_client,
+        led_driver=led,
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+    )
+
+    assert result.upload_ok is False
+    assert result.segments_uploaded_today == 0
+    assert len(list(queue_dir.iterdir())) == 1
+    assert led.calls[-1] == ((0, 255, 0), LedPattern.SOLID)
+    assert status_client.upserts == [
+        {
+            "device_id": "device-abc",
+            "battery_pct": 85,
+            "storage_used_gb": 0.0,
+            "storage_free_gb": 0.0,
+            "segments_pending": 1,
+            "segments_uploaded_today": 0,
+            "recording_active": True,
+        }
+    ]
+
+
+def test_successful_upload_returns_ok_result(tmp_path):
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    queue_dir = tmp_path / "queue"
+    led = FakeLedDriver()
+    storage = FakeStorageClient()
+    status_client = FakeStatusClient()
+    command_runner = FakeCommandRunner()
+
+    result = on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=queue_dir,
+        command_runner=command_runner,
+        storage_client=storage,
+        status_client=status_client,
+        led_driver=led,
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+    )
+
+    assert result.upload_ok is True
+    assert result.segments_uploaded_today == 1

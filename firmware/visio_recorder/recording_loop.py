@@ -11,6 +11,8 @@ from visio_recorder.uploader import StorageClient, upload_segment
 
 _BYTES_PER_GB = 1024**3
 
+UPLOAD_FAILURES_TO_CRITICAL = 3
+
 
 @dataclass
 class DiskStats:
@@ -46,6 +48,12 @@ class StatusClient(Protocol):
     def upsert_device_status(self, status: dict) -> None: ...
 
 
+@dataclass
+class SegmentResult:
+    segments_uploaded_today: int
+    upload_ok: bool
+
+
 def next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState:
     if battery_is_low:
         return LedState.LOW_BATTERY
@@ -67,7 +75,7 @@ def on_segment_complete(
     framerate: int,
     disk_stats_reader: DiskStatsReader,
     data_dir: Path,
-) -> int:
+) -> SegmentResult:
     mp4_path = mux_segment(command_runner, h264_path, framerate)
     h264_path.unlink()
     queued_path = enqueue(queue_dir, mp4_path)
@@ -77,9 +85,13 @@ def on_segment_complete(
         led_driver, next_led_state(battery_status.is_low, is_uploading=True)
     )
 
-    upload_segment(storage_client, device_id, queued_path)
-    mark_uploaded(queued_path)
-    segments_uploaded_today += 1
+    upload_ok = True
+    try:
+        upload_segment(storage_client, device_id, queued_path)
+        mark_uploaded(queued_path)
+        segments_uploaded_today += 1
+    except Exception:
+        upload_ok = False
 
     apply_led_state(
         led_driver, next_led_state(battery_status.is_low, is_uploading=False)
@@ -97,4 +109,6 @@ def on_segment_complete(
     )
     status_client.upsert_device_status(asdict(status))
 
-    return segments_uploaded_today
+    return SegmentResult(
+        segments_uploaded_today=segments_uploaded_today, upload_ok=upload_ok
+    )
