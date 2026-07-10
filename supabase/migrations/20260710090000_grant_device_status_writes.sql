@@ -1,0 +1,13 @@
+-- The firmware daemon authenticates as the device owner's user session
+-- (Supabase set_session from QR onboarding) and upserts its own device_status
+-- row after each segment upload, per the design spec's Device Status Reporting
+-- section. It does NOT hold a service_role key: a stealable pendant must never
+-- carry one. The original rls_policies migration assumed firmware would write
+-- through service_role and only granted authenticated SELECT here; since
+-- Postgres checks GRANTs before RLS, the daemon's upsert was permission-denied.
+--
+-- RLS policy "device_status_owner_access" (FOR ALL USING auth.uid() = owning
+-- device's user_id) remains the row filter: FOR ALL policies without an
+-- explicit WITH CHECK reuse USING, so it gates both reads and writes to rows
+-- belonging to the caller's own devices.
+grant insert, update on public.device_status to authenticated;

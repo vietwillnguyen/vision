@@ -3,7 +3,8 @@ insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000a1', 'owner@example.com'),
   ('00000000-0000-0000-0000-0000000000a2', 'other@example.com');
 insert into public.devices (device_id, user_id, name) values
-  ('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000a1', 'owner-device');
+  ('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000a1', 'owner-device'),
+  ('00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000a1', 'owner-device-2');
 insert into public.device_status (device_id) values
   ('00000000-0000-0000-0000-0000000000b1');
 insert into public.segments (id, device_id, recorded_at, duration_sec, s3_key) values
@@ -13,7 +14,17 @@ insert into public.reels (id, device_id, date, s3_key, duration_sec) values
 insert into public.score_weights (user_id) values
   ('00000000-0000-0000-0000-0000000000a1');
 
-select plan(18);
+select plan(23);
+
+select ok(
+  has_table_privilege('authenticated', 'public.device_status', 'insert'),
+  'authenticated role should have insert privilege on device_status'
+);
+
+select ok(
+  has_table_privilege('authenticated', 'public.device_status', 'update'),
+  'authenticated role should have update privilege on device_status'
+);
 
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000a2", "role": "authenticated"}';
@@ -26,6 +37,14 @@ select is_empty(
 select is_empty(
   $$select 1 from public.device_status where device_id = '00000000-0000-0000-0000-0000000000b1'$$,
   'a different user should not see another user''s device status'
+);
+
+select throws_ok(
+  $$insert into public.device_status (device_id) values
+    ('00000000-0000-0000-0000-0000000000b2')$$,
+  '42501',
+  null,
+  'a different user should not be able to insert device status for another user''s device'
 );
 
 select is_empty(
@@ -120,12 +139,26 @@ select throws_ok(
   'the owning user should not be able to update reels'
 );
 
-select throws_ok(
-  $$update public.device_status set battery_pct = 100
-    where device_id = '00000000-0000-0000-0000-0000000000b1'$$,
-  '42501',
-  null,
-  'the owning user should not be able to update device status directly'
+-- The firmware daemon runs under the owner's user session (not service_role),
+-- so the owner must be able to insert and upsert their own device_status.
+select lives_ok(
+  $$insert into public.device_status (device_id, battery_pct) values
+    ('00000000-0000-0000-0000-0000000000b2', 55)$$,
+  'the owning user should be able to insert device status for their own device'
+);
+
+select lives_ok(
+  $$insert into public.device_status (device_id, battery_pct) values
+    ('00000000-0000-0000-0000-0000000000b1', 88)
+    on conflict (device_id) do update set battery_pct = excluded.battery_pct$$,
+  'the owning user should be able to upsert their own device status'
+);
+
+select is(
+  (select battery_pct from public.device_status
+    where device_id = '00000000-0000-0000-0000-0000000000b1'),
+  88,
+  'the upsert should update the existing device status row'
 );
 
 select * from finish();
