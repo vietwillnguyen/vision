@@ -1,7 +1,4 @@
-from pathlib import Path
-
-from visio_recorder.led import LedDriver, LedPattern, LedState
-from visio_recorder.muxer import CommandRunner
+from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
     DiskStats,
     ShutilDiskStatsReader,
@@ -9,81 +6,17 @@ from visio_recorder.recording_loop import (
     next_led_state,
     on_segment_complete,
 )
-from visio_recorder.uploader import StorageClient
 
-
-class FakeBatteryReader:
-    def __init__(self, pct: int) -> None:
-        self._pct = pct
-
-    def get_charge_pct(self) -> int:
-        return self._pct
-
-
-class FakeLedDriver(LedDriver):
-    def __init__(self) -> None:
-        self.calls: list[tuple[tuple[int, int, int], LedPattern]] = []
-
-    def set(self, color, pattern):
-        self.calls.append((color, pattern))
-
-
-class FakeCommandRunner(CommandRunner):
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-
-    def run(self, args: list[str]) -> None:
-        self.calls.append(args)
-        # For mux_segment, create the mp4 file from the h264 input
-        if "ffmpeg" in args:
-            # args format: ["ffmpeg", "-y", "-framerate", fps, "-i", input_path, "-c", "copy", output_path]
-            input_idx = args.index("-i") + 1
-            output_idx = args.index("copy") + 1
-            input_path = Path(args[input_idx])
-            output_path = Path(args[output_idx])
-            # Copy the h264 file as mp4
-            if input_path.exists():
-                output_path.write_bytes(input_path.read_bytes())
-
-
-class FakeStorageClient(StorageClient):
-    def __init__(self) -> None:
-        self.uploaded: list[str] = []
-
-    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
-        self.uploaded.append(object_path)
-
-
-class FailingStorageClient(StorageClient):
-    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
-        raise RuntimeError("network down")
-
-
-class FakeStorageClientFailingOn(StorageClient):
-    def __init__(self, failing_filename: str) -> None:
-        self.failing_filename = failing_filename
-        self.uploaded: list[str] = []
-
-    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
-        if local_path.name == self.failing_filename:
-            raise RuntimeError(f"upload failed for {self.failing_filename}")
-        self.uploaded.append(object_path)
-
-
-class FakeStatusClient:
-    def __init__(self) -> None:
-        self.upserts: list[dict] = []
-
-    def upsert_device_status(self, status: dict) -> None:
-        self.upserts.append(status)
-
-
-class FakeDiskStatsReader:
-    def __init__(self, stats: DiskStats):
-        self._stats = stats
-
-    def usage(self, path):
-        return self._stats
+from tests.fakes import (
+    FailingStorageClient,
+    FakeBatteryReader,
+    FakeCommandRunner,
+    FakeDiskStatsReader,
+    FakeLedDriver,
+    FakeStatusClient,
+    FakeStorageClient,
+    FakeStorageClientFailingOn,
+)
 
 
 def test_next_led_state_prioritizes_low_battery_over_uploading():
