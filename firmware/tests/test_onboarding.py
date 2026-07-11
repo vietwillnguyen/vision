@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from visio_recorder.onboarding import run_onboarding
 

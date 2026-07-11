@@ -1,5 +1,6 @@
 import shutil
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
@@ -42,6 +43,7 @@ class DeviceStatus:
     segments_pending: int
     segments_uploaded_today: int
     recording_active: bool
+    updated_at: str
 
 
 class StatusClient(Protocol):
@@ -120,6 +122,7 @@ def on_segment_complete(
         segments_pending=len(list_pending(queue_dir)),
         segments_uploaded_today=segments_uploaded_today,
         recording_active=True,
+        updated_at=datetime.now(timezone.utc).isoformat(),
     )
     status_client.upsert_device_status(asdict(status))
 

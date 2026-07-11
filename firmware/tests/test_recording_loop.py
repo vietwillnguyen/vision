@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
     DiskStats,
@@ -72,17 +74,19 @@ def test_on_segment_complete_happy_path(tmp_path):
         ((0, 0, 255), LedPattern.PULSING),
         ((0, 255, 0), LedPattern.SOLID),
     ]
-    assert status_client.upserts == [
-        {
-            "device_id": "device-abc",
-            "battery_pct": 85,
-            "storage_used_gb": 0.0,
-            "storage_free_gb": 0.0,
-            "segments_pending": 0,
-            "segments_uploaded_today": 42,
-            "recording_active": True,
-        }
-    ]
+    assert len(status_client.upserts) == 1
+    upsert = dict(status_client.upserts[0])
+    updated_at = upsert.pop("updated_at")
+    assert datetime.fromisoformat(updated_at)
+    assert upsert == {
+        "device_id": "device-abc",
+        "battery_pct": 85,
+        "storage_used_gb": 0.0,
+        "storage_free_gb": 0.0,
+        "segments_pending": 0,
+        "segments_uploaded_today": 42,
+        "recording_active": True,
+    }
 
 
 def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
@@ -138,17 +142,19 @@ def test_on_segment_complete_reports_real_disk_stats(tmp_path, monkeypatch):
         data_dir=tmp_path,
     )
 
-    assert status_client.upserts == [
-        {
-            "device_id": "device-abc",
-            "battery_pct": 85,
-            "storage_used_gb": 3.5,
-            "storage_free_gb": 25.1,
-            "segments_pending": 0,
-            "segments_uploaded_today": 42,
-            "recording_active": True,
-        }
-    ]
+    assert len(status_client.upserts) == 1
+    upsert = dict(status_client.upserts[0])
+    updated_at = upsert.pop("updated_at")
+    assert datetime.fromisoformat(updated_at)
+    assert upsert == {
+        "device_id": "device-abc",
+        "battery_pct": 85,
+        "storage_used_gb": 3.5,
+        "storage_free_gb": 25.1,
+        "segments_pending": 0,
+        "segments_uploaded_today": 42,
+        "recording_active": True,
+    }
 
 
 def test_shutil_disk_stats_reader_converts_bytes_to_gb(tmp_path):
@@ -186,17 +192,19 @@ def test_failed_upload_restores_led_keeps_queued_file_and_reports_failure(tmp_pa
     assert result.segments_uploaded_today == 0
     assert len(list(queue_dir.iterdir())) == 1
     assert led.calls[-1] == ((0, 255, 0), LedPattern.SOLID)
-    assert status_client.upserts == [
-        {
-            "device_id": "device-abc",
-            "battery_pct": 85,
-            "storage_used_gb": 0.0,
-            "storage_free_gb": 0.0,
-            "segments_pending": 1,
-            "segments_uploaded_today": 0,
-            "recording_active": True,
-        }
-    ]
+    assert len(status_client.upserts) == 1
+    upsert = dict(status_client.upserts[0])
+    updated_at = upsert.pop("updated_at")
+    assert datetime.fromisoformat(updated_at)
+    assert upsert == {
+        "device_id": "device-abc",
+        "battery_pct": 85,
+        "storage_used_gb": 0.0,
+        "storage_free_gb": 0.0,
+        "segments_pending": 1,
+        "segments_uploaded_today": 0,
+        "recording_active": True,
+    }
 
 
 def test_successful_upload_returns_ok_result(tmp_path):

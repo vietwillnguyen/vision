@@ -1,3 +1,4 @@
+import logging
 import os
 import queue
 import signal
@@ -31,6 +32,8 @@ _DEFAULT_FRAMERATE = "30"
 _ONBOARDING_MAX_ATTEMPTS = 60
 _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
 _DEVICE_NAME = "visio-pendant"
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -115,20 +118,27 @@ def run_recording_loop(
             item = work.get()
             if item is None:
                 return
-            result = on_segment_complete(
-                h264_path=item,
-                queue_dir=deps.queue_dir,
-                command_runner=deps.command_runner,
-                storage_client=deps.storage_client,
-                status_client=deps.status_client,
-                led_driver=deps.led_driver,
-                battery_reader=deps.battery_reader,
-                device_id=deps.device_id,
-                segments_uploaded_today=segments_uploaded_today,
-                framerate=deps.framerate,
-                disk_stats_reader=deps.disk_stats_reader,
-                data_dir=deps.data_dir,
-            )
+            try:
+                result = on_segment_complete(
+                    h264_path=item,
+                    queue_dir=deps.queue_dir,
+                    command_runner=deps.command_runner,
+                    storage_client=deps.storage_client,
+                    status_client=deps.status_client,
+                    led_driver=deps.led_driver,
+                    battery_reader=deps.battery_reader,
+                    device_id=deps.device_id,
+                    segments_uploaded_today=segments_uploaded_today,
+                    framerate=deps.framerate,
+                    disk_stats_reader=deps.disk_stats_reader,
+                    data_dir=deps.data_dir,
+                )
+            except Exception:
+                _logger.exception(
+                    "on_segment_complete failed for segment %s; worker continuing",
+                    item,
+                )
+                continue
             segments_uploaded_today = result.segments_uploaded_today
             if result.upload_ok:
                 consecutive_failures = 0

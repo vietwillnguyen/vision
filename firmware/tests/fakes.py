@@ -152,6 +152,25 @@ class FakeStatusClient:
             self.upserts.append(status)
 
 
+class ScriptedStatusClient:
+    """Fails on a scripted set of 1-based upsert attempt numbers, else records.
+
+    Only the single upload worker calls ``upsert_device_status``, so attempt
+    ``k`` maps to the ``k``-th completed segment in order.
+    """
+
+    def __init__(self, fail_on_attempts: set[int]) -> None:
+        self.fail_on_attempts = set(fail_on_attempts)
+        self.attempts = 0
+        self.upserts: list[dict] = []
+
+    def upsert_device_status(self, status: dict) -> None:
+        self.attempts += 1
+        if self.attempts in self.fail_on_attempts:
+            raise RuntimeError(f"status upsert failed on attempt {self.attempts}")
+        self.upserts.append(status)
+
+
 class FakeDiskStatsReader:
     def __init__(self, stats: DiskStats):
         self._stats = stats

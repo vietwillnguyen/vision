@@ -20,6 +20,7 @@ from tests.fakes import (
     FakeLedDriver,
     FakeStatusClient,
     FakeStorageClient,
+    ScriptedStatusClient,
     ScriptedStorageClient,
     TriggerableBatteryReader,
 )
@@ -212,6 +213,45 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
         + per_segment  # 7: fail (2)
         + per_segment + [CRITICAL_LED]  # 8: fail (3 -> threshold again)
     )
+
+
+def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
+    stop = threading.Event()
+    led = FakeLedDriver()
+    storage = FakeStorageClient()
+    # The status upsert raises on the first segment only; the worker must
+    # log and continue rather than dying, so segments 2 and 3 still get
+    # muxed, uploaded, and their status reported.
+    status = ScriptedStatusClient(fail_on_attempts={1})
+
+    runner = FakeCommandRunner(
+        on_record=lambda count: stop.set() if count >= 3 else None
+    )
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=led,
+        storage_client=storage,
+        status_client=status,
+    )
+
+    run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+
+    # All three cycles ran to completion: recording never stalled, and the
+    # worker thread joined cleanly (run_recording_loop returning at all after
+    # stop is set proves join() didn't hang).
+    assert runner.record_count == 3
+    # Segment 1's own upload may or may not have completed depending on where
+    # in on_segment_complete the exception fires, so we don't assert on it
+    # directly. The load-bearing assertion is that segments 2 and 3 -
+    # recorded after the worker swallowed the segment-1 exception - still got
+    # uploaded and their status reported, proving the worker kept running.
+    assert "device-abc/20260704_120001.mp4" in storage.uploaded
+    assert "device-abc/20260704_120002.mp4" in storage.uploaded
+    assert len(status.upserts) == 2
 
 
 def test_setting_stop_exits_after_in_flight_cycle_and_joins_worker(tmp_path):
