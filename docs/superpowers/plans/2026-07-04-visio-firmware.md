@@ -1516,18 +1516,17 @@ git commit -m "feat: add visio-recorder systemd unit"
 
 ## Handoff
 
-`daemon.py` currently only implements the startup battery/LED check from Task 10. The remaining wiring for Epic 5 integration testing - composing already-tested units, not adding new decision logic - is:
+**As-built note:** the daemon glue below landed (issue #7) via the [2026-07-09 daemon-glue plan](2026-07-09-visio-firmware-daemon-glue.md), which added `daemon.py`'s `main()`, `drivers.py`, the systemd `EnvironmentFile`, and this Handoff update.
 
-- **Onboarding sequence:** decode the QR payload (Task 8), write `wpa_supplicant.conf` and the session credentials file, then on every boot load the session file and call the real Supabase client's `auth.set_session(access_token, refresh_token)` before constructing the `StorageClient`/`StatusClient`/`DeviceRegistrationClient` wrappers used elsewhere - this is what makes writes pass RLS.
-- **First-boot registration:** call `load_or_create_device_id` (Task 9); if the state file didn't already exist, also call `register_device`.
-- **Startup queue flush:** per the spec's Recording Daemon startup sequence ("flush any pending upload queue before recording starts"), call `list_pending` (Task 5) and drive each pending item through the upload half of `on_segment_complete` (Task 11) before starting a new `rpicam-vid` capture.
-- **Recording loop:** supervise `rpicam-vid` as a subprocess, and call `on_segment_complete` (Task 11) once per completed 5-minute segment, on a background thread per the spec.
-- **Real disk-usage stats:** replace the `0.0` placeholders in `on_segment_complete`'s `DeviceStatus` with real `shutil.disk_usage()` readings against the SD card mount.
-- **Upload error handling:** wrap the upload half of `on_segment_complete` in try/except.
-  On failure restore the LED via `next_led_state(..., is_uploading=False)` and leave the queued file in place - the startup queue flush is the retry mechanism.
-  Define when repeated failures escalate to the CRITICAL LED.
-- **Bookworm networking:** stock Raspberry Pi OS Bookworm uses NetworkManager, which does not honor `/etc/wpa_supplicant/wpa_supplicant.conf`.
-  Epic 5 wiring may need nmcli/NM keyfiles instead of `write_wpa_supplicant`'s output path.
+- **Onboarding sequence:** resolved (issue #7) - `main()` decodes the QR payload (Task 8), writes the NM keyfile and the session credentials file, then on every boot loads the session file and calls the real Supabase client's `auth.set_session(access_token, refresh_token)` before constructing the `StorageClient`/`StatusClient`/`DeviceRegistrationClient` wrappers used elsewhere - this is what makes writes pass RLS.
+- **First-boot registration:** resolved (issue #7) - `main()` calls `load_or_create_device_id` (Task 9); if the state file didn't already exist, it also calls `register_device`.
+- **Startup queue flush:** resolved (issue #7) - per the spec's Recording Daemon startup sequence ("flush any pending upload queue before recording starts"), `main()` calls `flush_pending` (Task 5), which drives each pending item through the upload half of `on_segment_complete` (Task 11) before recording starts.
+- **Recording loop:** resolved (issue #7) - `main()` supervises `rpicam-vid` as a subprocess via `run_recording_loop`, and calls `on_segment_complete` (Task 11) once per completed 5-minute segment, on a background worker thread per the spec.
+- **Real disk-usage stats:** resolved (issue #7) - `on_segment_complete`'s `DeviceStatus` now reads real usage via `ShutilDiskStatsReader`.
+- **Upload error handling:** resolved (issue #7) - the upload half of `on_segment_complete` is wrapped in try/except.
+  On failure the LED is restored to a normal state and the queued file is left in place - the startup queue flush is the retry mechanism.
+  Three consecutive failures escalate to the CRITICAL LED.
+- **Bookworm networking:** resolved (issue #7) - stock Raspberry Pi OS Bookworm uses NetworkManager, which does not honor `/etc/wpa_supplicant/wpa_supplicant.conf`, so onboarding writes an NM keyfile (`/etc/NetworkManager/system-connections/visio.nmconnection`) instead of `write_wpa_supplicant`'s output path.
 - **FLAG marker naming:** resolved (issue #9) - `write_flag_marker` now writes dated `FLAG_YYYYMMDD_HHMMSS.marker` names matching the pipeline's `parse_flag_marker_filename` contract (Task 11 there), so same-second presses on different days no longer collide at the storage object path.
 
 None of this has branching logic beyond what Tasks 8-11 already test in isolation - it is glue, validated on real hardware in Epic 5 rather than through additional unit tests.

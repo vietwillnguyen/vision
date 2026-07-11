@@ -1,7 +1,15 @@
 import threading
 from datetime import datetime
+from pathlib import Path
 
-from visio_recorder.daemon import LoopDeps, run_recording_loop, run_startup_sequence
+import pytest
+
+from visio_recorder.daemon import (
+    LoopDeps,
+    load_config,
+    run_recording_loop,
+    run_startup_sequence,
+)
 from visio_recorder.led import LedPattern
 
 from tests.fakes import (
@@ -21,6 +29,51 @@ CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)
 RECORDING_LED = ((0, 255, 0), LedPattern.SOLID)
 UPLOADING_LED = ((0, 0, 255), LedPattern.PULSING)
 LOW_BATTERY_LED = ((255, 255, 0), LedPattern.PULSING)
+
+
+def test_load_config_reads_all_values_from_env():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_DATA_DIR": "/data/visio",
+        "VISIO_SEGMENT_DURATION_MS": "60000",
+        "VISIO_FRAMERATE": "24",
+    }
+
+    config = load_config(env)
+
+    assert config.supabase_url == "https://example.supabase.co"
+    assert config.supabase_anon_key == "anon-key-123"
+    assert config.data_dir == Path("/data/visio")
+    assert config.segment_duration_ms == 60000
+    assert config.framerate == 24
+
+
+def test_load_config_applies_defaults_when_optional_keys_absent():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+    }
+
+    config = load_config(env)
+
+    assert config.data_dir == Path("/var/lib/visio-recorder")
+    assert config.segment_duration_ms == 300000
+    assert config.framerate == 30
+
+
+def test_load_config_missing_supabase_url_raises_value_error_naming_it():
+    env = {"SUPABASE_ANON_KEY": "anon-key-123"}
+
+    with pytest.raises(ValueError, match="SUPABASE_URL"):
+        load_config(env)
+
+
+def test_load_config_missing_supabase_anon_key_raises_value_error_naming_it():
+    env = {"SUPABASE_URL": "https://example.supabase.co"}
+
+    with pytest.raises(ValueError, match="SUPABASE_ANON_KEY"):
+        load_config(env)
 
 
 def _make_deps(

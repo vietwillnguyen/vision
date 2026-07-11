@@ -1,21 +1,60 @@
+import os
 import queue
+import signal
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import record_segment
+from visio_recorder.device_identity import load_or_create_device_id, register_device
+from visio_recorder.drivers import PiJuiceBatteryReader, Ws2812LedDriver
 from visio_recorder.led import LedDriver, LedState, apply_led_state
-from visio_recorder.muxer import CommandRunner
+from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
+from visio_recorder.onboarding import RpicamZbarScanner, run_onboarding
 from visio_recorder.recording_loop import (
     UPLOAD_FAILURES_TO_CRITICAL,
     DiskStatsReader,
+    ShutilDiskStatsReader,
     StatusClient,
+    flush_pending,
     on_segment_complete,
 )
+from visio_recorder.supabase_clients import build_supabase_clients
 from visio_recorder.uploader import StorageClient
+
+_DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
+_DEFAULT_SEGMENT_DURATION_MS = "300000"
+_DEFAULT_FRAMERATE = "30"
+_ONBOARDING_MAX_ATTEMPTS = 60
+_NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
+_DEVICE_NAME = "visio-pendant"
+
+
+@dataclass
+class DaemonConfig:
+    supabase_url: str
+    supabase_anon_key: str
+    data_dir: Path
+    segment_duration_ms: int
+    framerate: int
+
+
+def load_config(env: Mapping[str, str]) -> DaemonConfig:
+    for key in ("SUPABASE_URL", "SUPABASE_ANON_KEY"):
+        if key not in env:
+            raise ValueError(f"missing required environment variable: {key}")
+    return DaemonConfig(
+        supabase_url=env["SUPABASE_URL"],
+        supabase_anon_key=env["SUPABASE_ANON_KEY"],
+        data_dir=Path(env.get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR)),
+        segment_duration_ms=int(
+            env.get("VISIO_SEGMENT_DURATION_MS", _DEFAULT_SEGMENT_DURATION_MS)
+        ),
+        framerate=int(env.get("VISIO_FRAMERATE", _DEFAULT_FRAMERATE)),
+    )
 
 
 @dataclass
@@ -125,3 +164,76 @@ def run_recording_loop(
         worker_thread.join(timeout=5)
     if halted:
         apply_led_state(deps.led_driver, LedState.CRITICAL)
+
+
+def main() -> int:
+    """Compose the daemon from its already-tested parts.
+
+    Thin on purpose: no branching logic of its own beyond the boot-sequence
+    gates the pieces it calls already own. Validated on real hardware in
+    Epic 5 rather than through additional unit tests (see the plan's
+    Handoff section).
+    """
+    config = load_config(os.environ)
+
+    session_path = config.data_dir / "session.json"
+    state_path = config.data_dir / "device.json"
+    queue_dir = config.data_dir / "queue"
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+
+    battery_reader = PiJuiceBatteryReader()
+    led_driver = Ws2812LedDriver()
+
+    startup = run_startup_sequence(battery_reader, led_driver)
+    if not startup.proceed:
+        return 0
+
+    if not session_path.exists():
+        payload = run_onboarding(
+            RpicamZbarScanner(),
+            _NM_KEYFILE_PATH,
+            session_path,
+            _ONBOARDING_MAX_ATTEMPTS,
+        )
+        if payload is None:
+            return 1
+
+    device_id_was_new = not state_path.exists()
+    device_id = load_or_create_device_id(state_path)
+
+    clients = build_supabase_clients(
+        config.supabase_url, config.supabase_anon_key, session_path
+    )
+
+    if device_id_was_new:
+        register_device(clients.registration, device_id, _DEVICE_NAME)
+
+    flush_pending(queue_dir, clients.storage, device_id)
+
+    stop = threading.Event()
+
+    def _handle_signal(signum: int, frame: object) -> None:
+        stop.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    deps = LoopDeps(
+        command_runner=SubprocessCommandRunner(),
+        storage_client=clients.storage,
+        status_client=clients.status,
+        led_driver=led_driver,
+        battery_reader=battery_reader,
+        disk_stats_reader=ShutilDiskStatsReader(),
+        data_dir=config.data_dir,
+        queue_dir=queue_dir,
+        device_id=device_id,
+        segment_duration_ms=config.segment_duration_ms,
+        framerate=config.framerate,
+    )
+    run_recording_loop(deps, stop)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

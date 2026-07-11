@@ -97,7 +97,7 @@ Filed 2026-07-09 after the review and merge of PRs #2 (Epic 1), #3 (Epic 2), and
 No separate detailed plan - this is a checklist run once Epics 0-4 are done, using the real assembled device:
 
 - [ ] Flash the device from Epic 4 with the Epic 1 firmware image; confirm it boots and reaches "Recording" LED state.
-- [ ] Onboard the device to WiFi via the Epic 3 app's QR flow; confirm `wpa_supplicant.conf` is written and the device reconnects.
+- [ ] Onboard the device to WiFi via the Epic 3 app's QR flow; confirm the NetworkManager keyfile is written and the device reconnects.
 - [ ] Record for at least 15 minutes; confirm segments appear in Supabase Storage and `segments` rows are created.
 - [ ] Press the flag button during recording; confirm a `FLAG_YYYYMMDD_HHMMSS.marker` reaches the upload queue and the corresponding segment is later marked `manually_flagged`.
 - [ ] Trigger the Epic 2 pipeline manually (not waiting for the nightly cron) against the recorded segments; confirm a `reels` row and push notification are produced.
