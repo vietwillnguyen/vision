@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en" data-theme="luxury">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Visio Pendant — Architecture</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex, .layout-grid, .layout-flex) > *,
+  :where([style*="display: grid"], [style*="display:grid"], [style*="display: flex"], [style*="display:flex"]) > * {
+    min-width: 0;
+  }
+  :where(p, h1, h2, h3, h4, h5, h6, li, dd, blockquote, figcaption, td, th, .badge, .label) {
+    overflow-wrap: anywhere;
+  }
+  :where(img, svg, video, canvas, iframe) {
+    max-width: 100%;
+    height: auto;
+  }
+  .mermaid { display: flex; justify-content: center; }
+</style>
+</head>
+<body class="bg-base-200 text-base-content">
+<!-- source-sha256: bd6154fa4c828bc5d62b3773ecfee3c653c5272068dd03ce8ca678752a9e7a74 -->
+<!-- source-file: docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- regenerated-at: 2026-07-12 -->
+
+<div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
+  <div class="navbar-start gap-2">
+    <span class="text-lg font-bold whitespace-nowrap">Visio Pendant</span>
+    <span class="badge badge-lg badge-soft badge-primary whitespace-nowrap shrink-0">Architecture</span>
+  </div>
+  <div class="navbar-center hidden lg:flex">
+    <ul class="menu menu-horizontal gap-1 text-sm">
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#system">System</a></li>
+      <li><a href="#epics">Epics</a></li>
+      <li><a href="#firmware">Firmware</a></li>
+      <li><a href="#gaps">As-built gaps</a></li>
+      <li><a href="#data">Data model</a></li>
+      <li><a href="#pipeline">Pipeline</a></li>
+      <li><a href="#app">App</a></li>
+    </ul>
+  </div>
+  <div class="navbar-end">
+    <span class="badge badge-ghost text-xs">regenerated 2026-07-12</span>
+  </div>
+</div>
+
+<main class="max-w-6xl mx-auto px-4 lg:px-8 py-8 space-y-16">
+
+  <section id="overview" class="space-y-4">
+    <div class="flex flex-col gap-2">
+      <h1 class="text-3xl font-bold leading-snug pb-1">Visio Pendant — System Architecture</h1>
+      <p class="text-base-content/70 max-w-3xl">
+        A living rendering of
+        <a class="link link-primary" href="superpowers/specs/2026-07-04-visio-pendant-design.md">the design spec</a>
+        (source of truth — edit that file, then regenerate this page).
+        A wearable pendant that records passively all day and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
+      </p>
+    </div>
+    <div class="stats stats-vertical sm:stats-horizontal shadow bg-base-100 w-full">
+      <div class="stat">
+        <div class="stat-title">Hardware BOM</div>
+        <div class="stat-value text-primary text-2xl">~$91.50</div>
+        <div class="stat-desc">standard camera; ~$74.50 vintage variant</div>
+      </div>
+      <div class="stat">
+        <div class="stat-title">Recording window</div>
+        <div class="stat-value text-primary text-2xl">~7.4 hrs</div>
+        <div class="stat-desc">3000mAh @ ~1.5W continuous draw</div>
+      </div>
+      <div class="stat">
+        <div class="stat-title">Pipeline cost</div>
+        <div class="stat-value text-primary text-2xl">&lt;$0.30/day</div>
+        <div class="stat-desc">Whisper + Claude Haiku vision, motion-gated</div>
+      </div>
+      <div class="stat">
+        <div class="stat-title">Status</div>
+        <div class="stat-value text-2xl">Epic 5</div>
+        <div class="stat-desc">integration in progress — see Epics below</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="system" class="space-y-4">
+    <h2 class="text-2xl font-bold">System Architecture</h2>
+    <p class="text-base-content/70 max-w-3xl">Three subsystems connected by home WiFi upload and a push-notification round trip.</p>
+    <div class="card bg-base-100 shadow p-4">
+      <pre class="mermaid">
+flowchart TD
+  subgraph HW["Pendant Hardware"]
+    direction TB
+    HW1["RPi Zero 2W + Camera Module 3 Wide<br/>PiJuice pHAT + 3000mAh LiPo"]
+    HW2["rolling 5-min H.264 segments to SD card"]
+    HW3["LED: recording / uploading / low-battery / critical"]
+  end
+  subgraph CLOUD["Cloud Storage + AI Pipeline"]
+    direction TB
+    C1["Supabase Storage (S3-compatible)"]
+    C2["nightly scoring: Whisper speech,<br/>FFmpeg motion, Claude Haiku scene"]
+    C3["highlight selection + FFmpeg assembly"]
+  end
+  subgraph APP["Mobile Companion App"]
+    direction TB
+    A1["React Native (Expo)"]
+    A2["today's reel · raw footage · device · archive"]
+  end
+  HW -- "home WiFi, background upload" --> CLOUD
+  CLOUD -- "push notification" --> APP
+  APP -- "WiFi re-onboarding QR" --> HW
+      </pre>
+    </div>
+  </section>
+
+  <section id="epics" class="space-y-4">
+    <h2 class="text-2xl font-bold">Epics &amp; Status</h2>
+    <p class="text-base-content/70 max-w-3xl">Verified against <code>gh pr list</code> / <code>gh issue list</code> at regeneration time, not inferred.</p>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead>
+          <tr><th>Epic</th><th>Scope</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="font-semibold">0 — Supabase Foundation</td>
+            <td>Schema, RLS, storage buckets</td>
+            <td><span class="badge badge-success badge-soft">Merged</span> <a class="link text-xs" href="https://github.com/vietwillnguyen/vision/pull/1">#1</a></td>
+          </tr>
+          <tr>
+            <td class="font-semibold">1 — Firmware (base)</td>
+            <td><code>visio-recorder</code> daemon skeleton</td>
+            <td><span class="badge badge-success badge-soft">Merged</span> <a class="link text-xs" href="https://github.com/vietwillnguyen/vision/pull/2">#2</a></td>
+          </tr>
+          <tr>
+            <td class="font-semibold">2 — Cloud AI Pipeline</td>
+            <td>Scoring, assembly, delivery</td>
+            <td><span class="badge badge-success badge-soft">Merged</span> <a class="link text-xs" href="https://github.com/vietwillnguyen/vision/pull/3">#3</a></td>
+          </tr>
+          <tr>
+            <td class="font-semibold">3 — Mobile App (base)</td>
+            <td>Expo app foundation</td>
+            <td><span class="badge badge-success badge-soft">Merged</span> <a class="link text-xs" href="https://github.com/vietwillnguyen/vision/pull/4">#4</a></td>
+          </tr>
+          <tr>
+            <td class="font-semibold">4 — Hardware Assembly</td>
+            <td>Physical build checklist, not code</td>
+            <td><span class="badge badge-ghost badge-soft">Untracked by PR</span></td>
+          </tr>
+          <tr class="bg-base-200/40">
+            <td class="font-semibold">5 — Integration &amp; E2E</td>
+            <td colspan="2">
+              <div class="flex flex-wrap gap-2">
+                <span class="badge badge-warning badge-soft">#5 orchestrator — open</span>
+                <span class="badge badge-info badge-soft">#7 daemon glue — PR #15 open, awaiting merge</span>
+                <span class="badge badge-warning badge-soft">#8 app screen wiring — open</span>
+                <span class="badge badge-success badge-soft">#9 FLAG date fix — merged (PR #13)</span>
+                <span class="badge badge-success badge-soft">#6/#12 CI hardening — merged (PR #11/#14)</span>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="firmware" class="space-y-4">
+    <h2 class="text-2xl font-bold">Firmware Daemon — <code>visio-recorder</code></h2>
+    <p class="text-base-content/70 max-w-3xl">As-built via the Epic 5 daemon-glue plan (issue #7, PR #15). Single Python systemd service, <code>main()</code> composes already-unit-tested parts.</p>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold mb-2">Startup composition</h3>
+        <pre class="mermaid">
+flowchart TD
+  A["systemd starts visio-recorder<br/>EnvironmentFile=/etc/visio-recorder.env"] --> B{"battery below 10%?"}
+  B -- yes --> B1["CRITICAL LED, exit 0"]
+  B -- no --> C{"session.json exists?"}
+  C -- "no (first boot)" --> D["QR onboarding: WiFi NM keyfile<br/>+ Supabase auth, up to 60 attempts"]
+  D -- "never succeeds" --> D1["exit 1"]
+  D -- "succeeds" --> E
+  C -- yes --> E["load_or_create_device_id"]
+  E --> F{"device_registered marker exists?"}
+  F -- no --> G["register_device, then touch marker"]
+  F -- yes --> H
+  G --> H["flush_pending queue"]
+  H --> I["run_recording_loop"]
+        </pre>
+      </div>
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold mb-2">Recording loop concurrency</h3>
+        <pre class="mermaid">
+flowchart TD
+  M["main thread"] -- "rpicam-vid per 5-min segment" --> Q["queue.Queue"]
+  Q --> W["worker thread<br/>(sole owner of upload state + LED)"]
+  W -- "mux + upload" --> S["Supabase Storage"]
+  W -- "3 consecutive failures" --> CRIT["CRITICAL LED"]
+  W -- "any success" --> RESET["reset failure counter"]
+  M -- "battery halt or stop signal" --> DRAIN["drain queue, join() worker"]
+  DRAIN --> HALT["apply CRITICAL after worker fully joins"]
+        </pre>
+      </div>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">Key as-built decisions</h3>
+      <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
+        <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per 5-minute segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
+        <li>Upload retry is <em>startup-flush only</em> — no continuous while-running retry loop. A failed segment stays queued until the next process start.</li>
+        <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
+        <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="gaps" class="space-y-4">
+    <h2 class="text-2xl font-bold">As-built gaps</h2>
+    <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed.</p>
+    <div class="alert alert-warning alert-soft" role="alert">
+      <span><strong>Manual flag button not wired.</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">firmware/visio_recorder/flag_button.py</span>'s <span class="font-mono text-xs bg-base-200 rounded px-1">write_flag_marker</span> exists from Epic 1, but nothing in the Epic 5 daemon-glue plan connects a GPIO button press to it from <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span>. Blocks the Epic 5 hardware checklist's flag-button smoke test.</span>
+    </div>
+    <div class="alert alert-warning alert-soft" role="alert">
+      <span><strong>NetworkManager keyfile isn't activated after write.</strong> Nothing runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span>/<span class="font-mono text-xs bg-base-200 rounded px-1">up</span> or reboots after onboarding writes the keyfile. First boot currently only recovers once NetworkManager's own file-watch picks it up, via crash-restart. Needs an explicit activation step before Epic 5 hardware bring-up.</span>
+    </div>
+  </section>
+
+  <section id="data" class="space-y-4">
+    <h2 class="text-2xl font-bold">Data Model (Supabase Postgres)</h2>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table table-sm">
+        <thead><tr><th>Table</th><th>Key columns</th></tr></thead>
+        <tbody>
+          <tr><td class="font-mono">devices</td><td>device_id, user_id, name, created_at</td></tr>
+          <tr><td class="font-mono">device_status</td><td>device_id, battery_pct, storage_used_gb, storage_free_gb, segments_pending, segments_uploaded_today, recording_active, updated_at</td></tr>
+          <tr><td class="font-mono">segments</td><td>id, device_id, recorded_at, duration_sec, s3_key, motion_score, audio_score, scene_score, composite_score, manually_flagged, user_feedback</td></tr>
+          <tr><td class="font-mono">reels</td><td>id, device_id, date, s3_key, duration_sec, style, created_at</td></tr>
+          <tr><td class="font-mono">score_weights</td><td>user_id, scene_weight, audio_weight, motion_weight (default 0.4/0.3/0.2)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="alert alert-info alert-soft text-sm" role="alert">
+      <span><span class="font-mono text-xs bg-base-200 rounded px-1">device_status</span> write access: the firmware daemon authenticates as <span class="font-mono text-xs bg-base-200 rounded px-1">authenticated</span> (its own user session), not <span class="font-mono text-xs bg-base-200 rounded px-1">service_role</span> — grant added in <span class="font-mono text-xs bg-base-200 rounded px-1">20260710090000_grant_device_status_writes.sql</span>, row-filtered by the existing owner-scoped RLS policy.</span>
+    </div>
+  </section>
+
+  <section id="pipeline" class="space-y-4">
+    <h2 class="text-2xl font-bold">Cloud AI Pipeline</h2>
+    <ul class="steps steps-vertical lg:steps-horizontal w-full text-xs">
+      <li class="step step-primary">Audio (Whisper)</li>
+      <li class="step step-primary">Motion (FFmpeg)</li>
+      <li class="step step-primary">Scene (Claude Haiku)</li>
+      <li class="step step-primary">Composite score</li>
+      <li class="step step-primary">Highlight select</li>
+      <li class="step step-primary">FFmpeg assembly</li>
+      <li class="step step-primary">Push delivery</li>
+    </ul>
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2 text-sm">Composite score</h3>
+      <pre class="text-xs bg-base-200 rounded p-3 overflow-x-auto"><code>base_score = 0.4 * scene_novelty + 0.3 * audio_activity + 0.2 * motion_intensity
+score = base_score * 1.5  (if manually flagged)
+      | base_score         (otherwise)</code></pre>
+      <p class="text-xs text-base-content/60 mt-2">Weights are per-user, stored in <span class="font-mono">score_weights</span>, tunable via the mobile app.</p>
+    </div>
+  </section>
+
+  <section id="app" class="space-y-4">
+    <h2 class="text-2xl font-bold">Mobile Companion App</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Today's Reel</h3>
+        <p class="text-xs text-base-content/70 mt-1">Full-screen player, vintage toggle, share, regenerate with preferences.</p>
+      </div>
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Raw Footage</h3>
+        <p class="text-xs text-base-content/70 mt-1">5-min-thumbnail timeline, include/exclude feedback, flag markers.</p>
+      </div>
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Device</h3>
+        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime, WiFi re-onboarding QR.</p>
+      </div>
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Archive</h3>
+        <p class="text-xs text-base-content/70 mt-1">Calendar heat-map of past reels.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="border-t border-base-content/10 pt-6 pb-12 text-xs text-base-content/50 space-y-1">
+    <p>Source of truth: <span class="font-mono">docs/superpowers/specs/2026-07-04-visio-pendant-design.md</span>. Regenerate this page after editing that file — see <span class="font-mono">docs/architecture-regeneration.md</span>.</p>
+    <p>A pre-commit hook blocks commits that change the spec without updating this page's embedded source hash.</p>
+  </footer>
+
+</main>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+  const paint = document.createElement("canvas").getContext("2d");
+  function toRgba(color) {
+    paint.clearRect(0, 0, 1, 1);
+    paint.fillStyle = "#000";
+    paint.fillStyle = color;
+    paint.fillRect(0, 0, 1, 1);
+    return paint.getImageData(0, 0, 1, 1).data;
+  }
+
+  function compositeRgba(foreground, background) {
+    const foregroundAlpha = foreground[3] / 255;
+    const backgroundAlpha = background[3] / 255;
+    const alpha = foregroundAlpha + backgroundAlpha * (1 - foregroundAlpha);
+    if (alpha === 0) return [0, 0, 0, 0];
+    return [
+      (foreground[0] * foregroundAlpha + background[0] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      (foreground[1] * foregroundAlpha + background[1] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      (foreground[2] * foregroundAlpha + background[2] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      alpha * 255,
+    ];
+  }
+
+  function pageIsDark() {
+    const root = document.documentElement;
+    const rootBackground = toRgba(getComputedStyle(root).backgroundColor);
+    const bodyBackground = document.body ? toRgba(getComputedStyle(document.body).backgroundColor) : [0, 0, 0, 0];
+    const [r, g, b, a] = compositeRgba(bodyBackground, rootBackground);
+    if (a > 0) {
+      return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+    }
+    const colorScheme = getComputedStyle(root).colorScheme;
+    if (colorScheme.includes("dark") && !colorScheme.includes("light")) return true;
+    if (colorScheme.includes("light") && !colorScheme.includes("dark")) return false;
+    return darkQuery.matches;
+  }
+
+  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.textContent }));
+  let applied;
+  let rendering = false;
+  let queued = false;
+  function queueRender() {
+    queued = true;
+    if (rendering) return;
+    void render();
+  }
+  async function render() {
+    rendering = true;
+    try {
+      while (queued) {
+        queued = false;
+        const theme = pageIsDark() ? "dark" : "default";
+        if (theme === applied) continue;
+        mermaid.initialize({ startOnLoad: false, theme, securityLevel: "strict" });
+        for (const { el, src } of diagrams) {
+          el.removeAttribute("data-processed");
+          el.textContent = src;
+        }
+        try {
+          await mermaid.run({ nodes: diagrams.map((d) => d.el) });
+        } catch (error) {
+          console.error("Mermaid diagram render failed:", error);
+          return;
+        }
+        applied = theme;
+      }
+    } finally {
+      rendering = false;
+      if (queued) queueRender();
+    }
+  }
+
+  if (document.readyState === "complete") queueRender();
+  else window.addEventListener("load", queueRender, { once: true });
+  const themeObserver = new MutationObserver(queueRender);
+  for (const el of [document.documentElement, document.body]) {
+    if (!el) continue;
+    themeObserver.observe(el, {
+      attributes: true,
+      attributeFilter: ["data-theme", "class", "style"],
+    });
+  }
+  document.addEventListener("change", queueRender, true);
+  document.addEventListener(
+    "transitionend",
+    ({ propertyName }) => {
+      if (propertyName === "background-color") queueRender();
+    },
+    true,
+  );
+  darkQuery.addEventListener("change", queueRender);
+</script>
+
+</body>
+</html>
