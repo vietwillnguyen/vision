@@ -171,6 +171,67 @@ def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
     assert led.calls[-1] == CRITICAL_LED
 
 
+def test_halt_join_waits_for_slow_worker_before_applying_critical_led(tmp_path):
+    # Regression test: the halt path used to join(timeout=5), so a worker
+    # call running past 5s let the main thread give up waiting and apply the
+    # halt CRITICAL LED while the worker was still mid-flight; the worker
+    # could then overwrite it with its own restore LED. Joining without a
+    # timeout closes that race, so this proves the loop stays blocked well
+    # past the old 5s window and CRITICAL is applied only after the worker's
+    # own LED restore has already happened.
+    stop = threading.Event()
+    led = FakeLedDriver()
+    battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
+
+    release_upload = threading.Event()
+    upload_blocked = threading.Event()
+
+    class BlockingStorageClient:
+        def __init__(self) -> None:
+            self.uploaded: list[str] = []
+
+        def upload(self, bucket, object_path, local_path):
+            upload_blocked.set()
+            release_upload.wait()
+            self.uploaded.append(object_path)
+
+    storage = BlockingStorageClient()
+
+    def on_record(count: int) -> None:
+        if count >= 1:
+            battery.trigger_halt()
+
+    runner = FakeCommandRunner(on_record=on_record)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=battery,
+        led_driver=led,
+        storage_client=storage,
+    )
+
+    loop_thread = threading.Thread(
+        target=run_recording_loop,
+        args=(deps, stop),
+        kwargs={"clock": FakeClock(datetime(2026, 7, 4, 12, 0, 0))},
+    )
+    loop_thread.start()
+
+    assert upload_blocked.wait(timeout=5), "worker never reached the blocking upload"
+    # Wait past the old 5s join timeout: with the bug, the main thread would
+    # have given up here and returned, applying CRITICAL while the worker was
+    # still blocked above.
+    loop_thread.join(timeout=5.2)
+    assert loop_thread.is_alive(), "join returned before the worker finished"
+    assert CRITICAL_LED not in led.calls
+
+    release_upload.set()
+    loop_thread.join(timeout=5)
+    assert not loop_thread.is_alive()
+
+    assert led.calls == [LOW_BATTERY_LED, LOW_BATTERY_LED, CRITICAL_LED]
+
+
 def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_path):
     stop = threading.Event()
     led = FakeLedDriver()

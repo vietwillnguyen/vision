@@ -171,7 +171,7 @@ def run_recording_loop(
             work.put(h264_path)
     finally:
         work.put(None)
-        worker_thread.join(timeout=5)
+        worker_thread.join()
     if halted:
         apply_led_state(deps.led_driver, LedState.CRITICAL)
 
@@ -188,6 +188,7 @@ def main() -> int:
 
     session_path = config.data_dir / "session.json"
     state_path = config.data_dir / "device.json"
+    registered_marker_path = config.data_dir / "device_registered"
     queue_dir = config.data_dir / "queue"
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,15 +209,15 @@ def main() -> int:
         if payload is None:
             return 1
 
-    device_id_was_new = not state_path.exists()
     device_id = load_or_create_device_id(state_path)
 
     clients = build_supabase_clients(
         config.supabase_url, config.supabase_anon_key, session_path
     )
 
-    if device_id_was_new:
+    if not registered_marker_path.exists():
         register_device(clients.registration, device_id, _DEVICE_NAME)
+        registered_marker_path.touch()
 
     flush_pending(queue_dir, clients.storage, device_id)
 

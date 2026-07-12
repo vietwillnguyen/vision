@@ -1,3 +1,4 @@
+import logging
 import shutil
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from visio_recorder.uploader import StorageClient, upload_segment
 _BYTES_PER_GB = 1024**3
 
 UPLOAD_FAILURES_TO_CRITICAL = 3
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,6 +75,9 @@ def flush_pending(
         try:
             upload_segment(storage_client, device_id, path)
         except Exception:
+            _logger.exception(
+                "flush_pending failed to upload queued segment %s", path
+            )
             continue
         mark_uploaded(path)
         uploaded += 1
