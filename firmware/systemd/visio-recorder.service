@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=/etc/visio-recorder.env
 ExecStart=/usr/bin/python3 -m visio_recorder.daemon
 WorkingDirectory=/opt/visio-recorder
 Restart=on-failure

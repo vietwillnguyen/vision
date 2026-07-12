@@ -151,6 +151,8 @@ On successful decode, credentials are written to `wpa_supplicant.conf` and the d
 
 This avoids needing to configure a captive portal or AP mode (`hostapd`).
 
+**As-built deviation:** the daemon writes a NetworkManager keyfile (`/etc/NetworkManager/system-connections/visio.nmconnection`) instead of `wpa_supplicant.conf`, because stock Raspberry Pi OS Bookworm uses NetworkManager and does not honor `wpa_supplicant.conf`.
+
 ### Device Status Reporting
 
 After each successful segment upload, the daemon performs a Supabase `UPSERT` on a `device_status` table row:
