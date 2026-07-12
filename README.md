@@ -47,7 +47,7 @@ The shared database contract every other subsystem codes against:
 - `devices.push_token` (nullable) stores the mobile app's Expo push token for nightly reel notifications.
 - Row-level security on every table: rows are visible only to the owning user (`auth.uid()` matched directly or via the owning device's `user_id`).
 - Private `segments` and `reels` storage buckets with owner-scoped object policies keyed on the `{device_id}/` path prefix.
-- Table privileges are granted explicitly: `service_role` gets full DML, `authenticated` gets select everywhere, writes only on `devices`, `score_weights`, and `segments.user_feedback`. The `anon` role gets no grants - devices are paired to authenticated users only.
+- Table privileges are granted explicitly: `service_role` gets full DML, `authenticated` gets select everywhere, writes only on `devices`, `score_weights`, `segments.user_feedback`, and (added post-Epic-0, see `20260710090000_grant_device_status_writes.sql`) insert/update on `device_status` - the firmware daemon never holds a `service_role` key, so it upserts its own status row as `authenticated`. The `anon` role gets no grants - devices are paired to authenticated users only.
 
 ### Local development
 

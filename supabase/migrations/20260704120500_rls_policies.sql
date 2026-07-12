@@ -1,7 +1,10 @@
 -- App roles need table privileges before RLS policies can grant row visibility:
 -- Postgres checks GRANTs first, then filters rows through RLS.
--- The pipeline and firmware write through service_role; authenticated users only
--- manage their own devices and score weights, and flag segments via user_feedback.
+-- The pipeline writes through service_role; authenticated users manage their own
+-- devices and score weights, and flag segments via user_feedback.
+-- (device_status write access for the firmware daemon, which authenticates as
+-- authenticated rather than service_role, is granted separately - see
+-- 20260710090000_grant_device_status_writes.sql.)
 grant select, insert, update, delete
   on public.devices, public.device_status, public.segments, public.reels, public.score_weights
   to service_role;

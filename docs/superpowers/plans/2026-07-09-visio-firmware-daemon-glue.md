@@ -438,6 +438,9 @@ git add firmware/visio_recorder/recording_loop.py firmware/tests/test_recording_
 git commit -m "feat(firmware): startup queue flush uploads pending files"
 ```
 
+**As-built note (commit fb331c2):** the `except Exception: continue` above was silent - a persistently failing queued file gave no operator-visible signal.
+It now logs via `_logger.exception` before continuing; the retry-by-leaving-queued behavior is unchanged.
+
 ### Task 6: NetworkManager keyfile rendering
 
 **Files:**
@@ -837,6 +840,11 @@ Tests drive the loop with fakes (instant fake recorder, scripted battery reading
 - [ ] **Step 4: Run the full firmware suite** - all pass, no hangs (worker joins with `timeout=5`).
 - [ ] **Step 5: Commit** `feat(firmware): recording loop with background upload worker`.
 
+**As-built notes:**
+
+- (commit 51e8a0b) the worker only wrapped the upload half of `on_segment_complete`'s work in error handling; any other exception (e.g. a status-upsert failure) propagated and killed the thread, silently stalling all future uploads with no crash and no restart. The worker's `while True` loop now wraps the whole `on_segment_complete` call, logs via `_logger.exception`, and continues to the next queued segment. The same review added a missing `updated_at` field to `DeviceStatus` (`recording_loop.py`), which this plan's Task 3/4 steps omitted - without it the status row's timestamp never advanced past the first insert.
+- (commit fb331c2) `worker_thread.join(timeout=5)` could return before the worker actually finished draining, letting `main`'s halt-path CRITICAL LED apply-and-return race the worker's own in-flight LED call. The join no longer takes a timeout, so halt/stop always waits for the worker to fully drain first.
+
 ### Task 10: main() entry, config, systemd, and docs
 
 **Files:**
@@ -852,6 +860,8 @@ Tests drive the loop with fakes (instant fake recorder, scripted battery reading
 
 `main()` composes, in order: `load_config(os.environ)`; `run_startup_sequence` (exit 0 with CRITICAL LED if `proceed` is False); first-boot check (`session_path` missing -> `run_onboarding` with `RpicamZbarScanner`, exit 1 if it returns None); `load_or_create_device_id` (+ `register_device` when the state file was new); `build_supabase_clients`; `flush_pending`; `run_recording_loop` with a `stop` event wired to `signal.SIGTERM`/`SIGINT`.
 `main` stays a thin composition function tested only via its parts, matching the codebase convention that `daemon.py` wiring is validated on hardware in Epic 5.
+
+**As-built note (commit fb331c2):** gating `register_device` on "the state file was new" left a retry gap - if the daemon crashed after `load_or_create_device_id` persisted `device.json` but before `register_device` completed, the device would never retry registration on subsequent boots. `main()` now gates on a separate `device_registered` marker file, touched only after `register_device` succeeds, so registration retries independently of device-ID persistence.
 
 Systemd unit gains:
 
