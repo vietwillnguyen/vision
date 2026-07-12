@@ -113,19 +113,22 @@ Raspberry Pi OS Lite (Bookworm, 64-bit headless).
 
 A single Python systemd service manages the full device lifecycle.
 
-**Startup sequence:**
+**Startup sequence (as-built, Epic 5 daemon glue):**
 
-1. PiJuice powers on Pi; systemd starts `visio-recorder`.
-2. Check battery level via PiJuice API. If < 10%, flash LED red and halt.
-3. Attempt home WiFi connection. If connected, flush any pending upload queue before recording starts.
-4. Begin rolling H.264 recording via `rpicam-vid`.
+1. PiJuice powers on Pi; systemd starts `visio-recorder` with `EnvironmentFile=/etc/visio-recorder.env` supplying Supabase credentials and the data-dir/segment/framerate tunables.
+2. Check battery level via PiJuice API. If below the halt threshold (<10%), flash LED red and exit 0 without recording; below the 20% low-battery threshold, proceed but show the low-battery LED throughout.
+3. First boot only (no session file on disk yet): scan a QR code via `rpicam-still` + zbar to onboard WiFi (writes the NetworkManager keyfile) and Supabase auth, up to 60 attempts; exit 1 if onboarding never succeeds.
+4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
+5. Flush any pending upload queue left over from a previous run.
+6. Begin rolling H.264 recording via `rpicam-vid`.
 
-**Recording loop:**
+**Recording loop (as-built):**
 
-- `rpicam-vid` writes 5-minute `.h264` segments named `YYYYMMDD_HHMMSS.h264`.
-- On segment completion, daemon wraps it into MP4: `ffmpeg -i seg.h264 -c copy seg.mp4`.
-- Completed MP4 moves to an upload queue directory.
-- A background thread continuously attempts upload to Supabase Storage whenever WiFi is available.
+- `rpicam-vid` is invoked once per 5-minute segment (not one long-running `--segment` process), named `YYYYMMDD_HHMMSS.h264` - this keeps filename/timing control at capture start and lets each segment fail independently, at the cost of a ~1-2s gap between segments.
+- On segment completion the daemon wraps it into MP4 (`ffmpeg -c copy`), moves it to the upload queue, and hands it to a single background worker thread.
+- The worker thread is the sole owner of upload state (segment count, consecutive-failure count) and every upload-related LED transition; the main thread only records and enqueues.
+- The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop - a failed upload's file stays queued and the *next process startup's* flush (step 5 above) is the retry mechanism.
+- After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
 - On successful upload, local file is deleted to free SD space.
 
 **Manual flag button:**
@@ -133,6 +136,9 @@ A single Python systemd service manages the full device lifecycle.
 A single press inserts a `FLAG_YYYYMMDD_HHMMSS.marker` file into the upload queue.
 The cloud pipeline reads this marker and boosts the composite score for the surrounding timestamp.
 Flagged moments are always included in the highlight reel.
+
+**As-built gap:** `firmware/visio_recorder/flag_button.py` implements `write_flag_marker` (Epic 1) but nothing in the Epic 5 daemon glue plan wires a GPIO button-press listener to call it from `main()` - the button is not yet functional on the running daemon.
+This needs a task before the Epic 5 hardware checklist's flag-button smoke test can pass.
 
 **LED state machine:**
 
@@ -153,9 +159,13 @@ This avoids needing to configure a captive portal or AP mode (`hostapd`).
 
 **As-built deviation:** the daemon writes a NetworkManager keyfile (`/etc/NetworkManager/system-connections/visio.nmconnection`) instead of `wpa_supplicant.conf`, because stock Raspberry Pi OS Bookworm uses NetworkManager and does not honor `wpa_supplicant.conf`.
 
+**As-built gap:** writing the keyfile does not activate it - nothing in `main()` runs `nmcli connection reload`/`up` or reboots the device.
+On a genuine first boot the daemon currently proceeds straight to building the Supabase clients, which need network, and only recovers once NetworkManager's own file-watch picks up the keyfile and systemd's `Restart=on-failure` retries.
+This is unclean and untested off-hardware; Epic 5 needs an explicit activation step (or reboot) here, not reliance on crash-restart.
+
 ### Device Status Reporting
 
-After each successful segment upload, the daemon performs a Supabase `UPSERT` on a `device_status` table row:
+After each segment is processed, whether the upload succeeds or fails, the daemon performs a Supabase `UPSERT` on a `device_status` table row:
 
 ```
 battery_pct, storage_used_gb, storage_free_gb,
