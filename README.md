@@ -32,6 +32,16 @@ docs/
 
 All three software subsystems (Epics 1-3) are implemented; their remaining device/UI wiring is deferred to Epic 5 per each plan's Handoff section.
 
+## Architecture doc
+
+[`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) is a living, visual rendering of the design spec - open it directly in a browser.
+It is generated from `docs/superpowers/specs/2026-07-04-visio-pendant-design.md`; edit the spec, then see [`docs/architecture-regeneration.md`](docs/architecture-regeneration.md) to regenerate the page.
+A pre-commit hook enforces that the two stay in sync - run this once per clone (worktrees share it):
+
+```sh
+git config core.hooksPath scripts/hooks
+```
+
 ## Continuous integration
 
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs all three test suites on every pull request targeting `main` and every push to `main`.

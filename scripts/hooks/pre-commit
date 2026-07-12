@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Blocks a commit that changes an architecture spec without also updating the
+# living HTML doc that renders it. Only runs the check when docs/ARCHITECTURE.html
+# exists in the index and declares which spec file it was rendered from.
+set -euo pipefail
+
+ARCH_DOC="docs/ARCHITECTURE.html"
+
+arch_content=$(git show ":$ARCH_DOC" 2>/dev/null) || exit 0
+
+source_file=$(grep -m1 '<!-- source-file:' <<<"$arch_content" | sed -E 's/.*source-file:[[:space:]]*([^[:space:]]+)[[:space:]]*-->.*/\1/')
+embedded_hash=$(grep -m1 '<!-- source-sha256:' <<<"$arch_content" | sed -E 's/.*source-sha256:[[:space:]]*([a-f0-9]+)[[:space:]]*-->.*/\1/')
+
+[ -z "$source_file" ] && exit 0
+[ -z "$embedded_hash" ] && exit 0
+
+# Only enforce when this commit actually touches the declared source spec.
+git diff --cached --name-only | grep -qxF "$source_file" || exit 0
+
+staged_hash=$(git show ":$source_file" 2>/dev/null | sha256sum | cut -d' ' -f1)
+
+if [ "$staged_hash" != "$embedded_hash" ]; then
+  cat >&2 <<EOF
+error: $source_file changed but $ARCH_DOC's embedded source-sha256 comment
+       was not updated to match the staged content.
+
+  Regenerate it, then stage the result:
+    claude -p "Regenerate $ARCH_DOC from $source_file per docs/architecture-regeneration.md, then update its source-sha256 comment to match."
+    git add $ARCH_DOC
+
+  Or bypass this check for this commit only:
+    git commit --no-verify
+EOF
+  exit 1
+fi
+
+exit 0
