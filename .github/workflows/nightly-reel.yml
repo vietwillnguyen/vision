@@ -1,0 +1,40 @@
+name: nightly-reel
+
+on:
+  schedule:
+    # 19:00 UTC = 02:00 ICT, after a full day of device-local (UTC+7) recording.
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "Day to process as YYYY-MM-DD (default: today, UTC)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-reel
+  cancel-in-progress: false
+
+jobs:
+  reel:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipeline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Run nightly pipeline
+        run: uv run --locked python -m pipeline ${{ inputs.day && format('--day {0}', inputs.day) || '' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

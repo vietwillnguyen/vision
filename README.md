@@ -101,7 +101,9 @@ Every stage is a pure function or takes an injectable client `Protocol`, so the 
 - Assembly (`pipeline/assembly/`): builds the FFmpeg trim and concat commands (720p, optional vintage filter).
 - Delivery (`pipeline/delivery/`): Expo push notification when the reel is ready.
 
-The nightly orchestrator that wires these stages against real Supabase/LiteLLM/Expo clients is follow-up work - see the Handoff section of [`docs/superpowers/plans/2026-07-04-visio-pipeline.md`](docs/superpowers/plans/2026-07-04-visio-pipeline.md).
+The nightly orchestrator (`pipeline/orchestrator.py`) wires these stages per device against injectable boundaries, with real adapters in `pipeline/adapters/` (Supabase tables + storage via the service_role key, LiteLLM vision and Whisper transcription, Expo push, FFmpeg media probing).
+Rejected keys and unmatched flag markers land in the `pipeline_dlq` table for nightly retry with attempt counts; a key that exhausts its retries is escalated and the device owner is notified (issue #5's DLQ policy).
+It runs as the [`nightly-reel`](.github/workflows/nightly-reel.yml) GitHub Actions workflow (nightly cron, or `workflow_dispatch` with an optional `day` input for the Epic 5 manual trigger), and locally as `uv run python -m pipeline [--day YYYY-MM-DD]` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` set (optional overrides: `VISIO_VISION_MODEL`, `VISIO_TRANSCRIPTION_MODEL`, `VISIO_TARGET_DURATION_SEC`, `VISIO_VINTAGE`).
 
 ### Local development
 
