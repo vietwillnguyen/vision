@@ -182,6 +182,12 @@ The mobile app subscribes to this row via Supabase Realtime for live status with
 
 A Supabase Edge Function (or AWS Lambda) is invoked nightly via a cron schedule, or when the pending segment count for a device exceeds a configurable threshold.
 
+**As-built deviation:** the pipeline runs as the `nightly-reel` GitHub Actions workflow (`.github/workflows/nightly-reel.yml`): a nightly cron at 19:00 UTC (02:00 device-local ICT), plus `workflow_dispatch` with an optional `day` input for manual runs.
+Supabase Edge Functions were ruled out because the pipeline is Python + FFmpeg and Edge Functions run Deno.
+The pending-segment-count threshold trigger is not implemented.
+
+**As-built addition:** storage keys the nightly run cannot process (unparseable/out-of-prefix keys, flag markers matching no segment window) are persisted to a `pipeline_dlq` table and retried each night with an attempt count; after 5 attempts the key is escalated and the device owner is notified via push.
+
 ### Pipeline Stages
 
 **Stage 1 - Audio Analysis (Whisper API)**
@@ -310,7 +316,10 @@ segments         -- id, device_id, recorded_at, duration_sec, s3_key,
                  --   motion_score, audio_score, scene_score, composite_score,
                  --   manually_flagged, user_feedback (include|exclude|null)
 reels            -- id, device_id, date, s3_key, duration_sec, style, created_at
+                 --   unique (device_id, date) so same-day pipeline re-runs upsert
 score_weights    -- user_id, scene_weight, audio_weight, motion_weight (defaults 0.4/0.3/0.2)
+pipeline_dlq     -- device_id, key, kind (rejected|unmatched), attempts, escalated, updated_at
+                 --   service_role-only (RLS enabled, no policies) nightly-pipeline DLQ
 ```
 
 ---
@@ -321,7 +330,7 @@ score_weights    -- user_id, scene_weight, audio_weight, motion_weight (defaults
 vision/
   supabase/          -- Postgres migrations + pgTAP tests (shared schema, RLS, storage buckets)
   firmware/          -- Python daemon + systemd unit + onboarding scripts
-  pipeline/          -- Serverless AI pipeline (Python, deployable to Lambda or Supabase Edge)
+  pipeline/          -- Nightly AI pipeline (Python, run by the nightly-reel GitHub Actions workflow)
   app/               -- React Native / Expo mobile app
   hardware/          -- STL files for 3D printed enclosure, wiring diagrams
   docs/
