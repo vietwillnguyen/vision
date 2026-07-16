@@ -148,6 +148,14 @@ class SupabaseStore:
             .execute()
         )
 
+    def clear_push_token(self, device_id: str) -> None:
+        (
+            self._client.table("devices")
+            .update({"push_token": None})
+            .eq("device_id", device_id)
+            .execute()
+        )
+
     def load_pending_dlq(self, device_id: str) -> list[DlqEntry]:
         rows = (
             self._client.table(DLQ_TABLE)
@@ -163,6 +171,19 @@ class SupabaseStore:
         ]
 
     def record_dlq(self, device_id: str, entries: list[DlqEntry]) -> None:
+        escalated_rows = (
+            self._client.table(DLQ_TABLE)
+            .select("key")
+            .eq("device_id", device_id)
+            .eq("escalated", True)
+            .in_("key", [entry.key for entry in entries])
+            .execute()
+            .data
+        )
+        escalated_keys = {row["key"] for row in escalated_rows}
+        entries = [entry for entry in entries if entry.key not in escalated_keys]
+        if not entries:
+            return
         now = datetime.now(timezone.utc).isoformat()
         self._client.table(DLQ_TABLE).upsert(
             [

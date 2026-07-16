@@ -14,6 +14,12 @@ marker's own date, so a marker retried after its day was processed flags its
 segment and resolves instead of escalating. Recovered DLQ rows are only
 resolved after the device's day completes, so a later failure cannot lose a
 not-yet-persisted recovery.
+
+Push delivery failures never fail an otherwise-successful device day: they
+are logged, a permanently dead token (DeviceNotRegistered) clears the
+device's stored push_token, and a DLQ row is only marked escalated once the
+owner notification was delivered or is undeliverable, so a transient push
+failure retries the escalation on the next run.
 """
 
 import logging
@@ -28,7 +34,11 @@ from pipeline.assembly.ffmpeg_assembler import (
     compute_clip_offset_sec,
     render_concat_file_content,
 )
-from pipeline.delivery.notifier import PushClient, notify_reel_ready
+from pipeline.delivery.notifier import (
+    PushClient,
+    PushTokenNotRegisteredError,
+    notify_reel_ready,
+)
 from pipeline.ingestion import (
     apply_flag_markers,
     build_segments_from_object_keys,
@@ -89,6 +99,8 @@ class PipelineStore(Protocol):
     def list_segment_rows(self, device_id: str, day: date) -> list[dict]: ...
 
     def flag_segment(self, s3_key: str) -> None: ...
+
+    def clear_push_token(self, device_id: str) -> None: ...
 
 
 class MediaProbe(Protocol):
@@ -214,7 +226,27 @@ def _process_device_segments(
         }
     )
     if device.push_token:
-        notify_reel_ready(deps.push, device.push_token, day)
+        _deliver_push(
+            deps, device, lambda: notify_reel_ready(deps.push, device.push_token, day)
+        )
+
+
+def _deliver_push(deps: OrchestratorDeps, device: DeviceRecord, send) -> bool:
+    """Attempt delivery; True when delivered or permanently undeliverable."""
+    try:
+        send()
+        return True
+    except PushTokenNotRegisteredError:
+        logger.warning(
+            "push token for device %s is no longer registered; clearing it",
+            device.device_id,
+        )
+        deps.store.clear_push_token(device.device_id)
+        device.push_token = None
+        return True
+    except Exception:
+        logger.exception("push delivery failed for device %s", device.device_id)
+        return False
 
 
 def _apply_dlq_policy(
@@ -238,9 +270,17 @@ def _apply_dlq_policy(
     if to_record:
         store.record_dlq(device.device_id, to_record)
     if to_escalate:
-        store.escalate_dlq(device.device_id, to_escalate)
+        notified = True
         if device.push_token:
-            deps.push.send(device.push_token, ESCALATION_TITLE, ESCALATION_BODY)
+            notified = _deliver_push(
+                deps,
+                device,
+                lambda: deps.push.send(
+                    device.push_token, ESCALATION_TITLE, ESCALATION_BODY
+                ),
+            )
+        if notified:
+            store.escalate_dlq(device.device_id, to_escalate)
     return recovered
 
 

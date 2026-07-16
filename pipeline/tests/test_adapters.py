@@ -24,6 +24,7 @@ from pipeline.adapters.litellm_clients import (
     transcription_result_from_verbose,
 )
 from pipeline.config import Config, load_config
+from pipeline.delivery.notifier import PushTokenNotRegisteredError
 
 
 class TestFrameDiffs:
@@ -175,6 +176,16 @@ class TestExpoPush:
         client = ExpoPushClient(post=fake_post)
 
         with pytest.raises(ExpoPushError, match="DeviceNotRegistered"):
+            client.send("ExponentPushToken[x]", "title", "body")
+
+    def test_device_not_registered_raises_token_not_registered_error(self):
+        client = ExpoPushClient(
+            post=lambda url, body: {
+                "data": [{"status": "error", "details": {"error": "DeviceNotRegistered"}}]
+            }
+        )
+
+        with pytest.raises(PushTokenNotRegisteredError):
             client.send("ExponentPushToken[x]", "title", "body")
 
     def test_single_ticket_dict_error_raises(self):

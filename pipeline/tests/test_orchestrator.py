@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from pipeline.delivery.notifier import PushTokenNotRegisteredError
 from pipeline.models import ScoreWeights
 from pipeline.orchestrator import (
     MAX_DLQ_ATTEMPTS,
@@ -31,6 +32,7 @@ class FakeStore:
         self.weights = weights or {}
         self.segment_rows = segment_rows or {}
         self.flagged_segments: list[str] = []
+        self.cleared_push_tokens: list[str] = []
         self.persisted_segments: list[dict] = []
         self.inserted_reels: list[dict] = []
         self.uploaded_reels: list[tuple[str, date, Path]] = []
@@ -87,6 +89,9 @@ class FakeStore:
     def flag_segment(self, s3_key):
         self.flagged_segments.append(s3_key)
 
+    def clear_push_token(self, device_id):
+        self.cleared_push_tokens.append(device_id)
+
 
 class FakeMedia:
     def __init__(self, frame_diffs=None):
@@ -124,10 +129,13 @@ class FakeVision:
 
 
 class FakePush:
-    def __init__(self):
+    def __init__(self, error=None):
         self.sent: list[tuple[str, str, str]] = []
+        self.error = error
 
     def send(self, to_token, title, body):
+        if self.error is not None:
+            raise self.error
         self.sent.append((to_token, title, body))
 
 
@@ -264,6 +272,39 @@ class TestEdgeCases:
 
         assert len(store.inserted_reels) == 1
         assert push.sent == []
+
+    def test_reel_push_failure_does_not_fail_the_device_day(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090000")]}
+        )
+        push = FakePush(error=RuntimeError("expo down"))
+        deps = make_deps(store, tmp_path, push=push)
+
+        result = run_nightly(deps, DAY)
+
+        assert len(store.inserted_reels) == 1
+        assert result.devices_processed == 1
+        assert result.devices_failed == []
+        assert store.cleared_push_tokens == []
+
+    def test_dead_reel_push_token_is_cleared_and_device_still_processed(
+        self, tmp_path
+    ):
+        device = DeviceRecord(
+            device_id="dev-1", user_id="user-1", push_token="ExponentPushToken[x]"
+        )
+        store = FakeStore(
+            devices=[device], segment_keys={"dev-1": [segment_key("090000")]}
+        )
+        push = FakePush(error=PushTokenNotRegisteredError("DeviceNotRegistered"))
+        deps = make_deps(store, tmp_path, push=push)
+
+        result = run_nightly(deps, DAY)
+
+        assert len(store.inserted_reels) == 1
+        assert result.devices_processed == 1
+        assert result.devices_failed == []
+        assert store.cleared_push_tokens == ["dev-1"]
 
     def test_one_device_failure_does_not_block_other_devices(self, tmp_path):
         class ExplodingStore(FakeStore):
@@ -405,6 +446,67 @@ class TestDlqPolicy:
         assert store.recorded_dlq == []
         assert store.escalated_dlq == []
         assert push.sent == []
+
+    def test_escalation_is_not_marked_when_push_delivery_fails(self, tmp_path):
+        marker = "dev-1/FLAG_20260713_090100.marker"
+        store = FakeStore(
+            devices=[DEVICE],
+            segment_keys={"dev-1": [segment_key("090000")]},
+            pending_dlq={
+                "dev-1": [
+                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                ]
+            },
+        )
+        push = FakePush(error=RuntimeError("expo down"))
+        deps = make_deps(store, tmp_path, push=push)
+
+        result = run_nightly(deps, DAY)
+
+        assert store.escalated_dlq == []
+        assert result.devices_processed == 1
+        assert result.devices_failed == []
+
+    def test_escalation_proceeds_when_push_token_is_not_registered(self, tmp_path):
+        device = DeviceRecord(
+            device_id="dev-1", user_id="user-1", push_token="ExponentPushToken[x]"
+        )
+        marker = "dev-1/FLAG_20260713_090100.marker"
+        store = FakeStore(
+            devices=[device],
+            segment_keys={"dev-1": [segment_key("090000")]},
+            pending_dlq={
+                "dev-1": [
+                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                ]
+            },
+        )
+        push = FakePush(error=PushTokenNotRegisteredError("DeviceNotRegistered"))
+        deps = make_deps(store, tmp_path, push=push)
+
+        result = run_nightly(deps, DAY)
+
+        assert ("dev-1", marker) in store.escalated_dlq
+        assert store.cleared_push_tokens == ["dev-1"]
+        assert result.devices_processed == 1
+
+    def test_escalation_proceeds_for_device_without_push_token(self, tmp_path):
+        tokenless = DeviceRecord(device_id="dev-1", user_id="user-1", push_token=None)
+        marker = "dev-1/FLAG_20260713_090100.marker"
+        store = FakeStore(
+            devices=[tokenless],
+            segment_keys={"dev-1": [segment_key("090000")]},
+            pending_dlq={
+                "dev-1": [
+                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                ]
+            },
+        )
+        deps = make_deps(store, tmp_path)
+
+        run_nightly(deps, DAY)
+
+        assert ("dev-1", marker) in store.escalated_dlq
 
     def test_retried_marker_without_persisted_match_keeps_retrying(self, tmp_path):
         marker = "dev-1/FLAG_20260713_235900.marker"

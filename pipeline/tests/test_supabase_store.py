@@ -328,6 +328,60 @@ class TestDlq:
         assert row["attempts"] == 2
         assert row["updated_at"] >= first
 
+    def test_record_does_not_resurrect_escalated_row(self):
+        escalated_row = {
+            "device_id": "dev-1",
+            "key": "dev-1/x.mp4",
+            "kind": "rejected",
+            "attempts": 5,
+            "escalated": True,
+        }
+        store, tables = make_store(
+            tables={
+                "pipeline_dlq": FakeTable(
+                    rows=[escalated_row], pk=["device_id", "key"]
+                )
+            }
+        )
+
+        store.record_dlq(
+            "dev-1", [DlqEntry(key="dev-1/x.mp4", kind="rejected", attempts=1)]
+        )
+
+        assert tables["pipeline_dlq"].rows == [escalated_row]
+        assert escalated_row["escalated"] is True
+        assert escalated_row["attempts"] == 5
+
+    def test_record_still_upserts_non_escalated_entries(self):
+        escalated_row = {
+            "device_id": "dev-1",
+            "key": "dev-1/x.mp4",
+            "kind": "rejected",
+            "attempts": 5,
+            "escalated": True,
+        }
+        store, tables = make_store(
+            tables={
+                "pipeline_dlq": FakeTable(
+                    rows=[escalated_row], pk=["device_id", "key"]
+                )
+            }
+        )
+
+        store.record_dlq(
+            "dev-1",
+            [
+                DlqEntry(key="dev-1/x.mp4", kind="rejected", attempts=1),
+                DlqEntry(key="dev-1/y.mp4", kind="rejected", attempts=1),
+            ],
+        )
+
+        keys = {r["key"]: r for r in tables["pipeline_dlq"].rows}
+        assert keys["dev-1/x.mp4"]["escalated"] is True
+        assert keys["dev-1/x.mp4"]["attempts"] == 5
+        assert keys["dev-1/y.mp4"]["escalated"] is False
+        assert keys["dev-1/y.mp4"]["attempts"] == 1
+
     def test_resolve_deletes_keys(self):
         rows = [
             {"device_id": "dev-1", "key": "dev-1/a.marker"},
@@ -353,6 +407,16 @@ class TestDlq:
         store.escalate_dlq("dev-1", ["dev-1/a.marker"])
 
         assert rows[0]["escalated"] is True
+
+
+class TestClearPushToken:
+    def test_clear_push_token_nulls_the_device_token(self):
+        row = {"device_id": "dev-1", "user_id": "user-1", "push_token": "tok"}
+        store, _ = make_store(tables={"devices": FakeTable(rows=[row])})
+
+        store.clear_push_token("dev-1")
+
+        assert row["push_token"] is None
 
 
 class TestReelsAndBlobs:

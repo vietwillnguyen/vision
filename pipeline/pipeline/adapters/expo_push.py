@@ -9,10 +9,16 @@ from typing import Callable
 
 import httpx
 
+from pipeline.delivery.notifier import PushTokenNotRegisteredError
+
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 
 class ExpoPushError(RuntimeError):
+    pass
+
+
+class ExpoDeviceNotRegisteredError(ExpoPushError, PushTokenNotRegisteredError):
     pass
 
 
@@ -25,8 +31,14 @@ def raise_for_ticket_errors(response_body: dict) -> None:
     if isinstance(tickets, dict):
         tickets = [tickets]
     failed = [t for t in tickets if isinstance(t, dict) and t.get("status") == "error"]
-    if failed:
-        raise ExpoPushError(f"Expo push rejected {len(failed)} ticket(s): {failed}")
+    if not failed:
+        return
+    message = f"Expo push rejected {len(failed)} ticket(s): {failed}"
+    if any(
+        (t.get("details") or {}).get("error") == "DeviceNotRegistered" for t in failed
+    ):
+        raise ExpoDeviceNotRegisteredError(message)
+    raise ExpoPushError(message)
 
 
 def _default_post(url: str, json_body: dict) -> dict:
