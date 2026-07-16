@@ -1,5 +1,4 @@
 from datetime import date
-from pathlib import Path
 
 from pipeline.adapters.supabase_store import SupabaseStore
 from pipeline.models import ScoreWeights
