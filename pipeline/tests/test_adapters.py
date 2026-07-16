@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.adapters.expo_push import EXPO_PUSH_URL, ExpoPushClient, build_expo_payload
+from pipeline.adapters.expo_push import (
+    EXPO_PUSH_URL,
+    ExpoPushClient,
+    ExpoPushError,
+    build_expo_payload,
+)
 from pipeline.adapters.ffmpeg_media import (
     FRAME_HEIGHT,
     FRAME_WIDTH,
@@ -12,6 +17,7 @@ from pipeline.adapters.ffmpeg_media import (
     build_frame_extract_command,
     build_raw_gray_command,
     compute_frame_diffs_from_raw,
+    run_captured,
 )
 from pipeline.adapters.litellm_clients import (
     build_vision_request,
@@ -153,6 +159,57 @@ class TestExpoPush:
         assert calls == [
             (EXPO_PUSH_URL, build_expo_payload("ExponentPushToken[x]", "title", "body"))
         ]
+
+    def test_ticket_error_in_200_response_raises(self):
+        def fake_post(url, json_body):
+            return {
+                "data": [
+                    {
+                        "status": "error",
+                        "message": "not a registered push notification recipient",
+                        "details": {"error": "DeviceNotRegistered"},
+                    }
+                ]
+            }
+
+        client = ExpoPushClient(post=fake_post)
+
+        with pytest.raises(ExpoPushError, match="DeviceNotRegistered"):
+            client.send("ExponentPushToken[x]", "title", "body")
+
+    def test_single_ticket_dict_error_raises(self):
+        client = ExpoPushClient(
+            post=lambda url, body: {
+                "data": {"status": "error", "details": {"error": "MessageRateExceeded"}}
+            }
+        )
+
+        with pytest.raises(ExpoPushError, match="MessageRateExceeded"):
+            client.send("ExponentPushToken[x]", "title", "body")
+
+    def test_ok_ticket_does_not_raise(self):
+        client = ExpoPushClient(
+            post=lambda url, body: {"data": [{"status": "ok", "id": "ticket-1"}]}
+        )
+
+        client.send("ExponentPushToken[x]", "title", "body")
+
+
+class TestRunCaptured:
+    def test_failure_surfaces_stderr_in_error_message(self):
+        command = [
+            "python3",
+            "-c",
+            "import sys; sys.stderr.write('boom: codec not found'); sys.exit(2)",
+        ]
+
+        with pytest.raises(RuntimeError, match="codec not found"):
+            run_captured(command)
+
+    def test_success_returns_completed_process_with_stdout(self):
+        completed = run_captured(["python3", "-c", "print('ok')"])
+
+        assert completed.stdout.strip() == b"ok"
 
 
 class TestConfig:

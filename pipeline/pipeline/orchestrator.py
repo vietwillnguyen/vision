@@ -8,12 +8,17 @@ Rejected keys and unmatched flag markers follow the DLQ policy from the
 pipeline plan's Handoff section: persist with attempt counts, retry on every
 nightly run, and once a key exhausts ``MAX_DLQ_ATTEMPTS`` escalate it and
 notify the device owner instead of retrying forever. Marker filenames carry
-their full date, so retried markers can never flag another day's segment.
+their full date, so retried markers can never flag another day's segment;
+unmatched markers are also matched against segments already persisted for the
+marker's own date, so a marker retried after its day was processed flags its
+segment and resolves instead of escalating. Recovered DLQ rows are only
+resolved after the device's day completes, so a later failure cannot lose a
+not-yet-persisted recovery.
 """
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -24,7 +29,11 @@ from pipeline.assembly.ffmpeg_assembler import (
     render_concat_file_content,
 )
 from pipeline.delivery.notifier import PushClient, notify_reel_ready
-from pipeline.ingestion import apply_flag_markers, build_segments_from_object_keys
+from pipeline.ingestion import (
+    apply_flag_markers,
+    build_segments_from_object_keys,
+    parse_flag_marker_filename,
+)
 from pipeline.models import ScoreWeights, Segment
 from pipeline.scoring.audio import TranscriptionClient
 from pipeline.scoring.scene import VisionClient
@@ -76,6 +85,10 @@ class PipelineStore(Protocol):
     def resolve_dlq(self, device_id: str, keys: list[str]) -> None: ...
 
     def escalate_dlq(self, device_id: str, keys: list[str]) -> None: ...
+
+    def list_segment_rows(self, device_id: str, day: date) -> list[dict]: ...
+
+    def flag_segment(self, s3_key: str) -> None: ...
 
 
 class MediaProbe(Protocol):
@@ -141,11 +154,39 @@ def _run_device_day(deps: OrchestratorDeps, device: DeviceRecord, day: date) -> 
     segments, marker_rejected, unmatched = apply_flag_markers(
         segments, marker_keys + retried_marker_keys, device.device_id
     )
+    unmatched = [
+        key
+        for key in unmatched
+        if not _flag_persisted_segment(store, device.device_id, key)
+    ]
     failed_keys = {key: "rejected" for key in rejected}
     failed_keys.update((key, "rejected") for key in marker_rejected)
     failed_keys.update((key, "unmatched") for key in unmatched)
-    _apply_dlq_policy(deps, device, pending_by_key, failed_keys)
+    recovered = _apply_dlq_policy(deps, device, pending_by_key, failed_keys)
 
+    _process_device_segments(deps, device, day, segments)
+
+    if recovered:
+        store.resolve_dlq(device.device_id, recovered)
+
+
+def _flag_persisted_segment(
+    store: PipelineStore, device_id: str, marker_key: str
+) -> bool:
+    flag_at = parse_flag_marker_filename(marker_key.split("/")[-1])
+    for row in store.list_segment_rows(device_id, flag_at.date()):
+        recorded_at = datetime.fromisoformat(row["recorded_at"]).replace(tzinfo=None)
+        window_end = recorded_at + timedelta(seconds=row["duration_sec"])
+        if recorded_at <= flag_at < window_end:
+            store.flag_segment(row["s3_key"])
+            return True
+    return False
+
+
+def _process_device_segments(
+    deps: OrchestratorDeps, device: DeviceRecord, day: date, segments: list[Segment]
+) -> None:
+    store = deps.store
     if not segments:
         return
 
@@ -181,11 +222,9 @@ def _apply_dlq_policy(
     device: DeviceRecord,
     pending_by_key: dict[str, DlqEntry],
     failed_keys: dict[str, str],
-) -> None:
+) -> list[str]:
     store = deps.store
     recovered = [key for key in pending_by_key if key not in failed_keys]
-    if recovered:
-        store.resolve_dlq(device.device_id, recovered)
 
     to_record: list[DlqEntry] = []
     to_escalate: list[str] = []
@@ -202,6 +241,7 @@ def _apply_dlq_policy(
         store.escalate_dlq(device.device_id, to_escalate)
         if device.push_token:
             deps.push.send(device.push_token, ESCALATION_TITLE, ESCALATION_BODY)
+    return recovered
 
 
 def _score_one(

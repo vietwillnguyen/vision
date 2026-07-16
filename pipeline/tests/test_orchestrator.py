@@ -22,12 +22,15 @@ class FakeStore:
         marker_keys=None,
         pending_dlq=None,
         weights=None,
+        segment_rows=None,
     ):
         self.devices = devices
         self.segment_keys = segment_keys or {}
         self.marker_keys = marker_keys or {}
         self.pending_dlq = pending_dlq or {}
         self.weights = weights or {}
+        self.segment_rows = segment_rows or {}
+        self.flagged_segments: list[str] = []
         self.persisted_segments: list[dict] = []
         self.inserted_reels: list[dict] = []
         self.uploaded_reels: list[tuple[str, date, Path]] = []
@@ -73,6 +76,16 @@ class FakeStore:
 
     def escalate_dlq(self, device_id, keys):
         self.escalated_dlq.extend((device_id, k) for k in keys)
+
+    def list_segment_rows(self, device_id, day):
+        return [
+            row
+            for row in self.segment_rows.get(device_id, [])
+            if row["recorded_at"].startswith(day.isoformat())
+        ]
+
+    def flag_segment(self, s3_key):
+        self.flagged_segments.append(s3_key)
 
 
 class FakeMedia:
@@ -342,3 +355,76 @@ class TestDlqPolicy:
         assert ("dev-1", marker) in store.escalated_dlq
         escalation_messages = [body for _, _, body in push.sent if "processed" in body]
         assert len(escalation_messages) == 1
+
+    def test_recovered_marker_is_not_resolved_when_processing_later_fails(
+        self, tmp_path
+    ):
+        class FailingPersistStore(FakeStore):
+            def persist_segments(self, rows):
+                raise RuntimeError("db down")
+
+        marker = "dev-1/FLAG_20260714_090100.marker"
+        store = FailingPersistStore(
+            devices=[DEVICE],
+            segment_keys={"dev-1": [segment_key("090000")]},
+            pending_dlq={"dev-1": [DlqEntry(key=marker, kind="unmatched", attempts=2)]},
+        )
+        deps = make_deps(store, tmp_path)
+
+        result = run_nightly(deps, DAY)
+
+        assert result.devices_failed == ["dev-1"]
+        assert store.resolved_dlq == []
+
+    def test_retried_marker_matches_persisted_segment_of_its_own_day(self, tmp_path):
+        marker = "dev-1/FLAG_20260713_090100.marker"
+        store = FakeStore(
+            devices=[DEVICE],
+            pending_dlq={
+                "dev-1": [
+                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                ]
+            },
+            segment_rows={
+                "dev-1": [
+                    {
+                        "s3_key": "dev-1/20260713_090000.mp4",
+                        "recorded_at": "2026-07-13T09:00:00",
+                        "duration_sec": 300,
+                    }
+                ]
+            },
+        )
+        push = FakePush()
+        deps = make_deps(store, tmp_path, push=push)
+
+        run_nightly(deps, DAY)
+
+        assert store.flagged_segments == ["dev-1/20260713_090000.mp4"]
+        assert ("dev-1", marker) in store.resolved_dlq
+        assert store.recorded_dlq == []
+        assert store.escalated_dlq == []
+        assert push.sent == []
+
+    def test_retried_marker_without_persisted_match_keeps_retrying(self, tmp_path):
+        marker = "dev-1/FLAG_20260713_235900.marker"
+        store = FakeStore(
+            devices=[DEVICE],
+            pending_dlq={"dev-1": [DlqEntry(key=marker, kind="unmatched", attempts=1)]},
+            segment_rows={
+                "dev-1": [
+                    {
+                        "s3_key": "dev-1/20260713_090000.mp4",
+                        "recorded_at": "2026-07-13T09:00:00",
+                        "duration_sec": 300,
+                    }
+                ]
+            },
+        )
+        deps = make_deps(store, tmp_path)
+
+        run_nightly(deps, DAY)
+
+        assert store.flagged_segments == []
+        recorded = {e.key: e for _, e in store.recorded_dlq}
+        assert recorded[marker].attempts == 2

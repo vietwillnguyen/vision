@@ -6,7 +6,7 @@ on ``s3_key``, so persistence selects existing keys and splits into
 insert-new versus update-scores rather than relying on upsert.
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from pipeline.models import ScoreWeights
@@ -15,6 +15,7 @@ from pipeline.orchestrator import DeviceRecord, DlqEntry
 SEGMENTS_BUCKET = "segments"
 REELS_BUCKET = "reels"
 DLQ_TABLE = "pipeline_dlq"
+STORAGE_LIST_PAGE_SIZE = 100
 
 
 class SupabaseStore:
@@ -54,8 +55,21 @@ class SupabaseStore:
         ]
 
     def _list_bucket_names(self, device_id: str) -> list[str]:
-        objects = self._client.storage.from_(SEGMENTS_BUCKET).list(device_id)
-        return [obj["name"] for obj in objects]
+        names: list[str] = []
+        offset = 0
+        while True:
+            page = self._client.storage.from_(SEGMENTS_BUCKET).list(
+                device_id,
+                {
+                    "limit": STORAGE_LIST_PAGE_SIZE,
+                    "offset": offset,
+                    "sortBy": {"column": "name", "order": "asc"},
+                },
+            )
+            names.extend(obj["name"] for obj in page)
+            if len(page) < STORAGE_LIST_PAGE_SIZE:
+                return names
+            offset += STORAGE_LIST_PAGE_SIZE
 
     def fetch_score_weights(self, user_id: str) -> ScoreWeights:
         rows = (
@@ -106,11 +120,33 @@ class SupabaseStore:
 
     def upload_reel(self, device_id: str, day: date, local_path: Path) -> str:
         key = f"{device_id}/{day.strftime('%Y%m%d')}.mp4"
-        self._client.storage.from_(REELS_BUCKET).upload(key, local_path.read_bytes())
+        self._client.storage.from_(REELS_BUCKET).upload(
+            key, local_path.read_bytes(), file_options={"upsert": "true"}
+        )
         return key
 
     def insert_reel(self, row: dict) -> None:
-        self._client.table("reels").insert(row).execute()
+        self._client.table("reels").upsert(row, on_conflict="device_id,date").execute()
+
+    def list_segment_rows(self, device_id: str, day: date) -> list[dict]:
+        day_start = datetime.combine(day, datetime.min.time())
+        return (
+            self._client.table("segments")
+            .select("s3_key, recorded_at, duration_sec")
+            .eq("device_id", device_id)
+            .gte("recorded_at", day_start.isoformat())
+            .lt("recorded_at", (day_start + timedelta(days=1)).isoformat())
+            .execute()
+            .data
+        )
+
+    def flag_segment(self, s3_key: str) -> None:
+        (
+            self._client.table("segments")
+            .update({"manually_flagged": True})
+            .eq("s3_key", s3_key)
+            .execute()
+        )
 
     def load_pending_dlq(self, device_id: str) -> list[DlqEntry]:
         rows = (
@@ -127,6 +163,7 @@ class SupabaseStore:
         ]
 
     def record_dlq(self, device_id: str, entries: list[DlqEntry]) -> None:
+        now = datetime.now(timezone.utc).isoformat()
         self._client.table(DLQ_TABLE).upsert(
             [
                 {
@@ -135,6 +172,7 @@ class SupabaseStore:
                     "kind": entry.kind,
                     "attempts": entry.attempts,
                     "escalated": False,
+                    "updated_at": now,
                 }
                 for entry in entries
             ]

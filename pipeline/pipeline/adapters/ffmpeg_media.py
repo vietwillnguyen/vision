@@ -14,6 +14,17 @@ FRAME_HEIGHT = 90
 FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT
 SAMPLE_FPS = 1
 VISION_FRAME_COUNT = 3
+STDERR_TAIL_BYTES = 2000
+
+
+def run_captured(command: list[str]) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(command, check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        stderr_tail = (exc.stderr or b"")[-STDERR_TAIL_BYTES:].decode("utf-8", "replace")
+        raise RuntimeError(
+            f"{command[0]} exited with code {exc.returncode}: {stderr_tail}"
+        ) from exc
 
 
 def compute_frame_diffs_from_raw(raw: bytes, frame_size: int) -> list[float]:
@@ -73,31 +84,21 @@ def build_audio_extract_command(video_path: Path, audio_path: Path) -> list[str]
 
 class SubprocessRunner:
     def run(self, command: list[str]) -> None:
-        subprocess.run(command, check=True, capture_output=True)
+        run_captured(command)
 
 
 class FfmpegMediaProbe:
     def extract_audio(self, video_path: Path, workdir: Path) -> Path:
         audio_path = workdir / (video_path.stem + ".wav")
-        subprocess.run(
-            build_audio_extract_command(video_path, audio_path),
-            check=True,
-            capture_output=True,
-        )
+        run_captured(build_audio_extract_command(video_path, audio_path))
         return audio_path
 
     def extract_frame_diffs(self, video_path: Path) -> list[float]:
-        completed = subprocess.run(
-            build_raw_gray_command(video_path), check=True, capture_output=True
-        )
+        completed = run_captured(build_raw_gray_command(video_path))
         return compute_frame_diffs_from_raw(completed.stdout, FRAME_SIZE)
 
     def extract_frames(self, video_path: Path, workdir: Path) -> list[Path]:
         frames_dir = workdir / (video_path.stem + "_frames")
         frames_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            build_frame_extract_command(video_path, frames_dir),
-            check=True,
-            capture_output=True,
-        )
+        run_captured(build_frame_extract_command(video_path, frames_dir))
         return sorted(frames_dir.glob("frame_*.jpg"))
