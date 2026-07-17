@@ -118,9 +118,10 @@ A single Python systemd service manages the full device lifecycle.
 1. PiJuice powers on Pi; systemd starts `visio-recorder` with `EnvironmentFile=/etc/visio-recorder.env` supplying Supabase credentials and the data-dir/segment/framerate tunables.
 2. Check battery level via PiJuice API. If below the halt threshold (<10%), flash LED red and exit 0 without recording; below the 20% low-battery threshold, proceed but show the low-battery LED throughout.
 3. First boot only (no session file on disk yet): scan a QR code via `rpicam-still` + zbar to onboard WiFi (writes the NetworkManager keyfile) and Supabase auth, up to 60 attempts; exit 1 if onboarding never succeeds.
+   Then activate the connection (`nmcli connection reload` + `nmcli connection up visio`); on activation failure, flash the Critical red LED and exit 1 so systemd retries.
 4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
 5. Flush any pending upload queue left over from a previous run.
-6. Begin rolling H.264 recording via `rpicam-vid`.
+6. Register the GPIO 17 flag-button listener, then begin rolling H.264 recording via `rpicam-vid`.
 
 **Recording loop (as-built):**
 
@@ -137,8 +138,9 @@ A single press inserts a `FLAG_YYYYMMDD_HHMMSS.marker` file into the upload queu
 The cloud pipeline reads this marker and boosts the composite score for the surrounding timestamp.
 Flagged moments are always included in the highlight reel.
 
-**As-built gap:** `firmware/visio_recorder/flag_button.py` implements `write_flag_marker` (Epic 1) but nothing in the Epic 5 daemon glue plan wires a GPIO button-press listener to call it from `main()` - the button is not yet functional on the running daemon.
-This needs a task before the Epic 5 hardware checklist's flag-button smoke test can pass.
+**As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler writes the marker and uploads it immediately, so it reaches the pipeline before that night's run.
+Presses within a 2-second cooldown of the last accepted press are dropped (switch bounce and accidental double-taps).
+If the immediate upload fails, the marker stays in the upload queue and the next boot's flush retries it - the same retry contract as segments.
 
 **LED state machine:**
 
@@ -159,9 +161,8 @@ This avoids needing to configure a captive portal or AP mode (`hostapd`).
 
 **As-built deviation:** the daemon writes a NetworkManager keyfile (`/etc/NetworkManager/system-connections/visio.nmconnection`) instead of `wpa_supplicant.conf`, because stock Raspberry Pi OS Bookworm uses NetworkManager and does not honor `wpa_supplicant.conf`.
 
-**As-built gap:** writing the keyfile does not activate it - nothing in `main()` runs `nmcli connection reload`/`up` or reboots the device.
-On a genuine first boot the daemon currently proceeds straight to building the Supabase clients, which need network, and only recovers once NetworkManager's own file-watch picks up the keyfile and systemd's `Restart=on-failure` retries.
-This is unclean and untested off-hardware; Epic 5 needs an explicit activation step (or reboot) here, not reliance on crash-restart.
+**As-built activation:** after onboarding writes the keyfile, `main()` runs `nmcli connection reload` then `nmcli connection up visio` (behind a `ConnectionActivator` protocol with a subprocess-backed real implementation).
+On activation failure the daemon flashes the Critical red LED and exits 1; the keyfile and session are already on disk, so systemd's `Restart=on-failure` plus NetworkManager autoconnect retry from there rather than re-running onboarding.
 
 ### Device Status Reporting
 

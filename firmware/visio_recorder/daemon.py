@@ -11,10 +11,20 @@ from pathlib import Path
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import record_segment
 from visio_recorder.device_identity import load_or_create_device_id, register_device
-from visio_recorder.drivers import PiJuiceBatteryReader, Ws2812LedDriver
+from visio_recorder.drivers import (
+    GpioZeroFlagButton,
+    PiJuiceBatteryReader,
+    Ws2812LedDriver,
+)
+from visio_recorder.flag_button import make_flag_press_handler
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
-from visio_recorder.onboarding import RpicamZbarScanner, run_onboarding
+from visio_recorder.onboarding import (
+    NmcliConnectionActivator,
+    RpicamZbarScanner,
+    activate_connection,
+    run_onboarding,
+)
 from visio_recorder.recording_loop import (
     UPLOAD_FAILURES_TO_CRITICAL,
     DiskStatsReader,
@@ -31,6 +41,7 @@ _DEFAULT_SEGMENT_DURATION_MS = "300000"
 _DEFAULT_FRAMERATE = "30"
 _ONBOARDING_MAX_ATTEMPTS = 60
 _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
+_NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
 _DEVICE_NAME = "visio-pendant"
 
 _logger = logging.getLogger(__name__)
@@ -208,6 +219,12 @@ def main() -> int:
         )
         if payload is None:
             return 1
+        if not activate_connection(
+            NmcliConnectionActivator(), _NM_CONNECTION_ID, led_driver
+        ):
+            # Keyfile and session are on disk; systemd's Restart=on-failure
+            # plus NetworkManager autoconnect retry from here.
+            return 1
 
     device_id = load_or_create_device_id(state_path)
 
@@ -228,6 +245,17 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+
+    # Held for the daemon's lifetime: gpiozero releases the pin (and the
+    # callback) when the Button object is garbage collected.
+    flag_button = GpioZeroFlagButton()
+    flag_button.on_press(
+        make_flag_press_handler(
+            queue_dir=queue_dir,
+            storage_client=clients.storage,
+            device_id=device_id,
+        )
+    )
 
     deps = LoopDeps(
         command_runner=SubprocessCommandRunner(),

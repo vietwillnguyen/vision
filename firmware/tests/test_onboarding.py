@@ -1,6 +1,13 @@
 import json
 
-from visio_recorder.onboarding import run_onboarding
+from visio_recorder.led import LedPattern
+from visio_recorder.onboarding import (
+    NmcliConnectionActivator,
+    activate_connection,
+    run_onboarding,
+)
+
+from tests.fakes import FakeCommandRunner, FakeLedDriver
 
 VALID_PAYLOAD = json.dumps(
     {
@@ -64,3 +71,38 @@ def test_run_onboarding_gives_up_after_max_attempts(tmp_path):
 
     assert payload is None
     assert not (tmp_path / "k").exists()
+
+
+def test_nmcli_activator_runs_reload_then_up_in_order():
+    runner = FakeCommandRunner()
+    activator = NmcliConnectionActivator(runner)
+
+    activator.activate("visio")
+
+    assert runner.calls == [
+        ["nmcli", "connection", "reload"],
+        ["nmcli", "connection", "up", "visio"],
+    ]
+
+
+def test_activate_connection_returns_true_and_leaves_led_alone_on_success():
+    led = FakeLedDriver()
+
+    ok = activate_connection(NmcliConnectionActivator(FakeCommandRunner()), "visio", led)
+
+    assert ok is True
+    assert led.calls == []
+
+
+class RaisingActivator:
+    def activate(self, connection_id: str) -> None:
+        raise RuntimeError("nmcli failed")
+
+
+def test_activate_connection_surfaces_failure_via_critical_led():
+    led = FakeLedDriver()
+
+    ok = activate_connection(RaisingActivator(), "visio", led)
+
+    assert ok is False
+    assert led.calls == [((255, 0, 0), LedPattern.FLASHING)]
