@@ -16,6 +16,8 @@
 > - Bucket inserts use `on conflict (id) do nothing` and storage policies qualify `objects.name`.
 > - An extra migration (`20260704120800_add_fk_indexes.sql`) adds indexes on `devices.user_id`, `segments.device_id`, and `reels.device_id`.
 > - `supabase migration up` is run between the red and green test steps to apply each new migration.
+>
+> Later epics extended the schema beyond this plan's scope: `20260710090000_grant_device_status_writes.sql` (firmware daemon writes its own status row as `authenticated`) and, for the pipeline's nightly orchestrator (issue #5), `20260716090000_create_pipeline_dlq.sql` (service_role-only DLQ table) and `20260716100000_add_reels_device_date_unique.sql` (one reel per device per day, so re-runs upsert).
 
 ## Global Constraints
 

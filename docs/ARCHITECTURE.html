@@ -24,7 +24,7 @@
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
-<!-- source-sha256: 5778ddf66deddb26ee98845cafab22a08aec8261f490959264737086e0538113 -->
+<!-- source-sha256: bbcdfcd44e3ade727eda389a31fa361d2094b4195829f1371afebd5014e5380a -->
 <!-- source-file: docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- regenerated-at: 2026-07-12 (spec-sync) -->
 
@@ -154,7 +154,7 @@ flowchart TD
             <td class="font-semibold">5 — Integration &amp; E2E</td>
             <td colspan="2">
               <div class="flex flex-wrap gap-2">
-                <span class="badge badge-warning badge-soft">#5 orchestrator — open</span>
+                <span class="badge badge-success badge-soft">#5 orchestrator — landed (nightly-reel workflow)</span>
                 <span class="badge badge-info badge-soft">#7 daemon glue — PR #15 open, awaiting merge</span>
                 <span class="badge badge-warning badge-soft">#8 app screen wiring — open</span>
                 <span class="badge badge-success badge-soft">#9 FLAG date fix — merged (PR #13)</span>
@@ -236,8 +236,9 @@ flowchart TD
           <tr><td class="font-mono">devices</td><td>device_id, user_id, name, created_at</td></tr>
           <tr><td class="font-mono">device_status</td><td>device_id, battery_pct, storage_used_gb, storage_free_gb, segments_pending, segments_uploaded_today, recording_active, updated_at</td></tr>
           <tr><td class="font-mono">segments</td><td>id, device_id, recorded_at, duration_sec, s3_key, motion_score, audio_score, scene_score, composite_score, manually_flagged, user_feedback</td></tr>
-          <tr><td class="font-mono">reels</td><td>id, device_id, date, s3_key, duration_sec, style, created_at</td></tr>
+          <tr><td class="font-mono">reels</td><td>id, device_id, date, s3_key, duration_sec, style, created_at; unique (device_id, date) so same-day pipeline re-runs upsert</td></tr>
           <tr><td class="font-mono">score_weights</td><td>user_id, scene_weight, audio_weight, motion_weight (default 0.4/0.3/0.2)</td></tr>
+          <tr><td class="font-mono">pipeline_dlq</td><td>device_id, key, kind (rejected|unmatched), attempts, escalated, updated_at; service_role-only (RLS enabled, no policies) nightly-pipeline DLQ</td></tr>
         </tbody>
       </table>
     </div>
@@ -263,6 +264,9 @@ flowchart TD
 score = base_score * 1.5  (if manually flagged)
       | base_score         (otherwise)</code></pre>
       <p class="text-xs text-base-content/60 mt-2">Weights are per-user, stored in <span class="font-mono">score_weights</span>, tunable via the mobile app.</p>
+    </div>
+    <div class="alert alert-info alert-soft text-sm" role="alert">
+      <span><strong>Trigger (as-built):</strong> the pipeline runs as the <span class="font-mono text-xs bg-base-200 rounded px-1">nightly-reel</span> GitHub Actions workflow - nightly cron at 19:00 UTC (02:00 device-local ICT), plus <span class="font-mono text-xs bg-base-200 rounded px-1">workflow_dispatch</span> with an optional <span class="font-mono text-xs bg-base-200 rounded px-1">day</span> input for manual runs. Supabase Edge Functions were ruled out (pipeline is Python + FFmpeg; Edge Functions run Deno), and the spec's pending-segment-count threshold trigger is not implemented. Keys a run cannot process land in <span class="font-mono text-xs bg-base-200 rounded px-1">pipeline_dlq</span> for nightly retry; after 5 attempts the key is escalated and the device owner is notified via push.</span>
     </div>
   </section>
 
