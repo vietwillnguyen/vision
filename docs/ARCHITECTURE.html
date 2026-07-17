@@ -24,7 +24,7 @@
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
-<!-- source-sha256: 800d2919274bb5e197e0bc60c43cf65d84fa2aa1b0961253ef2c171b39f8fe98 -->
+<!-- source-sha256: 741bf51391d90b333709938b5d3a3af345dabc15fec72b4b744a6c4bc7fa4adc -->
 <!-- source-file: docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- regenerated-at: 2026-07-12 (spec-sync) -->
 
@@ -185,12 +185,13 @@ flowchart TD
   D -- "succeeds" --> D2["nmcli connection reload<br/>+ up visio"]
   D2 -- "activation fails" --> D3["CRITICAL LED, exit 1<br/>(systemd retries)"]
   D2 -- ok --> E
-  C -- yes --> E["load_or_create_device_id"]
+  C -- yes --> C1["best-effort nmcli reload + up<br/>(if keyfile exists; never fatal)"]
+  C1 --> E["load_or_create_device_id"]
   E --> F{"device_registered marker exists?"}
   F -- no --> G["register_device, then touch marker"]
   F -- yes --> H
   G --> H["flush_pending queue"]
-  H --> I0["register GPIO 17 flag-button listener"]
+  H --> I0["start flag-upload worker,<br/>register GPIO 17 flag-button listener"]
   I0 --> I["run_recording_loop"]
         </pre>
       </div>
@@ -224,10 +225,10 @@ flowchart TD
     <h2 class="text-2xl font-bold">As-built gaps</h2>
     <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed. Both previously tracked firmware gaps are now closed:</p>
     <div class="alert alert-success alert-soft" role="alert">
-      <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span> and uploads it immediately; a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for next-boot flush — the same retry contract as segments.</span>
+      <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, and hands it to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread never touches the network); a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for next-boot flush - the same retry contract as segments.</span>
     </div>
     <div class="alert alert-success alert-soft" role="alert">
-      <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there.</span>
+      <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
     </div>
   </section>
 

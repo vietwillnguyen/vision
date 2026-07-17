@@ -4,6 +4,7 @@ from visio_recorder.led import LedPattern
 from visio_recorder.onboarding import (
     NmcliConnectionActivator,
     activate_connection,
+    reactivate_connection_if_configured,
     run_onboarding,
 )
 
@@ -106,3 +107,39 @@ def test_activate_connection_surfaces_failure_via_critical_led():
 
     assert ok is False
     assert led.calls == [((255, 0, 0), LedPattern.FLASHING)]
+
+
+def test_reactivate_retries_reload_and_up_when_keyfile_exists(tmp_path):
+    # Restart boots must retry activation: a failed first-boot reload leaves
+    # the profile unloaded, and NM does not pick up dropped-in keyfiles alone.
+    keyfile = tmp_path / "visio.nmconnection"
+    keyfile.touch()
+    runner = FakeCommandRunner()
+
+    reactivate_connection_if_configured(
+        NmcliConnectionActivator(runner), "visio", keyfile
+    )
+
+    assert runner.calls == [
+        ["nmcli", "connection", "reload"],
+        ["nmcli", "connection", "up", "visio"],
+    ]
+
+
+def test_reactivate_does_nothing_when_keyfile_is_missing(tmp_path):
+    runner = FakeCommandRunner()
+
+    reactivate_connection_if_configured(
+        NmcliConnectionActivator(runner), "visio", tmp_path / "missing.nmconnection"
+    )
+
+    assert runner.calls == []
+
+
+def test_reactivate_swallows_activation_failure(tmp_path):
+    keyfile = tmp_path / "visio.nmconnection"
+    keyfile.touch()
+
+    # Best-effort: a restart boot may already be online via autoconnect, so a
+    # failed retry must not raise (or crash the daemon before flush/recording).
+    reactivate_connection_if_configured(RaisingActivator(), "visio", keyfile)

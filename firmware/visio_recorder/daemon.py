@@ -16,13 +16,14 @@ from visio_recorder.drivers import (
     PiJuiceBatteryReader,
     Ws2812LedDriver,
 )
-from visio_recorder.flag_button import make_flag_press_handler
+from visio_recorder.flag_button import FlagUploadWorker, make_flag_press_handler
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
 from visio_recorder.onboarding import (
     NmcliConnectionActivator,
     RpicamZbarScanner,
     activate_connection,
+    reactivate_connection_if_configured,
     run_onboarding,
 )
 from visio_recorder.recording_loop import (
@@ -225,6 +226,10 @@ def main() -> int:
             # Keyfile and session are on disk; systemd's Restart=on-failure
             # plus NetworkManager autoconnect retry from here.
             return 1
+    else:
+        reactivate_connection_if_configured(
+            NmcliConnectionActivator(), _NM_CONNECTION_ID, _NM_KEYFILE_PATH
+        )
 
     device_id = load_or_create_device_id(state_path)
 
@@ -248,12 +253,12 @@ def main() -> int:
 
     # Held for the daemon's lifetime: gpiozero releases the pin (and the
     # callback) when the Button object is garbage collected.
+    flag_upload_worker = FlagUploadWorker(clients.storage, device_id)
     flag_button = GpioZeroFlagButton()
     flag_button.on_press(
         make_flag_press_handler(
             queue_dir=queue_dir,
-            storage_client=clients.storage,
-            device_id=device_id,
+            submit=flag_upload_worker.submit,
         )
     )
 
@@ -270,7 +275,10 @@ def main() -> int:
         segment_duration_ms=config.segment_duration_ms,
         framerate=config.framerate,
     )
-    run_recording_loop(deps, stop)
+    try:
+        run_recording_loop(deps, stop)
+    finally:
+        flag_upload_worker.stop()
     return 0
 
 

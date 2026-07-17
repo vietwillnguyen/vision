@@ -119,6 +119,7 @@ A single Python systemd service manages the full device lifecycle.
 2. Check battery level via PiJuice API. If below the halt threshold (<10%), flash LED red and exit 0 without recording; below the 20% low-battery threshold, proceed but show the low-battery LED throughout.
 3. First boot only (no session file on disk yet): scan a QR code via `rpicam-still` + zbar to onboard WiFi (writes the NetworkManager keyfile) and Supabase auth, up to 60 attempts; exit 1 if onboarding never succeeds.
    Then activate the connection (`nmcli connection reload` + `nmcli connection up visio`); on activation failure, flash the Critical red LED and exit 1 so systemd retries.
+   On restart boots (session file already on disk), the same reload/up runs again as a best-effort retry whenever the keyfile exists, so a first boot whose activation failed is not stranded offline; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
 4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
 5. Flush any pending upload queue left over from a previous run.
 6. Register the GPIO 17 flag-button listener, then begin rolling H.264 recording via `rpicam-vid`.
@@ -138,7 +139,8 @@ A single press inserts a `FLAG_YYYYMMDD_HHMMSS.marker` file into the upload queu
 The cloud pipeline reads this marker and boosts the composite score for the surrounding timestamp.
 Flagged moments are always included in the highlight reel.
 
-**As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler writes the marker and uploads it immediately, so it reaches the pipeline before that night's run.
+**As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler only debounces, writes the marker, and hands the path to a dedicated flag-upload worker thread, keeping gpiozero's callback thread off the network so later presses are never delayed by a slow upload.
+The worker uploads each marker immediately as it arrives, so it reaches the pipeline before that night's run.
 Presses within a 2-second cooldown of the last accepted press are dropped (switch bounce and accidental double-taps).
 If the immediate upload fails, the marker stays in the upload queue and the next boot's flush retries it - the same retry contract as segments.
 
@@ -163,6 +165,7 @@ This avoids needing to configure a captive portal or AP mode (`hostapd`).
 
 **As-built activation:** after onboarding writes the keyfile, `main()` runs `nmcli connection reload` then `nmcli connection up visio` (behind a `ConnectionActivator` protocol with a subprocess-backed real implementation).
 On activation failure the daemon flashes the Critical red LED and exits 1; the keyfile and session are already on disk, so systemd's `Restart=on-failure` plus NetworkManager autoconnect retry from there rather than re-running onboarding.
+Because NetworkManager does not reliably load dropped-in keyfiles on its own, restart boots also retry the reload/up best-effort whenever the keyfile exists; that retry never fails the boot.
 
 ### Device Status Reporting
 

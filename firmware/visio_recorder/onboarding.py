@@ -84,6 +84,28 @@ class NmcliConnectionActivator:
         self._runner.run(["nmcli", "connection", "up", connection_id])
 
 
+def reactivate_connection_if_configured(
+    activator: ConnectionActivator, connection_id: str, nm_keyfile_path: Path
+) -> None:
+    """Best-effort activation retry for restart boots.
+
+    A first boot can fail activation after the keyfile is written (e.g. the
+    daemon races NetworkManager coming up), and NM does not reliably load
+    dropped-in keyfiles on its own, so restart boots retry reload/up whenever
+    the keyfile exists. Failure is logged but never fatal: the device may
+    already be online via autoconnect.
+    """
+    if not nm_keyfile_path.exists():
+        return
+    try:
+        activator.activate(connection_id)
+    except Exception:
+        _logger.exception(
+            "best-effort reactivation of NetworkManager connection %r failed",
+            connection_id,
+        )
+
+
 def activate_connection(
     activator: ConnectionActivator, connection_id: str, led_driver: LedDriver
 ) -> bool:

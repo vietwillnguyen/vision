@@ -1,4 +1,6 @@
 import logging
+import queue
+import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,10 +25,53 @@ def write_flag_marker(queue_dir: Path, pressed_at: datetime) -> Path:
     return marker_path
 
 
+class FlagUploadWorker:
+    """Owns every flag-marker upload on a single dedicated thread.
+
+    Press callbacks run on gpiozero's internal callback thread, which must
+    never block on the network (a slow upload would delay detection of later
+    presses), so they only hand the marker path over via ``submit``. The
+    marker is still uploaded immediately - as soon as this thread picks it
+    up - so it reaches the pipeline before tonight's run. On upload failure
+    the marker stays in the queue dir, where the next boot's
+    ``flush_pending`` retries it - the same retry contract as segments.
+    """
+
+    def __init__(self, storage_client: StorageClient, device_id: str) -> None:
+        self._storage_client = storage_client
+        self._device_id = device_id
+        self._work: "queue.Queue[Path | None]" = queue.Queue()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def submit(self, marker_path: Path) -> None:
+        self._work.put(marker_path)
+
+    def stop(self) -> None:
+        """Drain queued markers, then join the worker thread."""
+        self._work.put(None)
+        self._thread.join()
+
+    def _run(self) -> None:
+        while True:
+            item = self._work.get()
+            if item is None:
+                return
+            try:
+                upload_segment(self._storage_client, self._device_id, item)
+            except Exception:
+                _logger.exception(
+                    "flag marker upload failed; %s stays queued for "
+                    "next-boot flush",
+                    item,
+                )
+                continue
+            mark_uploaded(item)
+
+
 def make_flag_press_handler(
     queue_dir: Path,
-    storage_client: StorageClient,
-    device_id: str,
+    submit: Callable[[Path], None],
     clock: Callable[[], datetime] = datetime.now,
     cooldown: timedelta = FLAG_PRESS_COOLDOWN,
 ) -> Callable[[], None]:
@@ -34,10 +79,9 @@ def make_flag_press_handler(
 
     Presses inside ``cooldown`` of the last accepted press are dropped (switch
     bounce and accidental double-taps; second-resolution marker names collide
-    anyway). The marker is uploaded immediately so it reaches the pipeline
-    before tonight's run; on upload failure it stays in ``queue_dir``, where
-    the next boot's ``flush_pending`` retries it - the same retry contract as
-    segments.
+    anyway). The callback only debounces, writes the marker, and hands the
+    path to ``submit`` (the flag-upload worker); it never touches the network
+    itself, so gpiozero's callback thread stays responsive.
     """
     last_accepted: datetime | None = None
 
@@ -48,14 +92,6 @@ def make_flag_press_handler(
             return
         last_accepted = pressed_at
         marker_path = write_flag_marker(queue_dir, pressed_at)
-        try:
-            upload_segment(storage_client, device_id, marker_path)
-        except Exception:
-            _logger.exception(
-                "flag marker upload failed; %s stays queued for next-boot flush",
-                marker_path,
-            )
-            return
-        mark_uploaded(marker_path)
+        submit(marker_path)
 
     return on_press
