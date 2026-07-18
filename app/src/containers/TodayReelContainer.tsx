@@ -20,7 +20,9 @@ export function TodayReelContainer({ client, deviceId, now = () => new Date() }:
   const reelState = useReel(client, deviceId, today);
   const signedUrl = useSignedUrl(
     client,
-    reelState.kind === 'ready' ? buildReelSignedUrlRequest(reelState.reel.s3Key) : null,
+    reelState.kind === 'ready' && reelState.reel.s3Key
+      ? buildReelSignedUrlRequest(reelState.reel.s3Key)
+      : null,
   );
 
   if (reelState.kind === 'loading') {
