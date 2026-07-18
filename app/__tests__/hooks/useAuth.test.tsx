@@ -28,12 +28,33 @@ function fakeAuthClient(initialSession: Session | null) {
   };
 }
 
+function fakeAuthClientWithFailingSession(error: Error) {
+  const client = {
+    auth: {
+      getSession: () => Promise.reject(error),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: jest.fn() } } }),
+      signInWithPassword: jest.fn(),
+      signOut: jest.fn().mockResolvedValue({ error: null }),
+    },
+  } as unknown as SupabaseClient;
+  return { client };
+}
+
 describe('useAuth', () => {
   it('starts loading then resolves to signed-out without a session', async () => {
     const { client } = fakeAuthClient(null);
     const { result } = renderHook(() => useAuth(client));
     expect(result.current.state).toEqual({ kind: 'loading' });
     await waitFor(() => expect(result.current.state).toEqual({ kind: 'signed-out' }));
+  });
+
+  it('falls back to signed-out when getSession rejects', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { client } = fakeAuthClientWithFailingSession(new Error('AsyncStorage unavailable'));
+    const { result } = renderHook(() => useAuth(client));
+    expect(result.current.state).toEqual({ kind: 'loading' });
+    await waitFor(() => expect(result.current.state).toEqual({ kind: 'signed-out' }));
+    errorSpy.mockRestore();
   });
 
   it('restores a persisted session', async () => {

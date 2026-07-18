@@ -16,11 +16,19 @@ export function useAuth(client: SupabaseClient): {
   useEffect(() => {
     let isMounted = true;
 
-    client.auth.getSession().then(({ data: { session } }) => {
-      if (isMounted) {
-        setState(session ? { kind: 'signed-in', session } : { kind: 'signed-out' });
-      }
-    });
+    client.auth.getSession().then(
+      ({ data: { session } }) => {
+        if (isMounted) {
+          setState(session ? { kind: 'signed-in', session } : { kind: 'signed-out' });
+        }
+      },
+      (error: unknown) => {
+        console.error('useAuth: getSession failed', error);
+        if (isMounted) {
+          setState({ kind: 'signed-out' });
+        }
+      },
+    );
 
     const {
       data: { subscription },

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { Directory, File, Paths } from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import React, { useMemo, useState } from 'react';
 import { Alert, Share, StyleSheet, Text, View } from 'react-native';
@@ -22,7 +22,7 @@ interface RawFootageContainerProps {
 }
 
 export function RawFootageContainer({ client, deviceId, now = () => new Date() }: RawFootageContainerProps) {
-  const dayStart = useMemo(() => toUtcMidnight(now()), [now]);
+  const [dayStart] = useState(() => toUtcMidnight(now()));
   const { state, setUserFeedback } = useSegments(client, deviceId, dayStart.toISOString());
   const [selected, setSelected] = useState<Segment | null>(null);
 
@@ -56,7 +56,10 @@ export function RawFootageContainer({ client, deviceId, now = () => new Date() }
         Alert.alert('Permission needed', 'Allow photo library access to save segments.');
         return;
       }
-      const file = await File.downloadFileAsync(previewUrl, new Directory(Paths.cache));
+      const file = await File.downloadFileAsync(
+        previewUrl,
+        new File(Paths.cache, `${selected.id}-${Date.now()}.mp4`),
+      );
       await MediaLibrary.saveToLibraryAsync(file.uri);
       Alert.alert('Saved', 'Segment saved to your camera roll.');
     } catch (error) {

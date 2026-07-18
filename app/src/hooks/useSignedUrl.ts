@@ -23,9 +23,12 @@ export function useSignedUrl(
       .from(bucket)
       .createSignedUrl(path, expiresInSec)
       .then(
-        ({ data }: { data: { signedUrl: string } | null }) => {
-          if (isMounted && data) {
+        ({ data, error }: { data: { signedUrl: string } | null; error?: unknown }) => {
+          if (!isMounted) return;
+          if (data) {
             setUrl(data.signedUrl);
+          } else {
+            console.warn('useSignedUrl: signing failed', error);
           }
         },
         (error: unknown) => {

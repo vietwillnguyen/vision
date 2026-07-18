@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { Button, Share, StyleSheet, Text, View } from 'react-native';
 
 import { ReelPlayer } from '../components/ReelPlayer';
@@ -22,7 +22,7 @@ interface ArchiveContainerProps {
 export function ArchiveContainer({ client, deviceId, now = () => new Date() }: ArchiveContainerProps) {
   // buildHeatmapCells assumes UTC-midnight-aligned bounds; normalize before calling it
   // or users west of UTC get off-by-one day cells.
-  const { start, end } = useMemo(() => utcRangeEndingAt(now(), HEATMAP_DAYS), [now]);
+  const [{ start, end }] = useState(() => utcRangeEndingAt(now(), HEATMAP_DAYS));
   const reelsState = useReelsInRange(client, deviceId, utcDateString(start), utcDateString(end));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const selectedReel = useReel(client, deviceId, selectedDate);

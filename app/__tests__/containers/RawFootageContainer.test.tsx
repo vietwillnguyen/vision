@@ -17,11 +17,29 @@ jest.mock('expo-media-library', () => ({
   requestPermissionsAsync: jest.fn(() => Promise.resolve({ granted: true })),
   saveToLibraryAsync: jest.fn(() => Promise.resolve()),
 }));
-jest.mock('expo-file-system', () => ({
-  File: { downloadFileAsync: jest.fn(() => Promise.resolve({ uri: 'file:///cache/s1.mp4' })) },
-  Directory: jest.fn(),
-  Paths: { cache: 'file:///cache/' },
-}));
+const downloadDestinations: unknown[] = [];
+
+jest.mock('expo-file-system', () => {
+  class MockFile {
+    directory: unknown;
+    name: unknown;
+    constructor(directory: unknown, name?: unknown) {
+      this.directory = directory;
+      this.name = name;
+    }
+  }
+  const downloadFileAsync = jest.fn((_url: string, destination: MockFile) => {
+    downloadDestinations.push(destination);
+    return Promise.resolve({ uri: `file:///cache/${destination.name ?? 's1'}` });
+  });
+  (MockFile as unknown as { downloadFileAsync: typeof downloadFileAsync }).downloadFileAsync =
+    downloadFileAsync;
+  return {
+    File: MockFile,
+    Directory: jest.fn(),
+    Paths: { cache: 'file:///cache/' },
+  };
+});
 
 import { RawFootageContainer } from '../../src/containers/RawFootageContainer';
 
@@ -103,6 +121,31 @@ describe('RawFootageContainer', () => {
     const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
     buttons.find((b) => b.text === 'Preview')?.onPress?.();
     await waitFor(() => expect(screen.getByTestId('segment-preview')).toBeTruthy());
+    alertSpy.mockRestore();
+  });
+
+  it('saves the same segment twice without a destination collision', async () => {
+    downloadDestinations.length = 0;
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const { client } = fakeClient();
+    render(
+      <RawFootageContainer client={client} deviceId="dev-1" now={() => new Date('2026-07-18T15:00:00Z')} />,
+    );
+    await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
+    fireEvent(screen.getByTestId('slot-480'), 'longPress');
+    const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
+    buttons.find((b) => b.text === 'Preview')?.onPress?.();
+    await waitFor(() => expect(screen.getByTestId('segment-preview')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('video-view')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('save-button'));
+    await waitFor(() => expect(downloadDestinations).toHaveLength(1));
+    fireEvent.press(screen.getByTestId('save-button'));
+    await waitFor(() => expect(downloadDestinations).toHaveLength(2));
+
+    const names = downloadDestinations.map((d) => (d as { name: string }).name);
+    expect(new Set(names).size).toBe(2);
+    expect(names[0]).toMatch(/^s1-\d+\.mp4$/);
     alertSpy.mockRestore();
   });
 });
