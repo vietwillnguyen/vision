@@ -66,9 +66,7 @@ def test_run_onboarding_treats_invalid_credentials_as_failed_attempt(tmp_path):
 def test_run_onboarding_gives_up_after_max_attempts(tmp_path):
     scanner = FakeScanner([None, "garbage"])
 
-    payload = run_onboarding(
-        scanner, tmp_path / "k", tmp_path / "s", max_attempts=2
-    )
+    payload = run_onboarding(scanner, tmp_path / "k", tmp_path / "s", max_attempts=2)
 
     assert payload is None
     assert not (tmp_path / "k").exists()
@@ -89,7 +87,9 @@ def test_nmcli_activator_runs_reload_then_up_in_order():
 def test_activate_connection_returns_true_and_leaves_led_alone_on_success():
     led = FakeLedDriver()
 
-    ok = activate_connection(NmcliConnectionActivator(FakeCommandRunner()), "visio", led)
+    ok = activate_connection(
+        NmcliConnectionActivator(FakeCommandRunner()), "visio", led
+    )
 
     assert ok is True
     assert led.calls == []

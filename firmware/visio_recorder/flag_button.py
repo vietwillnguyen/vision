@@ -61,8 +61,7 @@ class FlagUploadWorker:
                 upload_segment(self._storage_client, self._device_id, item)
             except Exception:
                 _logger.exception(
-                    "flag marker upload failed; %s stays queued for "
-                    "next-boot flush",
+                    "flag marker upload failed; %s stays queued for next-boot flush",
                     item,
                 )
                 continue

@@ -147,9 +147,7 @@ def test_worker_keeps_uploading_after_a_failure(tmp_path):
             self.uploaded: list[str] = []
             self._failed_once = False
 
-        def upload(
-            self, bucket: str, object_path: str, local_path: Path
-        ) -> None:
+        def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
             if not self._failed_once:
                 self._failed_once = True
                 raise RuntimeError("network down")
