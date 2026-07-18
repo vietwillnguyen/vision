@@ -15,6 +15,29 @@ export function useSlotThumbnails(
   useEffect(() => {
     let cancelled = false;
 
+    // Rebuild the visible map from the current slots so thumbnails for
+    // segments that are no longer present get pruned immediately, while
+    // the segment-id cache is kept around for extraction dedupe.
+    setThumbnails((prev) => {
+      const next: Record<number, string> = {};
+      for (const slot of slots) {
+        if (!slot.segment) continue;
+        const cached = cache.current.get(slot.segment.id);
+        if (cached) {
+          next[slot.startMinute] = cached;
+        }
+      }
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      if (
+        prevKeys.length === nextKeys.length &&
+        prevKeys.every((key) => prev[Number(key)] === next[Number(key)])
+      ) {
+        return prev;
+      }
+      return next;
+    });
+
     (async () => {
       for (const slot of slots) {
         if (!slot.segment) continue;
