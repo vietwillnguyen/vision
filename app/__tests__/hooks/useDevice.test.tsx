@@ -22,14 +22,14 @@ describe('useDevice', () => {
   });
 
   it('resolves none when the user has no devices', async () => {
-    const { result } = renderHook(() => useDevice(fakeClient({ data: [], error: null })));
+    const client = fakeClient({ data: [], error: null });
+    const { result } = renderHook(() => useDevice(client));
     await waitFor(() => expect(result.current).toEqual({ kind: 'none' }));
   });
 
   it('surfaces query errors', async () => {
-    const { result } = renderHook(() =>
-      useDevice(fakeClient({ data: null, error: { message: 'boom' } })),
-    );
+    const client = fakeClient({ data: null, error: { message: 'boom' } });
+    const { result } = renderHook(() => useDevice(client));
     await waitFor(() => expect(result.current).toEqual({ kind: 'error', message: 'boom' }));
   });
 });

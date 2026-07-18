@@ -12,6 +12,7 @@ export function useDevice(client: SupabaseClient): DeviceState {
 
   useEffect(() => {
     let isMounted = true;
+    setState({ kind: 'loading' });
 
     client
       .from('devices')
