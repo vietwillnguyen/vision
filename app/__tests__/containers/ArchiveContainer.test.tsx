@@ -20,17 +20,48 @@ const REEL_ROW = {
   style: 'clean',
 };
 
-function fakeClient() {
+const REEL_ROW_EMPTY_KEY = {
+  id: 'r2',
+  date: '2026-07-09',
+  s3_key: '',
+  duration_sec: 60,
+  style: 'clean',
+};
+
+function fakeClient(options?: { reelsInRange?: unknown[]; singleReelData?: unknown; singleReelError?: { message: string } }) {
+  const reelsInRangeData = options?.reelsInRange ?? [REEL_ROW];
+  const singleReelData = options?.singleReelData ?? REEL_ROW;
+  const singleReelError = options?.singleReelError ?? null;
+
+  let queryType: 'range' | 'single' = 'range';
+
   const chain = {
     select: () => chain,
     eq: () => chain,
-    gte: () => chain,
-    lte: () => chain,
-    order: () => chain,
-    limit: () => Promise.resolve({ data: [REEL_ROW], error: null }),
-    then: (onFulfilled: (v: { data: unknown; error: null }) => unknown) =>
-      Promise.resolve({ data: [REEL_ROW], error: null }).then(onFulfilled),
+    gte: () => {
+      queryType = 'range';
+      return chain;
+    },
+    lte: () => {
+      queryType = 'range';
+      return chain;
+    },
+    order: () => {
+      queryType = 'single';
+      return chain;
+    },
+    limit: () => {
+      const data = queryType === 'range' ? reelsInRangeData : singleReelData ? [singleReelData] : null;
+      const error = queryType === 'range' ? null : singleReelError;
+      return Promise.resolve({ data, error });
+    },
+    then: (onFulfilled: (v: { data: unknown; error: unknown }) => unknown) => {
+      const data = queryType === 'range' ? reelsInRangeData : singleReelData ? [singleReelData] : null;
+      const error = queryType === 'range' ? null : singleReelError;
+      return Promise.resolve({ data, error }).then(onFulfilled);
+    },
   };
+
   return {
     from: () => chain,
     storage: {
@@ -63,5 +94,39 @@ describe('ArchiveContainer', () => {
     await waitFor(() => expect(screen.getByTestId('video-view')).toBeTruthy());
     fireEvent.press(screen.getByLabelText('Back to archive'));
     expect(screen.getByTestId('archive-heatmap')).toBeTruthy();
+  });
+
+  it('handles empty s3_key without crashing', async () => {
+    render(
+      <ArchiveContainer
+        client={fakeClient({ reelsInRange: [REEL_ROW_EMPTY_KEY], singleReelData: REEL_ROW_EMPTY_KEY })}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T12:00:00Z')}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('heatmap-cell-2026-07-09')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-09'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Back to archive')).toBeTruthy();
+      expect(screen.queryByTestId('video-view')).toBeNull();
+    });
+  });
+
+  it('shows error when per-day reel fetch fails', async () => {
+    const errorClient = fakeClient({
+      reelsInRange: [REEL_ROW],
+      singleReelData: null,
+      singleReelError: { message: 'Failed to fetch reel details' },
+    });
+    render(
+      <ArchiveContainer client={errorClient} deviceId="dev-1" now={() => new Date('2026-07-18T12:00:00Z')} />,
+    );
+    await waitFor(() => expect(screen.getByTestId('heatmap-cell-2026-07-10')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-10'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Reel error')).toBeTruthy();
+      expect(screen.getByText('Failed to fetch reel details')).toBeTruthy();
+      expect(screen.getByLabelText('Back to archive')).toBeTruthy();
+    });
   });
 });

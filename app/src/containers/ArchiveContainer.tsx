@@ -51,16 +51,24 @@ export function ArchiveContainer({ client, deviceId, now = () => new Date() }: A
   if (selectedDate) {
     return (
       <View style={styles.playerWrap}>
-        <ReelPlayer
-          videoUri={signedUrl}
-          title={selectedDate}
-          onShare={() => {
-            if (signedUrl) Share.share({ url: signedUrl, message: signedUrl });
-          }}
-        />
-        {selectedReel.kind === 'none' ? (
-          <Text style={styles.muted}>No reel for this day.</Text>
-        ) : null}
+        {selectedReel.kind === 'error' ? (
+          <Text style={styles.error} accessibilityLabel="Reel error">
+            {selectedReel.message}
+          </Text>
+        ) : (
+          <>
+            <ReelPlayer
+              videoUri={signedUrl}
+              title={selectedDate}
+              onShare={() => {
+                if (signedUrl) Share.share({ url: signedUrl, message: signedUrl });
+              }}
+            />
+            {selectedReel.kind === 'none' ? (
+              <Text style={styles.muted}>No reel for this day.</Text>
+            ) : null}
+          </>
+        )}
         <View style={styles.backWrap}>
           <Button
             title="Back to archive"
