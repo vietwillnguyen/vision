@@ -48,9 +48,10 @@ describe('useSlotThumbnails', () => {
   });
 
   it('caches by segment id across slot-array identity changes', async () => {
-    const { result, rerender } = renderHook(({ slots }) => useSlotThumbnails(fakeStorageClient(), slots), {
-      initialProps: { slots: SLOTS },
-    });
+    const { result, rerender } = renderHook(
+      (props: { slots: TimelineSlot[] }) => useSlotThumbnails(fakeStorageClient(), props.slots),
+      { initialProps: { slots: SLOTS } },
+    );
     await waitFor(() => expect(Object.keys(result.current)).toHaveLength(1));
     rerender({ slots: [...SLOTS] });
     await waitFor(() => expect(Object.keys(result.current)).toHaveLength(1));
@@ -59,9 +60,10 @@ describe('useSlotThumbnails', () => {
 
   it('prunes stale thumbnails when a segment is removed from the slots', async () => {
     const client = fakeStorageClient();
-    const { result, rerender } = renderHook(({ slots }) => useSlotThumbnails(client, slots), {
-      initialProps: { slots: SLOTS },
-    });
+    const { result, rerender } = renderHook(
+      (props: { slots: TimelineSlot[] }) => useSlotThumbnails(client, props.slots),
+      { initialProps: { slots: SLOTS } },
+    );
     await waitFor(() => expect(result.current).toEqual({ 480: 'thumb:https://signed/dev-1/s1.mp4' }));
 
     const withoutSegment: TimelineSlot[] = [
