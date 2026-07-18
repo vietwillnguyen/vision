@@ -1,5 +1,6 @@
 import {
   buildSegmentSignedUrlRequest,
+  buildReelSignedUrlRequest,
   InvalidExpiryError,
   InvalidSegmentKeyError,
 } from '../../src/logic/segmentExport';
@@ -30,5 +31,23 @@ describe('buildSegmentSignedUrlRequest', () => {
     expect(() => buildSegmentSignedUrlRequest('device-abc/seg-1.mp4', expiry)).toThrow(
       InvalidExpiryError,
     );
+  });
+});
+
+describe('buildReelSignedUrlRequest', () => {
+  it('targets the reels bucket with a default 1h expiry', () => {
+    expect(buildReelSignedUrlRequest('dev-1/2026-07-18.mp4')).toEqual({
+      bucket: 'reels',
+      path: 'dev-1/2026-07-18.mp4',
+      expiresInSec: 3600,
+    });
+  });
+
+  it('rejects an empty key', () => {
+    expect(() => buildReelSignedUrlRequest('')).toThrow('segment key must not be empty');
+  });
+
+  it('rejects an out-of-range expiry', () => {
+    expect(() => buildReelSignedUrlRequest('k', 0)).toThrow(/between 1 and/);
   });
 });
