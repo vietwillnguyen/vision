@@ -104,10 +104,10 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
     });
     if (seedError) throw seedError;
 
+    const ownerClient = createClient(SUPABASE_URL as string, SUPABASE_ANON_KEY as string, {
+      global: { fetch: restFetch },
+    });
     try {
-      const ownerClient = createClient(SUPABASE_URL as string, SUPABASE_ANON_KEY as string, {
-        global: { fetch: restFetch },
-      });
       const { error: signInError } = await ownerClient.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
 
@@ -146,6 +146,13 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
 
       unmount();
     } finally {
+      // The hook's own cleanup only unsubscribes/tears down its channel
+      // (RealtimeClient.removeChannel never closes the underlying socket -
+      // see node_modules/@supabase/realtime-js's RealtimeClient.removeChannel),
+      // so the websocket connection created by createClient() above stays
+      // open and leaves Jest hanging ("did not exit one second after the
+      // test run has completed") without this explicit disconnect.
+      await ownerClient.realtime.disconnect();
       await adminClient.auth.admin.deleteUser(userId);
     }
   });
