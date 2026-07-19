@@ -38,16 +38,24 @@ export function useSlotThumbnails(
     });
 
     (async () => {
+      // Resolved once, outside the per-slot loop, so a genuine native-module
+      // resolution failure (e.g. missing on web, or a broken native build) is
+      // distinguishable from an ordinary single-segment extraction failure -
+      // the former means no slot on this platform will ever get a thumbnail
+      // and is logged loudly; the latter is expected occasionally and warns.
+      let VideoThumbnails: typeof import('expo-video-thumbnails');
+      try {
+        VideoThumbnails = require('expo-video-thumbnails') as typeof import('expo-video-thumbnails');
+      } catch (error) {
+        console.error('useSlotThumbnails: expo-video-thumbnails unavailable on this platform', error);
+        return;
+      }
+
       for (const slot of slots) {
         if (!slot.segment) continue;
         let uri = cache.current.get(slot.segment.id);
         if (!uri) {
           try {
-            // Required lazily: expo-video-thumbnails has no web implementation,
-            // and executing the module at import time crashes the web bundle.
-            // Failures here already log and skip, so web degrades to no thumbnails.
-            const VideoThumbnails =
-              require('expo-video-thumbnails') as typeof import('expo-video-thumbnails');
             const request = buildSegmentSignedUrlRequest(slot.segment.s3Key);
             const { data } = await client.storage
               .from(request.bucket)
