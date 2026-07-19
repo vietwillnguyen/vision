@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useRef, useState } from 'react';
 
+import * as VideoThumbnails from '../lib/videoThumbnails';
 import { buildSegmentSignedUrlRequest } from '../logic/segmentExport';
 import type { TimelineSlot } from '../logic/timeline';
 
@@ -38,16 +39,13 @@ export function useSlotThumbnails(
     });
 
     (async () => {
-      // Resolved once, outside the per-slot loop, so a genuine native-module
-      // resolution failure (e.g. missing on web, or a broken native build) is
+      // Checked once, outside the per-slot loop, so platform unavailability
+      // (e.g. web, which has no video-thumbnails implementation) is
       // distinguishable from an ordinary single-segment extraction failure -
       // the former means no slot on this platform will ever get a thumbnail
       // and is logged loudly; the latter is expected occasionally and warns.
-      let VideoThumbnails: typeof import('expo-video-thumbnails');
-      try {
-        VideoThumbnails = require('expo-video-thumbnails') as typeof import('expo-video-thumbnails');
-      } catch (error) {
-        console.error('useSlotThumbnails: expo-video-thumbnails unavailable on this platform', error);
+      if (!VideoThumbnails.isAvailable) {
+        console.error('useSlotThumbnails: video thumbnails unavailable on this platform');
         return;
       }
 

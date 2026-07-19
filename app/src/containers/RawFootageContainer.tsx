@@ -7,6 +7,7 @@ import { TimelineScrubber } from '../components/TimelineScrubber';
 import { useSegments } from '../hooks/useSegments';
 import { useSignedUrl } from '../hooks/useSignedUrl';
 import { useSlotThumbnails } from '../hooks/useSlotThumbnails';
+import * as mediaSave from '../lib/mediaSave';
 import { toUtcMidnight } from '../logic/dates';
 import { buildSegmentSignedUrlRequest } from '../logic/segmentExport';
 import { buildTimelineSlots, type TimelineSlot } from '../logic/timeline';
@@ -48,23 +49,18 @@ export function RawFootageContainer({ client, deviceId, now = () => new Date() }
 
   const onSave = async () => {
     if (!selected || !previewUrl) return;
+    if (!mediaSave.isAvailable) {
+      Alert.alert('Not available', 'Saving to camera roll is not supported on web.');
+      return;
+    }
     try {
-      // Required lazily: neither module has a web implementation, and
-      // executing them at import time crashes the web bundle at startup.
-      const { File, Paths } = require('expo-file-system') as typeof import('expo-file-system');
-      const MediaLibrary = require('expo-media-library') as typeof import('expo-media-library');
-      const { granted } = await MediaLibrary.requestPermissionsAsync();
-      if (!granted) {
+      await mediaSave.saveUrlToCameraRoll(previewUrl, selected.id);
+      Alert.alert('Saved', 'Segment saved to your camera roll.');
+    } catch (error) {
+      if (error instanceof mediaSave.PermissionDeniedError) {
         Alert.alert('Permission needed', 'Allow photo library access to save segments.');
         return;
       }
-      const file = await File.downloadFileAsync(
-        previewUrl,
-        new File(Paths.cache, `${selected.id}-${Date.now()}.mp4`),
-      );
-      await MediaLibrary.saveToLibraryAsync(file.uri);
-      Alert.alert('Saved', 'Segment saved to your camera roll.');
-    } catch (error) {
       Alert.alert('Save failed', String(error));
     }
   };

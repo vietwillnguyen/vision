@@ -1,12 +1,13 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-// Simulates a platform where expo-video-thumbnails fails to resolve at all
-// (e.g. web, or a broken native build) - distinct from a single segment's
-// extraction failing after the module resolved successfully.
-jest.mock('expo-video-thumbnails', () => {
-  throw new Error('Cannot find native module ExpoVideoThumbnails');
-});
+// Simulates the web platform, where Metro resolves videoThumbnails.web.ts
+// (isAvailable: false) instead of videoThumbnails.ts - distinct from a
+// single segment's extraction failing after the module resolved fine.
+jest.mock('../../src/lib/videoThumbnails', () => ({
+  isAvailable: false,
+  getThumbnailAsync: jest.fn(() => Promise.reject(new Error('not supported'))),
+}));
 
 import { useSlotThumbnails } from '../../src/hooks/useSlotThumbnails';
 import type { TimelineSlot } from '../../src/logic/timeline';
@@ -33,15 +34,14 @@ function fakeStorageClient() {
   } as unknown as SupabaseClient;
 }
 
-describe('useSlotThumbnails when the native module fails to resolve', () => {
+describe('useSlotThumbnails when the platform has no video-thumbnails support', () => {
   it('logs once at error level and never populates thumbnails, without throwing', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const { result } = renderHook(() => useSlotThumbnails(fakeStorageClient(), SLOTS));
 
     await waitFor(() =>
       expect(errorSpy).toHaveBeenCalledWith(
-        'useSlotThumbnails: expo-video-thumbnails unavailable on this platform',
-        expect.any(Error),
+        'useSlotThumbnails: video thumbnails unavailable on this platform',
       ),
     );
     expect(result.current).toEqual({});

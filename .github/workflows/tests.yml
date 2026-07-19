@@ -68,3 +68,9 @@ jobs:
         run: npx tsc --noEmit
       - name: Run jest
         run: npx jest --ci
+      - name: Web bundle smoke check
+        # Catches native-only modules (expo-media-library, expo-file-system,
+        # expo-video-thumbnails) reintroduced at module top-level, which crash
+        # the web bundle at load time but are invisible to jest (never bundles
+        # for web). No secrets needed - export doesn't connect to Supabase.
+        run: npx expo export --platform web --output-dir /tmp/web-export-smoke
