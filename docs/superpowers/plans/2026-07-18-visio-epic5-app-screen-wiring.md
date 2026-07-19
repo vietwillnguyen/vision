@@ -38,7 +38,7 @@ Every hook returns a discriminated-union state (`kind: 'loading' | 'error' | ...
 - Consumes: nothing.
 - Produces: `supabaseClientOptions` (exported const in `src/lib/supabase.ts`); `colors` and `spacing` (exported consts in `src/theme.ts`) used by every styled component in later tasks.
 
-- [ ] **Step 1: Install dependencies**
+- [x] **Step 1: Install dependencies**
 
 ```bash
 npx expo install @react-native-async-storage/async-storage expo-video expo-video-thumbnails expo-media-library expo-file-system
@@ -46,7 +46,7 @@ npx expo install @react-native-async-storage/async-storage expo-video expo-video
 
 Expected: package.json gains the five deps at SDK-57-compatible versions.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 `app/__tests__/lib/supabase.test.ts`:
 
@@ -67,13 +67,13 @@ describe('supabaseClientOptions', () => {
 });
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `npx jest __tests__/lib/supabase.test.ts`
 Expected: FAIL - `supabaseClientOptions` is not exported.
 Note: the module reads `process.env.EXPO_PUBLIC_SUPABASE_URL`; if `createClient` throws on undefined env in tests, set placeholder env in the test via `process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://placeholder.supabase.co'; process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'placeholder';` **before** the import (use `require` after setting env instead of a top-level import if needed).
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 `app/src/lib/supabase.ts`:
 
@@ -120,12 +120,12 @@ export const spacing = {
 };
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `npx jest __tests__/lib/supabase.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add package.json package-lock.json src/lib/supabase.ts src/theme.ts __tests__/lib/supabase.test.ts
@@ -144,7 +144,7 @@ git commit -m "feat(app): add Epic 5 deps, AsyncStorage session persistence, the
 - Consumes: nothing.
 - Produces: `toUtcMidnight(d: Date): Date`; `utcDateString(d: Date): string` (returns `YYYY-MM-DD`); `utcRangeEndingAt(end: Date, days: number): { start: Date; end: Date }` (both UTC-midnight-aligned, `days` total cells inclusive of `end`'s day).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `app/__tests__/logic/dates.test.ts`:
 
@@ -179,12 +179,12 @@ describe('utcRangeEndingAt', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/logic/dates.test.ts`
 Expected: FAIL - module not found.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `app/src/logic/dates.ts`:
 
@@ -205,12 +205,12 @@ export function utcRangeEndingAt(end: Date, days: number): { start: Date; end: D
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/logic/dates.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/logic/dates.ts __tests__/logic/dates.test.ts
@@ -229,7 +229,7 @@ git commit -m "feat(app): add UTC-midnight date helpers for heatmap and day quer
 - Consumes: existing `SignedUrlRequest`, `InvalidSegmentKeyError`, `InvalidExpiryError`.
 - Produces: `SignedUrlRequest.bucket` widened to `'segments' | 'reels'`; new `buildReelSignedUrlRequest(s3Key: string, expiresInSec?: number): SignedUrlRequest` with identical validation to `buildSegmentSignedUrlRequest`.
 
-- [ ] **Step 1: Write the failing tests** (append to existing test file)
+- [x] **Step 1: Write the failing tests** (append to existing test file)
 
 ```ts
 import { buildReelSignedUrlRequest } from '../../src/logic/segmentExport';
@@ -253,12 +253,12 @@ describe('buildReelSignedUrlRequest', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/logic/segmentExport.test.ts`
 Expected: new tests FAIL - `buildReelSignedUrlRequest` not exported; existing tests still PASS.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `app/src/logic/segmentExport.ts`, widen the bucket type and extract the shared validation:
 
@@ -304,12 +304,12 @@ export function buildReelSignedUrlRequest(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/logic/segmentExport.test.ts`
 Expected: PASS (old and new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/logic/segmentExport.ts __tests__/logic/segmentExport.test.ts
@@ -341,7 +341,7 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
 
 Semantics: `loading` until the initial fetch resolves with a row or a realtime event arrives; a rejected/errored initial fetch yields `error` **unless** realtime data already arrived; `single()`'s no-row error (`PGRST116`) keeps `loading` (device not booted yet, existing behavior); the `subscribe()` status callback maps `SUBSCRIBED → live` and `CHANNEL_ERROR | TIMED_OUT | CLOSED → stale`.
 
-- [ ] **Step 1: Update the fake client and write failing tests**
+- [x] **Step 1: Update the fake client and write failing tests**
 
 In `app/__tests__/hooks/useDeviceStatus.test.tsx`, extend `createFakeClient` so `subscribe` captures its status callback, and the initial fetch resolves `{ data, error }`:
 
@@ -416,12 +416,12 @@ it('marks stale on TIMED_OUT and CLOSED too', async () => {
 
 Keep (adapted to the new shape) the existing behaviors: realtime INSERT/UPDATE win over a slower initial fetch; `removeChannel` on unmount; snake_case mapping.
 
-- [ ] **Step 2: Run tests to verify the new ones fail**
+- [x] **Step 2: Run tests to verify the new ones fail**
 
 Run: `npx jest __tests__/hooks/useDeviceStatus.test.tsx`
 Expected: FAIL - hook still returns `DeviceStatus | null`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/hooks/useDeviceStatus.ts`:
 
@@ -526,14 +526,14 @@ function mapRow(row: Record<string, unknown>): DeviceStatus {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/hooks/useDeviceStatus.test.tsx`
 Expected: PASS.
 Note: `DeviceScreen`/its test still reference the old shape; they are fixed in Task 5.
 Run only this test file here.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hooks/useDeviceStatus.ts __tests__/hooks/useDeviceStatus.test.tsx
@@ -567,7 +567,7 @@ interface DeviceContainerProps {
 export function DeviceContainer(props: DeviceContainerProps): React.JSX.Element;
 ```
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Rewrite `app/__tests__/screens/DeviceScreen.test.tsx`:
 
@@ -662,12 +662,12 @@ it('wires useDeviceStatus into DeviceScreen', async () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/screens/DeviceScreen.test.tsx __tests__/containers/DeviceContainer.test.tsx`
 Expected: FAIL - props mismatch / container missing.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/screens/DeviceScreen.tsx`:
 
@@ -779,12 +779,12 @@ export function DeviceContainer({ client, deviceId }: DeviceContainerProps) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/screens/DeviceScreen.test.tsx __tests__/containers/DeviceContainer.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/screens/DeviceScreen.tsx src/containers/DeviceContainer.tsx __tests__/screens/DeviceScreen.test.tsx __tests__/containers/DeviceContainer.test.tsx
@@ -828,7 +828,7 @@ interface AuthContainerProps {
 export function AuthContainer(props: AuthContainerProps): React.JSX.Element;
 ```
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `app/__tests__/hooks/useAuth.test.tsx`:
 
@@ -968,12 +968,12 @@ describe('AuthContainer', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/hooks/useAuth.test.tsx __tests__/screens/AuthScreen.test.tsx __tests__/containers/AuthContainer.test.tsx`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/hooks/useAuth.ts`:
 
@@ -1184,12 +1184,12 @@ export function AuthContainer({ signIn }: AuthContainerProps) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/hooks/useAuth.test.tsx __tests__/screens/AuthScreen.test.tsx __tests__/containers/AuthContainer.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hooks/useAuth.ts src/screens/AuthScreen.tsx src/containers/AuthContainer.tsx __tests__/hooks/useAuth.test.tsx __tests__/screens/AuthScreen.test.tsx __tests__/containers/AuthContainer.test.tsx
@@ -1220,7 +1220,7 @@ export function useDevice(client: SupabaseClient): DeviceState;
 
 Fetches the signed-in user's oldest device (`devices` is RLS-scoped to the user): `from('devices').select('device_id, name').order('created_at', { ascending: true }).limit(1)`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `app/__tests__/hooks/useDevice.test.tsx`:
 
@@ -1262,12 +1262,12 @@ describe('useDevice', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/hooks/useDevice.test.tsx`
 Expected: FAIL - module not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/hooks/useDevice.ts`:
 
@@ -1322,12 +1322,12 @@ export function useDevice(client: SupabaseClient): DeviceState {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/hooks/useDevice.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hooks/useDevice.ts __tests__/hooks/useDevice.test.tsx
@@ -1364,7 +1364,7 @@ export function useSegments(
 
 `setUserFeedback` updates local state optimistically, then `client.from('segments').update({ user_feedback: feedback }).eq('id', segmentId)`; on error it reverts the local change (the column-level grant `update (user_feedback)` is the only app write to segments).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `app/__tests__/hooks/useSegments.test.tsx`:
 
@@ -1459,12 +1459,12 @@ describe('useSegments', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/hooks/useSegments.test.tsx`
 Expected: FAIL - module not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/hooks/useSegments.ts`:
 
@@ -1572,12 +1572,12 @@ function mapSegmentRow(row: Record<string, unknown>): Segment {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/hooks/useSegments.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hooks/useSegments.ts __tests__/hooks/useSegments.test.tsx
@@ -1628,7 +1628,7 @@ Queries: `useReel` uses `.eq('device_id', deviceId).eq('date', date).order('crea
 `useReelsInRange` uses `.eq('device_id', deviceId).gte('date', startDate).lte('date', endDate)`.
 `useSignedUrl` calls `client.storage.from(request.bucket).createSignedUrl(request.path, request.expiresInSec)` and stores `data.signedUrl`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `app/__tests__/hooks/useReel.test.tsx`:
 
@@ -1730,12 +1730,12 @@ describe('useSignedUrl', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/hooks/useReel.test.tsx __tests__/hooks/useSignedUrl.test.tsx`
 Expected: FAIL - modules not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/hooks/useReel.ts`:
 
@@ -1896,12 +1896,12 @@ export function useSignedUrl(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/hooks/useReel.test.tsx __tests__/hooks/useSignedUrl.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hooks/useReel.ts src/hooks/useSignedUrl.ts __tests__/hooks/useReel.test.tsx __tests__/hooks/useSignedUrl.test.tsx
@@ -1939,7 +1939,7 @@ interface TodayReelContainerProps {
 export function TodayReelContainer(props: TodayReelContainerProps): React.JSX.Element;
 ```
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Both test files mock `expo-video` (jest-expo does not ship a native video mock):
 
@@ -2048,12 +2048,12 @@ describe('TodayReelContainer', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/components/ReelPlayer.test.tsx __tests__/containers/TodayReelContainer.test.tsx`
 Expected: FAIL - modules not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/components/ReelPlayer.tsx`:
 
@@ -2186,12 +2186,12 @@ const styles = StyleSheet.create({
 });
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/components/ReelPlayer.test.tsx __tests__/containers/TodayReelContainer.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/ReelPlayer.tsx src/containers/TodayReelContainer.tsx __tests__/components/ReelPlayer.test.tsx __tests__/containers/TodayReelContainer.test.tsx
@@ -2225,7 +2225,7 @@ export function useSlotThumbnails(
 
 Implementation notes: per segment, sign the URL then `VideoThumbnails.getThumbnailAsync(signedUrl, { time: 0 })`; cache resolved URIs in a `useRef<Map<string, string>>` keyed by `segment.id` so re-renders and day switches don't re-extract; per-slot failures log and skip (a broken thumbnail must not break the strip).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `app/__tests__/hooks/useSlotThumbnails.test.tsx`:
 
@@ -2305,12 +2305,12 @@ it('renders a thumbnail image for slots that have one', () => {
 
 (Use the segment fixture already present in that test file; `480` = 08:00 UTC.)
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/hooks/useSlotThumbnails.test.tsx __tests__/components/TimelineScrubber.test.tsx`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/hooks/useSlotThumbnails.ts`:
 
@@ -2433,12 +2433,12 @@ const styles = StyleSheet.create({
 });
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/hooks/useSlotThumbnails.test.tsx __tests__/components/TimelineScrubber.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hooks/useSlotThumbnails.ts src/components/TimelineScrubber.tsx __tests__/hooks/useSlotThumbnails.test.tsx __tests__/components/TimelineScrubber.test.tsx
@@ -2480,7 +2480,7 @@ export function RawFootageContainer(props: RawFootageContainerProps): React.JSX.
 
 Behavior: long-pressing an occupied slot opens `Alert.alert('Segment options', <recordedAt>, [...])` with buttons Preview / Always include / Never include / Clear preference / Cancel; feedback buttons call `setUserFeedback` with `'include' | 'exclude' | null`; Preview selects the segment, rendering `SegmentPreview` with its signed URL; Save downloads the signed URL with `File.downloadFileAsync` into `Paths.cache` then `MediaLibrary.saveToLibraryAsync` (after `requestPermissionsAsync`); Share uses `Share.share({ url })`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Extend `app/__tests__/components/SegmentPreview.test.tsx` - add the same `expo-video` mock as Task 10 at the top, pass `videoUri` in existing renders, and add:
 
@@ -2615,12 +2615,12 @@ describe('RawFootageContainer', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/components/SegmentPreview.test.tsx __tests__/containers/RawFootageContainer.test.tsx`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/components/SegmentPreview.tsx`:
 
@@ -2796,12 +2796,12 @@ const styles = StyleSheet.create({
 });
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/components/SegmentPreview.test.tsx __tests__/containers/RawFootageContainer.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/SegmentPreview.tsx src/containers/RawFootageContainer.tsx __tests__/components/SegmentPreview.test.tsx __tests__/containers/RawFootageContainer.test.tsx
@@ -2821,7 +2821,7 @@ git commit -m "feat(app): raw footage screen with preview playback, save/share, 
 - Consumes: `useReelsInRange`, `useReel`, `useSignedUrl` (Task 9), `buildReelSignedUrlRequest` (Task 3), `utcRangeEndingAt`, `utcDateString` (Task 2), `buildHeatmapCells`, `ReelPlayer` (Task 10).
 - Produces: `ArchiveScreen` keeps its `{ cells, onDayPress }` props (styled grid, a11y labels per cell: `Day <date>, reel available|no reel`); `ArchiveContainer({ client, deviceId, now? })` renders a 30-day heatmap; pressing a day with a reel plays it via `ReelPlayer` (title = the date), with a labeled "Back to archive" button clearing the selection.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Extend `app/__tests__/screens/ArchiveScreen.test.tsx`:
 
@@ -2913,12 +2913,12 @@ describe('ArchiveContainer', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/screens/ArchiveScreen.test.tsx __tests__/containers/ArchiveContainer.test.tsx`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/src/screens/ArchiveScreen.tsx`:
 
@@ -3064,12 +3064,12 @@ const styles = StyleSheet.create({
 });
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx jest __tests__/screens/ArchiveScreen.test.tsx __tests__/containers/ArchiveContainer.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/screens/ArchiveScreen.tsx src/containers/ArchiveContainer.tsx __tests__/screens/ArchiveScreen.test.tsx __tests__/containers/ArchiveContainer.test.tsx
@@ -3096,7 +3096,7 @@ export default function App(): React.JSX.Element; // <AppRoot client={supabase} 
 
 `AppRoot`: `useAuth` gates everything - `loading` renders a splash (`Visio` title), `signed-out` renders `AuthContainer`, `signed-in` renders `SignedInApp` which resolves `useDevice` and then a `NavigationContainer` + bottom tab navigator with tabs Today's Reel / Raw Footage / Device / Archive (dark theme colors, `headerShown: false`); `none` explains "No device linked to this account yet."; a Sign out button lives in the Device tab header area - keep simpler: `tabBar` untouched, sign-out is **not** added (not in issue scope).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `app/__tests__/App.test.tsx`:
 
@@ -3172,12 +3172,12 @@ describe('AppRoot', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx jest __tests__/App.test.tsx`
 Expected: FAIL - `AppRoot` not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app/App.tsx`:
 
@@ -3300,7 +3300,7 @@ const styles = StyleSheet.create({
 });
 ```
 
-- [ ] **Step 4: Run the App tests, then the whole suite and typecheck**
+- [x] **Step 4: Run the App tests, then the whole suite and typecheck**
 
 Run: `npx jest __tests__/App.test.tsx`
 Expected: PASS.
@@ -3311,7 +3311,7 @@ Expected: ALL tests PASS (every suite from Tasks 1-14 plus the pre-existing logi
 Run: `npx tsc --noEmit`
 Expected: no errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add App.tsx __tests__/App.test.tsx

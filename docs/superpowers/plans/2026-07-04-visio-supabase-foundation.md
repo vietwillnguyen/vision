@@ -38,7 +38,7 @@
 **Interfaces:**
 - Produces: a runnable local Supabase stack (`supabase start`) and a working `supabase test db` command that later tasks add test files to.
 
-- [ ] **Step 1: Initialize the Supabase project**
+- [x] **Step 1: Initialize the Supabase project**
 
 Run:
 ```bash
@@ -47,24 +47,24 @@ supabase init
 ```
 Expected: creates `supabase/config.toml`, `supabase/migrations/`, `supabase/seed.sql`.
 
-- [ ] **Step 2: Start the local stack**
+- [x] **Step 2: Start the local stack**
 
 Run: `supabase start`
 Expected: output ends with a block of local URLs/keys (`API URL`, `DB URL`, `anon key`, `service_role key`). Note the `DB URL` for later manual checks.
 
-- [ ] **Step 3: Create the pgTAP test directory**
+- [x] **Step 3: Create the pgTAP test directory**
 
 ```bash
 mkdir -p supabase/tests/database
 touch supabase/tests/database/.gitkeep
 ```
 
-- [ ] **Step 4: Verify the test runner works with zero tests**
+- [x] **Step 4: Verify the test runner works with zero tests**
 
 Run: `supabase test db`
 Expected: exits 0 (no test files yet is fine - this just confirms the CLI, pgTAP extension, and local DB are wired together).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/config.toml supabase/tests/database/.gitkeep
@@ -82,7 +82,7 @@ git commit -m "chore: scaffold supabase project"
 **Interfaces:**
 - Produces: `public.devices(device_id uuid pk, user_id uuid fk auth.users, name text, created_at timestamptz)` - every later table's `device_id` foreign key points here.
 
-- [ ] **Step 1: Write the failing pgTAP test**
+- [x] **Step 1: Write the failing pgTAP test**
 
 `supabase/tests/database/devices.test.sql`:
 ```sql
@@ -99,12 +99,12 @@ select * from finish();
 rollback;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `supabase test db`
 Expected: FAIL - `relation "public.devices" does not exist`.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `supabase/migrations/20260704120000_create_devices.sql`:
 ```sql
@@ -118,12 +118,12 @@ create table public.devices (
 alter table public.devices enable row level security;
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `supabase test db`
 Expected: PASS (5/5).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/tests/database/devices.test.sql supabase/migrations/20260704120000_create_devices.sql
@@ -142,7 +142,7 @@ git commit -m "feat: add devices table"
 - Consumes: `public.devices(device_id)` from Task 2.
 - Produces: `public.device_status(device_id uuid pk/fk, battery_pct int, storage_used_gb numeric, storage_free_gb numeric, segments_pending int, segments_uploaded_today int, recording_active bool, updated_at timestamptz)`.
 
-- [ ] **Step 1: Write the failing pgTAP test**
+- [x] **Step 1: Write the failing pgTAP test**
 
 `supabase/tests/database/device_status.test.sql`:
 ```sql
@@ -158,12 +158,12 @@ select * from finish();
 rollback;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `supabase test db`
 Expected: FAIL - `relation "public.device_status" does not exist`.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `supabase/migrations/20260704120100_create_device_status.sql`:
 ```sql
@@ -181,12 +181,12 @@ create table public.device_status (
 alter table public.device_status enable row level security;
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `supabase test db`
 Expected: PASS (4/4).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/tests/database/device_status.test.sql supabase/migrations/20260704120100_create_device_status.sql
@@ -205,7 +205,7 @@ git commit -m "feat: add device_status table"
 - Consumes: `public.devices(device_id)` from Task 2.
 - Produces: `public.segments(id uuid pk, device_id uuid fk, recorded_at timestamptz, duration_sec int, s3_key text, motion_score numeric, audio_score numeric, scene_score numeric, composite_score numeric, manually_flagged bool, user_feedback text check)`.
 
-- [ ] **Step 1: Write the failing pgTAP test**
+- [x] **Step 1: Write the failing pgTAP test**
 
 `supabase/tests/database/segments.test.sql`:
 ```sql
@@ -232,12 +232,12 @@ select * from finish();
 rollback;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `supabase test db`
 Expected: FAIL - `relation "public.segments" does not exist`.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `supabase/migrations/20260704120200_create_segments.sql`:
 ```sql
@@ -258,12 +258,12 @@ create table public.segments (
 alter table public.segments enable row level security;
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `supabase test db`
 Expected: PASS (4/4).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/tests/database/segments.test.sql supabase/migrations/20260704120200_create_segments.sql
@@ -282,7 +282,7 @@ git commit -m "feat: add segments table"
 - Consumes: `public.devices(device_id)` from Task 2.
 - Produces: `public.reels(id uuid pk, device_id uuid fk, date date, s3_key text, duration_sec int, style text, created_at timestamptz)`.
 
-- [ ] **Step 1: Write the failing pgTAP test**
+- [x] **Step 1: Write the failing pgTAP test**
 
 `supabase/tests/database/reels.test.sql`:
 ```sql
@@ -297,12 +297,12 @@ select * from finish();
 rollback;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `supabase test db`
 Expected: FAIL - `relation "public.reels" does not exist`.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `supabase/migrations/20260704120300_create_reels.sql`:
 ```sql
@@ -319,12 +319,12 @@ create table public.reels (
 alter table public.reels enable row level security;
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `supabase test db`
 Expected: PASS (3/3).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/tests/database/reels.test.sql supabase/migrations/20260704120300_create_reels.sql
@@ -342,7 +342,7 @@ git commit -m "feat: add reels table"
 **Interfaces:**
 - Produces: `public.score_weights(user_id uuid pk/fk auth.users, scene_weight numeric default 0.4, audio_weight numeric default 0.3, motion_weight numeric default 0.2)`.
 
-- [ ] **Step 1: Write the failing pgTAP test**
+- [x] **Step 1: Write the failing pgTAP test**
 
 `supabase/tests/database/score_weights.test.sql`:
 ```sql
@@ -366,12 +366,12 @@ select * from finish();
 rollback;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `supabase test db`
 Expected: FAIL - `relation "public.score_weights" does not exist`.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `supabase/migrations/20260704120400_create_score_weights.sql`:
 ```sql
@@ -385,12 +385,12 @@ create table public.score_weights (
 alter table public.score_weights enable row level security;
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `supabase test db`
 Expected: PASS (3/3).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/tests/database/score_weights.test.sql supabase/migrations/20260704120400_create_score_weights.sql
@@ -409,7 +409,7 @@ git commit -m "feat: add score_weights table"
 - Consumes: all five tables from Tasks 2-6.
 - Produces: RLS policies such that `auth.uid()` must match (directly or via the owning device's `user_id`) for any row to be visible.
 
-- [ ] **Step 1: Write the failing pgTAP test**
+- [x] **Step 1: Write the failing pgTAP test**
 
 `supabase/tests/database/rls_policies.test.sql`:
 ```sql
@@ -441,12 +441,12 @@ select * from finish();
 rollback;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `supabase test db`
 Expected: FAIL - both selects return empty because RLS is enabled with no policies yet (default-deny), so the "owner should see their own device" assertion fails.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `supabase/migrations/20260704120500_rls_policies.sql`:
 ```sql
@@ -472,12 +472,12 @@ create policy "score_weights_owner_access" on public.score_weights
   for all using (auth.uid() = user_id);
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `supabase test db`
 Expected: PASS (2/2).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/tests/database/rls_policies.test.sql supabase/migrations/20260704120500_rls_policies.sql
@@ -495,7 +495,7 @@ git commit -m "feat: add row-level security policies"
 **Interfaces:**
 - Produces: private `segments` and `reels` storage buckets with policies restricting access to the owning user (object path convention: `{device_id}/{filename}`, matched against `public.devices.user_id`).
 
-- [ ] **Step 1: Write the failing pgTAP test**
+- [x] **Step 1: Write the failing pgTAP test**
 
 `supabase/tests/database/storage_buckets.test.sql`:
 ```sql
@@ -517,12 +517,12 @@ select * from finish();
 rollback;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `supabase test db`
 Expected: FAIL - `select public from storage.buckets where id = 'segments'` returns no row, so `is()` fails against `null`.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `supabase/migrations/20260704120600_storage_buckets.sql`:
 ```sql
@@ -548,12 +548,12 @@ create policy "reels_bucket_owner_access" on storage.objects
   );
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `supabase test db`
 Expected: PASS (2/2).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/tests/database/storage_buckets.test.sql supabase/migrations/20260704120600_storage_buckets.sql
@@ -572,7 +572,7 @@ git commit -m "feat: add segments and reels storage buckets"
 - Consumes: `public.devices` from Task 2.
 - Produces: `public.devices.push_token` (nullable text) - the mobile app writes its Expo push token here after pairing; the cloud pipeline reads it to deliver the nightly notification (see [`2026-07-04-visio-pipeline.md`](2026-07-04-visio-pipeline.md) Task 9's `notify_reel_ready`). Nullable because a device can exist before its companion app has registered a token.
 
-- [ ] **Step 1: Write the failing pgTAP test**
+- [x] **Step 1: Write the failing pgTAP test**
 
 `supabase/tests/database/devices_push_token.test.sql`:
 ```sql
@@ -586,24 +586,24 @@ select * from finish();
 rollback;
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `supabase test db`
 Expected: FAIL - `has_column` returns false, `push_token` does not exist yet.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `supabase/migrations/20260704120700_add_push_token_to_devices.sql`:
 ```sql
 alter table public.devices add column push_token text;
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `supabase test db`
 Expected: PASS (2/2).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/tests/database/devices_push_token.test.sql supabase/migrations/20260704120700_add_push_token_to_devices.sql
