@@ -22,8 +22,23 @@
  */
 import { renderHook, waitFor } from '@testing-library/react-native';
 import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
+import nodeFetch from 'node-fetch';
 
 import { useDeviceStatus } from '../../src/hooks/useDeviceStatus';
+
+// Node 20 (this test runner's target) has no native WebSocket global, which
+// @supabase/realtime-js requires at RealtimeClient construction time (thrown
+// synchronously from createClient, even for clients that never subscribe).
+(globalThis as { WebSocket?: unknown }).WebSocket ??= WebSocket;
+
+// jest-expo's preset replaces global.fetch with React Native's XHR-based
+// polyfill, which silently fails (returns a response with no status/body)
+// against a plain http:// localhost URL outside a real RN runtime. The REST
+// calls below (auth/admin, postgrest) need a real fetch; the hook's realtime
+// subscription itself only depends on WebSocket, so this doesn't affect what
+// this test is actually verifying.
+const restFetch = nodeFetch as unknown as typeof fetch;
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -48,7 +63,9 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
     const email = `device-status-live-${runId}@example.test`;
     const password = 'correct-horse-battery-staple';
 
-    const adminClient = createClient(SUPABASE_URL as string, SUPABASE_SERVICE_ROLE_KEY as string);
+    const adminClient = createClient(SUPABASE_URL as string, SUPABASE_SERVICE_ROLE_KEY as string, {
+      global: { fetch: restFetch },
+    });
     const { data: created, error: createUserError } = await adminClient.auth.admin.createUser({
       email,
       password,
@@ -69,16 +86,42 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
     }
     const deviceId = device.device_id as string;
 
+    // Seed an initial row before the hook ever subscribes, mirroring real
+    // device behavior (firmware upserts a status row well before the app
+    // opens it). The hook only exposes its `realtime` field once its own
+    // initial fetch resolves to `kind: 'ready'` (see useDeviceStatus.ts) - with
+    // no row at all it stays `{ kind: 'loading' }` forever, so `realtime`
+    // would never appear in the returned object regardless of the actual
+    // channel status.
+    const { error: seedError } = await adminClient.from('device_status').insert({
+      device_id: deviceId,
+      battery_pct: 10,
+      storage_used_gb: 0,
+      storage_free_gb: 100,
+      segments_pending: 0,
+      segments_uploaded_today: 0,
+      recording_active: false,
+    });
+    if (seedError) throw seedError;
+
     try {
-      const ownerClient = createClient(SUPABASE_URL as string, SUPABASE_ANON_KEY as string);
+      const ownerClient = createClient(SUPABASE_URL as string, SUPABASE_ANON_KEY as string, {
+        global: { fetch: restFetch },
+      });
       const { error: signInError } = await ownerClient.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
 
       const { result, unmount } = renderHook(() => useDeviceStatus(ownerClient, deviceId));
 
-      await waitFor(() => expect(result.current).toMatchObject({ realtime: 'live' }), {
-        timeout: 15000,
-      });
+      await waitFor(
+        () =>
+          expect(result.current).toMatchObject({
+            kind: 'ready',
+            realtime: 'live',
+            status: { batteryPct: 10, recordingActive: false },
+          }),
+        { timeout: 15000 },
+      );
 
       const { error: upsertError } = await ownerClient.from('device_status').upsert({
         device_id: deviceId,
@@ -95,6 +138,7 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
         () =>
           expect(result.current).toMatchObject({
             kind: 'ready',
+            realtime: 'live',
             status: { batteryPct: 55, recordingActive: true },
           }),
         { timeout: 15000 },

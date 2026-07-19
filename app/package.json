@@ -22,12 +22,16 @@
   "devDependencies": {
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "^30.0.0",
+    "@types/node-fetch": "^2.6.13",
     "@types/react": "~19.2.2",
+    "@types/ws": "^8.18.1",
     "jest-expo": "^57.0.1",
+    "node-fetch": "^2.7.0",
     "react-dom": "19.2.3",
     "react-native-web": "^0.21.2",
     "react-test-renderer": "19.2.3",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "ws": "^7.5.11"
   },
   "scripts": {
     "start": "expo start",

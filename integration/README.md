@@ -68,6 +68,20 @@ other `useDeviceStatus` test. It reads the same `SUPABASE_URL` /
 `app` job now starts and stops a local Supabase instance the same way the
 `integration` job does, so this test actually runs (not just skips) in CI.
 
+This test seeds an initial `device_status` row before rendering the hook:
+`useDeviceStatus` only exposes its `realtime` field once its own initial
+fetch resolves to `kind: 'ready'`, so with no row at all it stays
+`{ kind: 'loading' }` forever and `realtime` never appears in the returned
+object, no matter the actual channel status. It also requires
+`public.device_status` to be added to the `supabase_realtime` publication
+(see `supabase/migrations/20260720120000_enable_device_status_realtime.sql`)
+- without that, Supabase Realtime never streams `postgres_changes` for the
+table at all, and the channel silently never reaches `SUBSCRIBED`. The Jest
+run itself needs a `WebSocket` global (Node has none; polyfilled from the
+`ws` package) and a real `fetch` (jest-expo's React Native XHR-based polyfill
+returns a broken response against a plain `http://` localhost URL, so the
+test passes `node-fetch` via `createClient`'s `global.fetch` option).
+
 The plan's Stage 1 (firmware's upload adapter writing a real `segments` row)
 turned out not to map to reality: firmware only uploads bytes to Storage and
 never inserts a `segments` row itself (see `test_row_schema_contract.py`'s
