@@ -37,7 +37,7 @@ Task 10 updates the spec and Epic 5 checklist wording accordingly.
 **Interfaces:**
 - Produces: `segment_filename(started_at: datetime) -> str` returning `"YYYYMMDD_HHMMSS.h264"`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # firmware/tests/test_capture.py
@@ -58,12 +58,12 @@ def test_segment_filename_stem_matches_the_pipeline_parser_contract():
     assert datetime.strptime(stem, "%Y%m%d_%H%M%S") == started_at
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_capture.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'visio_recorder.capture'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # firmware/visio_recorder/capture.py
@@ -74,12 +74,12 @@ def segment_filename(started_at: datetime) -> str:
     return f"{started_at.strftime('%Y%m%d_%H%M%S')}.h264"
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_capture.py -v`
 Expected: 2 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/capture.py firmware/tests/test_capture.py
@@ -96,7 +96,7 @@ git commit -m "feat(firmware): segment filename contract pinned to pipeline pars
 - Consumes: `CommandRunner` Protocol from `visio_recorder.muxer` (`run(args: list[str]) -> None`).
 - Produces: `build_rpicam_command(output_path: Path, duration_ms: int, framerate: int) -> list[str]` and `record_segment(runner: CommandRunner, output_dir: Path, started_at: datetime, duration_ms: int, framerate: int) -> Path`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to firmware/tests/test_capture.py
@@ -135,12 +135,12 @@ def test_record_segment_runs_rpicam_and_returns_the_timestamped_path(tmp_path):
     assert runner.calls == [build_rpicam_command(path, 300000, 30)]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_capture.py -v`
 Expected: FAIL with `ImportError: cannot import name 'build_rpicam_command'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # append to firmware/visio_recorder/capture.py
@@ -175,12 +175,12 @@ def record_segment(
     return output_path
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_capture.py -v`
 Expected: 4 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/capture.py firmware/tests/test_capture.py
@@ -197,7 +197,7 @@ git commit -m "feat(firmware): rpicam-vid per-segment capture via CommandRunner"
 - Produces: `DiskStats` dataclass (`used_gb: float`, `free_gb: float`), `DiskStatsReader` Protocol (`usage(path: Path) -> DiskStats`), `ShutilDiskStatsReader` real implementation, and two new `on_segment_complete` parameters: `disk_stats_reader: DiskStatsReader, data_dir: Path`.
 - Consumes: existing `on_segment_complete` signature and its tests' fakes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add a `FakeDiskStatsReader` to `firmware/tests/test_recording_loop.py` and assert real values flow into the status upsert.
 
@@ -231,12 +231,12 @@ def test_shutil_disk_stats_reader_converts_bytes_to_gb(tmp_path):
 
 The first test's body must be written out fully by adapting this file's existing `on_segment_complete` test arrangement (same fakes, two new arguments); it is elided here only because it reuses that file's local helpers verbatim.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_recording_loop.py -v`
 Expected: FAIL with `ImportError: cannot import name 'DiskStats'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # in firmware/visio_recorder/recording_loop.py
@@ -270,12 +270,12 @@ class ShutilDiskStatsReader:
 `on_segment_complete` gains `disk_stats_reader: DiskStatsReader` and `data_dir: Path` parameters, replaces the `0.0` placeholders with `stats = disk_stats_reader.usage(data_dir)` then `storage_used_gb=stats.used_gb, storage_free_gb=stats.free_gb`, and drops the placeholder comment.
 Update every existing call in `firmware/tests/test_recording_loop.py` to pass the two new arguments.
 
-- [ ] **Step 4: Run the full firmware suite**
+- [x] **Step 4: Run the full firmware suite**
 
 Run: `cd firmware && uv run --locked --extra dev pytest -v`
 Expected: all pass (existing `on_segment_complete` tests updated, no regressions)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/recording_loop.py firmware/tests/test_recording_loop.py
@@ -291,7 +291,7 @@ git commit -m "feat(firmware): real disk usage stats in device status reporting"
 **Interfaces:**
 - Produces: `SegmentResult` dataclass (`segments_uploaded_today: int`, `upload_ok: bool`); `on_segment_complete` now returns `SegmentResult` instead of `int`; module constant `UPLOAD_FAILURES_TO_CRITICAL = 3` (consumed by Task 8's loop).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to firmware/tests/test_recording_loop.py
@@ -315,12 +315,12 @@ def test_successful_upload_returns_ok_result(tmp_path):
 
 Write both arrangements out fully by copying the file's existing happy-path test arrangement; only the storage client fake and the assertions differ.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_recording_loop.py -v`
 Expected: FAIL with `ImportError: cannot import name 'SegmentResult'` (and the raising fake would previously have propagated)
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # in firmware/visio_recorder/recording_loop.py
@@ -352,12 +352,12 @@ Inside `on_segment_complete`, wrap only the upload half:
 The status upsert still runs after the except (so `segments_pending` counts the stuck file), and the function returns `SegmentResult(segments_uploaded_today=segments_uploaded_today, upload_ok=upload_ok)`.
 Update all existing callers/tests from `int` return to `.segments_uploaded_today`.
 
-- [ ] **Step 4: Run the full firmware suite**
+- [x] **Step 4: Run the full firmware suite**
 
 Run: `cd firmware && uv run --locked --extra dev pytest -v`
 Expected: all pass
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/recording_loop.py firmware/tests/test_recording_loop.py
@@ -374,7 +374,7 @@ git commit -m "feat(firmware): upload failures restore LED and keep the queued f
 - Consumes: `list_pending`, `upload_segment`, `mark_uploaded` (existing).
 - Produces: `flush_pending(queue_dir: Path, storage_client: StorageClient, device_id: str) -> int` returning the number of files uploaded; files whose upload raises stay queued and stop neither the flush nor the daemon.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to firmware/tests/test_recording_loop.py
@@ -403,12 +403,12 @@ def test_flush_pending_leaves_failing_files_queued_and_continues(tmp_path):
     assert [p.name for p in tmp_path.iterdir()] == ["20260708_235000.mp4"]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_recording_loop.py -v`
 Expected: FAIL with `ImportError: cannot import name 'flush_pending'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # append to firmware/visio_recorder/recording_loop.py
@@ -426,12 +426,12 @@ def flush_pending(
     return uploaded
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_recording_loop.py -v`
 Expected: all pass
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/recording_loop.py firmware/tests/test_recording_loop.py
@@ -451,7 +451,7 @@ It now logs via `_logger.exception` before continuing; the retry-by-leaving-queu
 - Produces: `render_nm_keyfile(ssid: str, password: str) -> str` and `write_nm_keyfile(path: Path, ssid: str, password: str) -> None` (0600 via the existing `_write_private_text`).
 - Reuses the module's existing `_UNSAFE_CHARS` and PSK length validation, extracted into `_validate_credentials(ssid, password)` shared by both renderers.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to firmware/tests/test_wifi_onboard.py
@@ -483,12 +483,12 @@ def test_write_nm_keyfile_is_owner_read_write_only(tmp_path):
     assert oct(path.stat().st_mode & 0o777) == "0o600"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_wifi_onboard.py -v`
 Expected: FAIL with `ImportError: cannot import name 'render_nm_keyfile'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Extract the validation currently at the top of `render_wpa_supplicant` into `_validate_credentials(ssid: str, password: str) -> None` and call it from both renderers.
 
@@ -520,12 +520,12 @@ def write_nm_keyfile(path: Path, ssid: str, password: str) -> None:
 
 NM keyfiles treat `;`, `=`, and leading/trailing whitespace specially; extend `_UNSAFE_CHARS` handling for the NM renderer only if a test shows it is needed (YAGNI otherwise, the existing unsafe set already blocks quotes, newlines, and backslashes).
 
-- [ ] **Step 4: Run the full firmware suite**
+- [x] **Step 4: Run the full firmware suite**
 
 Run: `cd firmware && uv run --locked --extra dev pytest -v`
 Expected: all pass (existing wpa_supplicant tests untouched)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/wifi_onboard.py firmware/tests/test_wifi_onboard.py
@@ -542,7 +542,7 @@ git commit -m "feat(firmware): NetworkManager keyfile rendering for Bookworm onb
 - Consumes: `parse_onboarding_qr_payload`, `QrDecodeError`, `write_nm_keyfile`, `write_session_credentials` (existing plus Task 6).
 - Produces: `QrScanner` Protocol (`scan() -> str | None`, one capture-and-decode attempt), `RpicamZbarScanner` real implementation (`rpicam-still` then `zbarimg --raw -q`), and `run_onboarding(scanner: QrScanner, nm_keyfile_path: Path, session_path: Path, max_attempts: int) -> OnboardingPayload | None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # firmware/tests/test_onboarding.py
@@ -595,12 +595,12 @@ def test_run_onboarding_gives_up_after_max_attempts(tmp_path):
     assert not (tmp_path / "k").exists()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_onboarding.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'visio_recorder.onboarding'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # firmware/visio_recorder/onboarding.py
@@ -664,12 +664,12 @@ def run_onboarding(
 
 `RpicamZbarScanner` is deliberately not unit tested (two `subprocess.run` calls, no branching beyond return-code checks), matching the codebase convention that real drivers are exercised on hardware in Epic 5.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_onboarding.py -v`
 Expected: 2 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/onboarding.py firmware/tests/test_onboarding.py
@@ -686,7 +686,7 @@ git commit -m "feat(firmware): first-boot QR onboarding loop"
 - Consumes: session file JSON written by `write_session_credentials` (`{"access_token", "refresh_token"}`); `supabase-py`'s `create_client(url, key)` object shape (`auth.set_session`, `storage.from_(bucket).upload(path, file, options)`, `table(name).upsert(row).execute()`).
 - Produces: `SupabaseClients` dataclass with `storage: StorageClient`, `status: StatusClient`, `registration: DeviceRegistrationClient` (the three existing Protocols), built by `build_supabase_clients(url: str, key: str, session_path: Path, client_factory=create_client) -> SupabaseClients`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # firmware/tests/test_supabase_clients.py
@@ -737,12 +737,12 @@ def test_registration_adapter_upserts_device_row(tmp_path):
 
 Flesh out `FakeSupabase` and the two elided tests fully when implementing; the fake records every call so each adapter method has one assertion-backed test.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_supabase_clients.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'visio_recorder.supabase_clients'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # firmware/visio_recorder/supabase_clients.py
@@ -803,12 +803,12 @@ def build_supabase_clients(
 Add `supabase` to `firmware/pyproject.toml` dependencies if not already present and run `uv lock` (check first; the Epic 1 plan lists `supabase-py` in the stack).
 Verify the exact `devices` upsert column names against `supabase/migrations` before implementing `SupabaseRegistration` (the schema is the contract; adjust the row dict to match).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd firmware && uv run --locked --extra dev pytest tests/test_supabase_clients.py -v`
 Expected: all pass
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/supabase_clients.py firmware/tests/test_supabase_clients.py firmware/pyproject.toml firmware/uv.lock
@@ -834,11 +834,11 @@ Behavior to encode in tests, one behavior per test:
 
 Tests drive the loop with fakes (instant fake recorder, scripted battery readings, raising storage client) and a `stop` event set after N cycles; no sleeps and no real threads beyond the worker under test (join with a timeout and assert it finished).
 
-- [ ] **Step 1: Write the failing tests** covering the four behaviors above (full arrangements using the existing fakes from `test_recording_loop.py`, moved into a shared `tests/fakes.py` if duplication gets noisy).
-- [ ] **Step 2: Run to verify they fail** (`ImportError: cannot import name 'run_recording_loop'`).
-- [ ] **Step 3: Implement `LoopDeps` and `run_recording_loop`** exactly to the behaviors; the worker thread is the only new concurrency and the queue is unbounded.
-- [ ] **Step 4: Run the full firmware suite** - all pass, no hangs (worker joins with `timeout=5`).
-- [ ] **Step 5: Commit** `feat(firmware): recording loop with background upload worker`.
+- [x] **Step 1: Write the failing tests** covering the four behaviors above (full arrangements using the existing fakes from `test_recording_loop.py`, moved into a shared `tests/fakes.py` if duplication gets noisy).
+- [x] **Step 2: Run to verify they fail** (`ImportError: cannot import name 'run_recording_loop'`).
+- [x] **Step 3: Implement `LoopDeps` and `run_recording_loop`** exactly to the behaviors; the worker thread is the only new concurrency and the queue is unbounded.
+- [x] **Step 4: Run the full firmware suite** - all pass, no hangs (worker joins with `timeout=5`).
+- [x] **Step 5: Commit** `feat(firmware): recording loop with background upload worker`.
 
 **As-built notes:**
 
@@ -854,9 +854,9 @@ Tests drive the loop with fakes (instant fake recorder, scripted battery reading
 **Interfaces:**
 - Produces: `DaemonConfig` dataclass and `load_config(env: Mapping[str, str]) -> DaemonConfig` (reads `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR` default `/var/lib/visio-recorder`, `VISIO_SEGMENT_DURATION_MS` default `300000`, `VISIO_FRAMERATE` default `30`; raises `ValueError` naming any missing required key), plus `main() -> int` and the `if __name__ == "__main__": raise SystemExit(main())` guard.
 
-- [ ] **Step 1: Write failing tests for `load_config`** (happy path, defaults, missing-key error naming the key).
-- [ ] **Step 2: Run to verify they fail.**
-- [ ] **Step 3: Implement `load_config` and `main`.**
+- [x] **Step 1: Write failing tests for `load_config`** (happy path, defaults, missing-key error naming the key).
+- [x] **Step 2: Run to verify they fail.**
+- [x] **Step 3: Implement `load_config` and `main`.**
 
 `main()` composes, in order: `load_config(os.environ)`; `run_startup_sequence` (exit 0 with CRITICAL LED if `proceed` is False); first-boot check (`session_path` missing -> `run_onboarding` with `RpicamZbarScanner`, exit 1 if it returns None); `load_or_create_device_id` (+ `register_device` when the state file was new); `build_supabase_clients`; `flush_pending`; `run_recording_loop` with a `stop` event wired to `signal.SIGTERM`/`SIGINT`.
 `main` stays a thin composition function tested only via its parts, matching the codebase convention that `daemon.py` wiring is validated on hardware in Epic 5.
@@ -870,14 +870,14 @@ Systemd unit gains:
 EnvironmentFile=/etc/visio-recorder.env
 ```
 
-- [ ] **Step 4: Docs.**
+- [x] **Step 4: Docs.**
 
 README firmware section: replace the "currently only implements the startup battery/LED sequence" sentence with the as-built description (onboarding, queue flush, recording loop, background uploads, `EnvironmentFile` config, `apt install zbar-tools` prerequisite).
 Spec WiFi Onboarding section: note the as-built NM keyfile deviation with one sentence and why.
 Epic 5 checklist step 2: "confirm the NetworkManager keyfile is written and the device reconnects" replaces the `wpa_supplicant.conf` wording.
 Firmware plan Handoff: mark the glue items as resolved by this plan (mirror the as-built note pattern used for issue #9).
 
-- [ ] **Step 5: Run the full firmware suite, then commit** `feat(firmware): daemon main entry, config, and systemd wiring (closes #7)`.
+- [x] **Step 5: Run the full firmware suite, then commit** `feat(firmware): daemon main entry, config, and systemd wiring (closes #7)`.
 
 ---
 

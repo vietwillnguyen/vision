@@ -34,14 +34,14 @@ Inline task snippets showing the undated format are historical; the `firmware/` 
 **Interfaces:**
 - Produces: a `pytest` command runnable from `firmware/` that discovers `tests/`.
 
-- [ ] **Step 1: Create the package layout**
+- [x] **Step 1: Create the package layout**
 
 ```bash
 mkdir -p firmware/visio_recorder firmware/tests firmware/systemd
 touch firmware/visio_recorder/__init__.py firmware/tests/__init__.py
 ```
 
-- [ ] **Step 2: Write `pyproject.toml`**
+- [x] **Step 2: Write `pyproject.toml`**
 
 `firmware/pyproject.toml`:
 ```toml
@@ -63,7 +63,7 @@ packages = ["visio_recorder"]
 testpaths = ["tests"]
 ```
 
-- [ ] **Step 3: Install and verify pytest runs with zero tests**
+- [x] **Step 3: Install and verify pytest runs with zero tests**
 
 Dependencies are managed with [`uv`](https://docs.astral.sh/uv/) rather than a hand-rolled venv, so the lockfile (`firmware/uv.lock`) stays reproducible across dev machines and deployed devices:
 
@@ -74,7 +74,7 @@ uv run pytest
 ```
 Expected: `no tests ran` (exit 0/5 depending on pytest version - either is fine at this stage).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add firmware/pyproject.toml firmware/visio_recorder/__init__.py firmware/tests/__init__.py
@@ -92,7 +92,7 @@ git commit -m "chore: scaffold firmware python package"
 **Interfaces:**
 - Produces: `BatteryReader` (Protocol with `get_charge_pct() -> int`), `BatteryStatus` dataclass (`pct: int`, `should_halt: bool`, `is_low: bool`), `read_battery_status(reader: BatteryReader) -> BatteryStatus`, constants `LOW_BATTERY_HALT_PCT = 10`, `LOW_BATTERY_WARN_PCT = 20`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_battery.py`:
 ```python
@@ -125,12 +125,12 @@ def test_battery_below_halt_threshold_should_halt():
     assert status.should_halt is True
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_battery.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.battery'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/battery.py`:
 ```python
@@ -162,12 +162,12 @@ def read_battery_status(reader: BatteryReader) -> BatteryStatus:
     )
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_battery.py -v`
 Expected: PASS (3 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/battery.py firmware/tests/test_battery.py
@@ -185,7 +185,7 @@ git commit -m "feat: add battery monitor"
 **Interfaces:**
 - Produces: `LedState` enum (`RECORDING`, `UPLOADING`, `LOW_BATTERY`, `CRITICAL`), `LedPattern` enum (`SOLID`, `PULSING`, `FLASHING`), `LedDriver` Protocol (single method `set(color: tuple[int, int, int], pattern: LedPattern) -> None`), `apply_led_state(driver: LedDriver, state: LedState) -> None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_led.py`:
 ```python
@@ -224,12 +224,12 @@ def test_critical_state_is_flashing_red():
     assert driver.calls == [((255, 0, 0), LedPattern.FLASHING)]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_led.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.led'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/led.py`:
 ```python
@@ -273,12 +273,12 @@ def apply_led_state(driver: LedDriver, state: LedState) -> None:
     driver.set(color, pattern)
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_led.py -v`
 Expected: PASS (4 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/led.py firmware/tests/test_led.py
@@ -296,7 +296,7 @@ git commit -m "feat: add LED state machine"
 **Interfaces:**
 - Produces: `CommandRunner` Protocol (`run(args: list[str]) -> None`), `SubprocessCommandRunner` (real implementation, not unit tested), `mux_segment(runner: CommandRunner, h264_path: Path, framerate: int) -> Path`. The capture framerate is threaded through explicitly (`ffmpeg -framerate <fps> -i ...`) rather than assumed, since `rpicam-vid` can be configured to capture at rates other than the nominal default and a mismatched `-framerate` produces a corrupted-looking MP4 without `ffmpeg` erroring.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_muxer.py`:
 ```python
@@ -340,12 +340,12 @@ def test_mux_segment_threads_through_the_given_framerate():
     assert runner.calls[0][framerate_idx] == "25"
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_muxer.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.muxer'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/muxer.py`:
 ```python
@@ -382,12 +382,12 @@ def mux_segment(runner: CommandRunner, h264_path: Path, framerate: int) -> Path:
     return mp4_path
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_muxer.py -v`
 Expected: PASS (3 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/muxer.py firmware/tests/test_muxer.py
@@ -405,7 +405,7 @@ git commit -m "feat: add h264 to mp4 muxer"
 **Interfaces:**
 - Produces: `enqueue(queue_dir: Path, source_path: Path) -> Path`, `list_pending(queue_dir: Path) -> list[Path]`, `mark_uploaded(path: Path) -> None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_upload_queue.py`:
 ```python
@@ -455,12 +455,12 @@ def test_mark_uploaded_deletes_file(tmp_path):
     assert not path.exists()
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_upload_queue.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.upload_queue'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/upload_queue.py`:
 ```python
@@ -485,12 +485,12 @@ def mark_uploaded(path: Path) -> None:
     path.unlink()
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_upload_queue.py -v`
 Expected: PASS (4 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/upload_queue.py firmware/tests/test_upload_queue.py
@@ -508,7 +508,7 @@ git commit -m "feat: add upload queue"
 **Interfaces:**
 - Produces: `StorageClient` Protocol (`upload(bucket: str, object_path: str, local_path: Path) -> None`), `upload_segment(client: StorageClient, device_id: str, local_path: Path) -> str` returning the object path `{device_id}/{filename}`. Used for both `.mp4` segments and `.marker` flag files - the function only cares about the filename, so the same call uploads either.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_uploader.py`:
 ```python
@@ -544,12 +544,12 @@ def test_upload_segment_also_uploads_flag_marker_files():
     assert object_path == "device-abc/FLAG_120300.marker"
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_uploader.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.uploader'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/uploader.py`:
 ```python
@@ -568,12 +568,12 @@ def upload_segment(client: StorageClient, device_id: str, local_path: Path) -> s
     return object_path
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_uploader.py -v`
 Expected: PASS (2 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/uploader.py firmware/tests/test_uploader.py
@@ -591,7 +591,7 @@ git commit -m "feat: add supabase segment uploader"
 **Interfaces:**
 - Produces: `write_flag_marker(queue_dir: Path, pressed_at: datetime) -> Path`, writing an empty `FLAG_HHMMSS.marker` file and returning its path.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_flag_button.py`:
 ```python
@@ -616,12 +616,12 @@ def test_write_flag_marker_creates_queue_dir_if_missing(tmp_path):
     assert queue_dir.exists()
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_flag_button.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.flag_button'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/flag_button.py`:
 ```python
@@ -636,12 +636,12 @@ def write_flag_marker(queue_dir: Path, pressed_at: datetime) -> Path:
     return marker_path
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_flag_button.py -v`
 Expected: PASS (2 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/flag_button.py firmware/tests/test_flag_button.py
@@ -663,7 +663,7 @@ The QR payload the mobile app displays during pairing carries the user's own (al
 
 Hardening applied after the initial implementation (see review commits `ea25bae`, `c812901`): `QrDecodeError` messages never embed the raw payload (only whether JSON parsing failed, or which field was missing/non-string, plus payload length) since the payload contains the WiFi password and Supabase tokens and would otherwise leak into journald; `render_wpa_supplicant` rejects `ssid`/`password` containing a quote, newline, carriage return, or backslash instead of interpolating them unescaped into `wpa_supplicant.conf`, and rejects passwords outside the 8-63 character range required for a WPA-PSK passphrase; `write_wpa_supplicant` and `write_session_credentials` create their target files atomically at `0o600` via `os.open`, and tighten permissions via `fchmod` even when the target file already existed with looser permissions.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_wifi_onboard.py`:
 ```python
@@ -828,12 +828,12 @@ def test_write_wpa_supplicant_rejects_out_of_range_psk_length(tmp_path):
     assert not path.exists()
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_wifi_onboard.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.wifi_onboard'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/wifi_onboard.py`:
 ```python
@@ -928,12 +928,12 @@ def write_session_credentials(path: Path, access_token: str, refresh_token: str)
     )
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_wifi_onboard.py -v`
 Expected: PASS (29 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/wifi_onboard.py firmware/tests/test_wifi_onboard.py
@@ -953,7 +953,7 @@ git commit -m "feat: add wifi and auth onboarding via qr code"
 
 Hardening applied after the initial implementation (see review commit `1a5cd23`): the write is atomic - the new UUID is written to a `.tmp` sibling file, `fsync`'d, then moved into place with `os.replace`, so a power loss mid-write (common on a headless Pi that loses power without a clean shutdown) can never leave `state_path` truncated or partially written. A pre-existing state file that fails to parse (empty, truncated JSON, or missing the `device_id` key) is treated the same as a missing file - a fresh UUID is generated and persisted - rather than raising, since a corrupt identity file should self-heal rather than crash the daemon on every boot.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_device_identity.py`:
 ```python
@@ -1029,12 +1029,12 @@ def test_register_device_calls_client_with_id_and_name():
     assert client.calls == [("11111111-1111-1111-1111-111111111111", "visio-pendant")]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_device_identity.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.device_identity'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/device_identity.py`:
 ```python
@@ -1080,12 +1080,12 @@ def register_device(client: DeviceRegistrationClient, device_id: str, name: str)
     client.upsert_device(device_id, name)
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_device_identity.py -v`
 Expected: PASS (8 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/device_identity.py firmware/tests/test_device_identity.py
@@ -1104,7 +1104,7 @@ git commit -m "feat: add device identity and registration"
 - Consumes: `BatteryReader`, `read_battery_status` from Task 2; `LedDriver`, `LedPattern`, `LedState`, `apply_led_state` from Task 3.
 - Produces: `StartupResult` dataclass (`proceed: bool`, `battery_pct: int`), `run_startup_sequence(battery_reader: BatteryReader, led_driver: LedDriver) -> StartupResult`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_daemon.py`:
 ```python
@@ -1164,12 +1164,12 @@ def test_critical_battery_halts_and_shows_critical_led():
     assert led.calls == [((255, 0, 0), LedPattern.FLASHING)]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_daemon.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.daemon'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/daemon.py`:
 ```python
@@ -1197,12 +1197,12 @@ def run_startup_sequence(battery_reader: BatteryReader, led_driver: LedDriver) -
     return StartupResult(proceed=True, battery_pct=status.pct)
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_daemon.py -v`
 Expected: PASS (4 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add firmware/visio_recorder/daemon.py firmware/tests/test_daemon.py
@@ -1221,7 +1221,7 @@ git commit -m "feat: add startup sequence orchestration"
 - Consumes: `BatteryReader`, `read_battery_status` from Task 2; `LedDriver`, `LedState`, `apply_led_state` from Task 3; `CommandRunner`, `mux_segment` from Task 4; `enqueue`, `list_pending`, `mark_uploaded` from Task 5; `StorageClient`, `upload_segment` from Task 6.
 - Produces: `DeviceStatus` dataclass (`device_id: str`, `battery_pct: int`, `storage_used_gb: float`, `storage_free_gb: float`, `segments_pending: int`, `segments_uploaded_today: int`, `recording_active: bool`), `StatusClient` Protocol (`upsert_device_status(status: dict) -> None`), `next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState` (battery takes priority: low battery always wins over the uploading indicator), `on_segment_complete(h264_path: Path, queue_dir: Path, command_runner: CommandRunner, storage_client: StorageClient, status_client: StatusClient, led_driver: LedDriver, battery_reader: BatteryReader, device_id: str, segments_uploaded_today: int, framerate: int) -> int` (returns the new `segments_uploaded_today` count) - this is what runs once per completed 5-minute segment, per the spec's Recording Loop section. `framerate` is forwarded to `mux_segment` (Task 4), and the raw `.h264` is deleted once the mux succeeds so raw capture footage doesn't accumulate on the SD card alongside the muxed `.mp4`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `firmware/tests/test_recording_loop.py`:
 ```python
@@ -1367,12 +1367,12 @@ def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
     ]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd firmware && uv run pytest tests/test_recording_loop.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'visio_recorder.recording_loop'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `firmware/visio_recorder/recording_loop.py`:
 ```python
@@ -1452,17 +1452,17 @@ def on_segment_complete(
     return segments_uploaded_today
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd firmware && uv run pytest tests/test_recording_loop.py -v`
 Expected: PASS (5 passed).
 
-- [ ] **Step 5: Run the full firmware test suite**
+- [x] **Step 5: Run the full firmware test suite**
 
 Run: `cd firmware && uv run pytest -v`
 Expected: all tests across Tasks 2-11 pass (64 passed).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add firmware/visio_recorder/recording_loop.py firmware/tests/test_recording_loop.py
@@ -1479,7 +1479,7 @@ git commit -m "feat: add recording loop tick and status reporting"
 **Interfaces:**
 - Produces: an installable systemd unit that starts `visio_recorder.daemon` on boot. Not unit tested (no branching logic); verified with `systemd-analyze verify`.
 
-- [ ] **Step 1: Write the unit file**
+- [x] **Step 1: Write the unit file**
 
 `firmware/systemd/visio-recorder.service`:
 ```ini
@@ -1500,12 +1500,12 @@ User=pi
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 2: Verify the unit file syntax**
+- [x] **Step 2: Verify the unit file syntax**
 
 Run: `systemd-analyze verify firmware/systemd/visio-recorder.service`
 Expected: no output (clean unit) - warnings about the referenced `ExecStart` binary not existing on the dev machine are expected and fine; this is only validated for real on the Pi during Epic 4/5 integration.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add firmware/systemd/visio-recorder.service

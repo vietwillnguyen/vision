@@ -40,14 +40,14 @@ The Handoff section reflects the final contracts.
 **Interfaces:**
 - Produces: a `pytest` command runnable from `pipeline/`.
 
-- [ ] **Step 1: Create the package layout**
+- [x] **Step 1: Create the package layout**
 
 ```bash
 mkdir -p pipeline/pipeline pipeline/tests
 touch pipeline/pipeline/__init__.py pipeline/tests/__init__.py
 ```
 
-- [ ] **Step 2: Write `pyproject.toml`**
+- [x] **Step 2: Write `pyproject.toml`**
 
 `pipeline/pyproject.toml`:
 ```toml
@@ -66,7 +66,7 @@ dev = ["pytest>=8.0.0"]
 testpaths = ["tests"]
 ```
 
-- [ ] **Step 3: Install and verify pytest runs with zero tests**
+- [x] **Step 3: Install and verify pytest runs with zero tests**
 
 ```bash
 cd pipeline
@@ -76,7 +76,7 @@ pytest
 ```
 Expected: `no tests ran`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pipeline/pyproject.toml pipeline/pipeline/__init__.py pipeline/tests/__init__.py
@@ -94,7 +94,7 @@ git commit -m "chore: scaffold pipeline python package"
 **Interfaces:**
 - Produces: `ScoreWeights` dataclass (`scene_weight: float = 0.4`, `audio_weight: float = 0.3`, `motion_weight: float = 0.2`), `Segment` dataclass (`id: str`, `recorded_at: datetime`, `duration_sec: int`, `s3_key: str`, `location: str`, `composite_score: float = 0.0`, `manually_flagged: bool = False`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_models.py`:
 ```python
@@ -122,12 +122,12 @@ def test_segment_defaults_composite_score_and_manually_flagged():
     assert segment.manually_flagged is False
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_models.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.models'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `pipeline/pipeline/models.py`:
 ```python
@@ -153,12 +153,12 @@ class Segment:
     manually_flagged: bool = False
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_models.py -v`
 Expected: PASS (2 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/models.py pipeline/tests/test_models.py
@@ -177,7 +177,7 @@ git commit -m "feat: add segment and score weight models"
 **Interfaces:**
 - Produces: `TranscriptionResult` dataclass (`speech_presence_ratio: float`, `silence_ratio: float`, `has_exclamation: bool`), `TranscriptionClient` Protocol (`transcribe(audio_path: Path) -> TranscriptionResult`), `compute_audio_activity(result: TranscriptionResult) -> float`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_audio_scoring.py`:
 ```python
@@ -206,12 +206,12 @@ def test_score_is_clamped_to_one():
     assert compute_audio_activity(result) == 1.0
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_audio_scoring.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.scoring'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```bash
 mkdir -p pipeline/pipeline/scoring
@@ -244,12 +244,12 @@ def compute_audio_activity(result: TranscriptionResult) -> float:
     return min(score, 1.0)
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_audio_scoring.py -v`
 Expected: PASS (4 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/scoring/__init__.py pipeline/pipeline/scoring/audio.py pipeline/tests/test_audio_scoring.py
@@ -267,7 +267,7 @@ git commit -m "feat: add audio activity scoring"
 **Interfaces:**
 - Produces: `compute_motion_intensity(frame_diffs: list[float], max_diff: float = 255.0) -> float`, constant `MOTION_GATING_THRESHOLD = 0.1`, `should_run_scene_scoring(motion_intensity: float) -> bool`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_motion_scoring.py`:
 ```python
@@ -298,12 +298,12 @@ def test_gating_below_threshold_skips_scene_scoring():
     assert should_run_scene_scoring(MOTION_GATING_THRESHOLD - 0.01) is False
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_motion_scoring.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.scoring.motion'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `pipeline/pipeline/scoring/motion.py`:
 ```python
@@ -321,12 +321,12 @@ def should_run_scene_scoring(motion_intensity: float) -> bool:
     return motion_intensity >= MOTION_GATING_THRESHOLD
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_motion_scoring.py -v`
 Expected: PASS (5 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/scoring/motion.py pipeline/tests/test_motion_scoring.py
@@ -344,7 +344,7 @@ git commit -m "feat: add motion scoring and cost gating threshold"
 **Interfaces:**
 - Produces: `SCENE_SCORING_PROMPT` constant (the exact prompt sent to Claude Haiku), `SceneScoreParseError` exception, `SceneScore` dataclass (`novelty: float`, `location: str`, `people_present: bool`), `VisionClient` Protocol (`score_frames(frame_paths: list[Path], prompt: str) -> str`), `parse_scene_response(raw_json: str) -> SceneScore`, `score_scene(client: VisionClient, frame_paths: list[Path]) -> SceneScore`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_scene_scoring.py`:
 ```python
@@ -411,12 +411,12 @@ def test_score_scene_calls_client_with_spec_prompt_and_parses_result():
     assert client.calls == [(frame_paths, SCENE_SCORING_PROMPT)]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_scene_scoring.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.scoring.scene'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `pipeline/pipeline/scoring/scene.py`:
 ```python
@@ -470,12 +470,12 @@ def score_scene(client: VisionClient, frame_paths: list[Path]) -> SceneScore:
     return parse_scene_response(raw_json)
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_scene_scoring.py -v`
 Expected: PASS (6 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/scoring/scene.py pipeline/tests/test_scene_scoring.py
@@ -494,7 +494,7 @@ git commit -m "feat: add scene novelty scoring"
 - Consumes: `ScoreWeights` from Task 2.
 - Produces: `compute_composite_score(scene_novelty: float, audio_activity: float, motion_intensity: float, weights: ScoreWeights, manually_flagged: bool) -> float`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_composite_scoring.py`:
 ```python
@@ -529,12 +529,12 @@ def test_custom_weights_are_respected():
     assert score == pytest.approx(0.5)
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_composite_scoring.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.scoring.composite'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `pipeline/pipeline/scoring/composite.py`:
 ```python
@@ -556,12 +556,12 @@ def compute_composite_score(
     return base_score * 1.5 if manually_flagged else base_score
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_composite_scoring.py -v`
 Expected: PASS (3 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/scoring/composite.py pipeline/tests/test_composite_scoring.py
@@ -581,7 +581,7 @@ git commit -m "feat: add composite scoring formula"
 - Consumes: `Segment` from Task 2 (including `manually_flagged`).
 - Produces: `CLIP_DURATION_SEC = 15` constant, `select_highlights(segments: list[Segment], target_duration_sec: int = 90, clip_duration_sec: int = CLIP_DURATION_SEC) -> list[Segment]`, chronologically ordered. Each selected `Segment` is a **source** for one `clip_duration_sec`-long clip - see Task 8, which extracts that clip rather than using the whole (5-minute) segment. All `manually_flagged` segments are included unconditionally, in addition to (not counted against) the `target_duration_sec // clip_duration_sec` budget of top-ranked unflagged segments (spec: "Flagged moments are always included in the highlight reel").
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_highlight_selector.py`:
 ```python
@@ -661,12 +661,12 @@ def test_flagged_segments_are_included_in_addition_to_clip_budget():
     assert [s.id for s in selected] == ["top", "flagged"]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_highlight_selector.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.selection'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```bash
 mkdir -p pipeline/pipeline/selection
@@ -715,12 +715,12 @@ def _violates_diversity(chronological_segments: list[Segment]) -> bool:
     return False
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_highlight_selector.py -v`
 Expected: PASS (5 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/selection/__init__.py pipeline/pipeline/selection/highlight_selector.py pipeline/tests/test_highlight_selector.py
@@ -739,7 +739,7 @@ git commit -m "feat: add highlight selection with diversity constraint and flagg
 **Interfaces:**
 - Produces: `compute_clip_offset_sec(segment_duration_sec: int, clip_duration_sec: int) -> float` (centers the clip window inside the source segment, clamped to `0.0` if the segment is shorter than the clip), `build_trim_command(input_path: Path, output_path: Path, offset_sec: float, clip_duration_sec: int) -> list[str]`, `render_concat_file_content(segment_paths: list[Path]) -> str`, `VINTAGE_FILTER` constant, `build_assembly_command(concat_file: Path, output_path: Path, vintage: bool) -> list[str]`. Each selected `Segment` from Task 7 is downloaded once, trimmed to its clip window with `build_trim_command`, and the resulting per-clip files are what `render_concat_file_content`/`build_assembly_command` concatenate - never the original 5-minute segment files.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_ffmpeg_assembler.py`:
 ```python
@@ -804,12 +804,12 @@ def test_build_assembly_command_vintage_style_adds_filter():
     ]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_ffmpeg_assembler.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.assembly'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```bash
 mkdir -p pipeline/pipeline/assembly
@@ -856,12 +856,12 @@ def build_assembly_command(concat_file: Path, output_path: Path, vintage: bool) 
     return args
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_ffmpeg_assembler.py -v`
 Expected: PASS (6 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/assembly/__init__.py pipeline/pipeline/assembly/ffmpeg_assembler.py pipeline/tests/test_ffmpeg_assembler.py
@@ -880,7 +880,7 @@ git commit -m "feat: add ffmpeg clip trimming and reel assembly"
 **Interfaces:**
 - Produces: `PushClient` Protocol (`send(to_token: str, title: str, body: str) -> None`), `notify_reel_ready(client: PushClient, push_token: str, reel_date: date) -> None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_notifier.py`:
 ```python
@@ -911,12 +911,12 @@ def test_notify_reel_ready_sends_expected_copy():
     ]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_notifier.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.delivery'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```bash
 mkdir -p pipeline/pipeline/delivery
@@ -939,12 +939,12 @@ def notify_reel_ready(client: PushClient, push_token: str, reel_date: date) -> N
     client.send(push_token, "Your highlight reel is ready", body)
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_notifier.py -v`
 Expected: PASS (1 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/delivery/__init__.py pipeline/pipeline/delivery/notifier.py pipeline/tests/test_notifier.py
@@ -963,7 +963,7 @@ git commit -m "feat: add push notification delivery"
 - Consumes: `TranscriptionResult`, `compute_audio_activity` from Task 3; `compute_motion_intensity`, `should_run_scene_scoring` from Task 4; `VisionClient`, `score_scene` from Task 5; `compute_composite_score` from Task 6; `ScoreWeights` from Task 2.
 - Produces: `score_segment(transcription: TranscriptionResult, frame_diffs: list[float], vision_client: VisionClient | None, frame_paths: list[Path], weights: ScoreWeights, manually_flagged: bool) -> tuple[float, str]` returning `(composite_score, location)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_scoring_pipeline.py`:
 ```python
@@ -1022,12 +1022,12 @@ def test_low_motion_segment_skips_scene_scoring():
     assert composite == pytest.approx(0.4 * 0.0 + 0.3 * 0.0 + 0.2 * (1.0 / 255.0))
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_scoring_pipeline.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.scoring_pipeline'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `pipeline/pipeline/scoring_pipeline.py`:
 ```python
@@ -1071,12 +1071,12 @@ def score_segment(
     return composite, location
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_scoring_pipeline.py -v`
 Expected: PASS (2 passed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pipeline/pipeline/scoring_pipeline.py pipeline/tests/test_scoring_pipeline.py
@@ -1097,7 +1097,7 @@ The other tasks in this plan all assume `segments` rows already exist in the dat
 - Consumes: `Segment` from Task 2; `DEFAULT_LOCATION` from Task 10.
 - Produces: `SEGMENT_DURATION_SEC = 300` constant (matches the firmware plan's 5-minute segments), `parse_segment_filename(filename: str) -> datetime` (parses `YYYYMMDD_HHMMSS.mp4`), `parse_flag_marker_filename(filename: str) -> time` (parses `FLAG_HHMMSS.marker`), `build_segments_from_object_keys(object_keys: list[str], device_id: str) -> list[Segment]` (ignores non-`.mp4` keys; `location` starts at `DEFAULT_LOCATION` until Task 10's scoring overwrites it), `apply_flag_markers(segments: list[Segment], day: date, flag_marker_keys: list[str]) -> list[Segment]` (sets `manually_flagged = True` on the segment whose `[recorded_at, recorded_at + duration_sec)` window contains the marker's timestamp).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pipeline/tests/test_ingestion.py`:
 ```python
@@ -1155,12 +1155,12 @@ def test_apply_flag_markers_ignores_markers_outside_any_segment_window():
     assert segments[0].manually_flagged is False
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd pipeline && pytest tests/test_ingestion.py -v`
 Expected: FAIL - `ModuleNotFoundError: No module named 'pipeline.ingestion'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `pipeline/pipeline/ingestion.py`:
 ```python
@@ -1214,17 +1214,17 @@ def apply_flag_markers(segments: list[Segment], day: date, flag_marker_keys: lis
     return segments
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd pipeline && pytest tests/test_ingestion.py -v`
 Expected: PASS (5 passed).
 
-- [ ] **Step 5: Run the full pipeline test suite**
+- [x] **Step 5: Run the full pipeline test suite**
 
 Run: `cd pipeline && pytest -v`
 Expected: all tests across Tasks 2-11 pass (39 passed).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pipeline/pipeline/ingestion.py pipeline/tests/test_ingestion.py
