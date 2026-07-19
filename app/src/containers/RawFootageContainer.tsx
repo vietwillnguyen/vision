@@ -1,6 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { File, Paths } from 'expo-file-system';
-import * as MediaLibrary from 'expo-media-library';
 import React, { useMemo, useState } from 'react';
 import { Alert, Share, StyleSheet, Text, View } from 'react-native';
 
@@ -51,6 +49,10 @@ export function RawFootageContainer({ client, deviceId, now = () => new Date() }
   const onSave = async () => {
     if (!selected || !previewUrl) return;
     try {
+      // Required lazily: neither module has a web implementation, and
+      // executing them at import time crashes the web bundle at startup.
+      const { File, Paths } = require('expo-file-system') as typeof import('expo-file-system');
+      const MediaLibrary = require('expo-media-library') as typeof import('expo-media-library');
       const { granted } = await MediaLibrary.requestPermissionsAsync();
       if (!granted) {
         Alert.alert('Permission needed', 'Allow photo library access to save segments.');

@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import * as VideoThumbnails from 'expo-video-thumbnails';
 import { useEffect, useRef, useState } from 'react';
 
 import { buildSegmentSignedUrlRequest } from '../logic/segmentExport';
@@ -44,6 +43,11 @@ export function useSlotThumbnails(
         let uri = cache.current.get(slot.segment.id);
         if (!uri) {
           try {
+            // Required lazily: expo-video-thumbnails has no web implementation,
+            // and executing the module at import time crashes the web bundle.
+            // Failures here already log and skip, so web degrades to no thumbnails.
+            const VideoThumbnails =
+              require('expo-video-thumbnails') as typeof import('expo-video-thumbnails');
             const request = buildSegmentSignedUrlRequest(slot.segment.s3Key);
             const { data } = await client.storage
               .from(request.bucket)
