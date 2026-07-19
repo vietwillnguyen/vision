@@ -67,9 +67,11 @@ jobs:
         # SUPABASE_* vars conftest.py's live_supabase_env fixture reads.
         run: |
           eval "$(supabase status -o env)"
-          echo "SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
-          echo "SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
-          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
+          {
+            echo "SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+          } >> "$GITHUB_ENV"
       - name: Run pytest
         # Zero-Docker contract tests (filename/marker round-trip, segments/reels
         # row-shape vs. migrations and app hooks) plus the live-Supabase RLS
@@ -106,9 +108,11 @@ jobs:
         # SUPABASE_* checks see a real instance instead of skipping.
         run: |
           eval "$(supabase status -o env)"
-          echo "SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
-          echo "SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
-          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
+          {
+            echo "SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+          } >> "$GITHUB_ENV"
       - name: Install dependencies
         run: npm ci
         env:
