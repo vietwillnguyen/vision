@@ -129,13 +129,15 @@ The React Native (Expo, TypeScript) app: a bottom tab navigator (`@react-navigat
 - Styling uses `StyleSheet` with a shared dark theme (`src/theme.ts`) and an `accessibilityLabel` on every interactive element.
 - Out of scope for this wiring pass (tracked separately, not silently dropped): the WiFi + auth re-onboarding QR screen (the Re-onboard button shows a "not available yet" alert) and the regenerate bottom sheet (`validateRegenerateRequest` has no backend consumer yet).
 - The Supabase client reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` from `app/.env` (gitignored).
+- Native-only modules with no web implementation (`expo-video-thumbnails`, `expo-file-system`'s `File`/`Paths`, `expo-media-library`) are wrapped in `src/lib/videoThumbnails.{ts,web.ts}` and `src/lib/mediaSave.{ts,web.ts}` - Metro resolves the `.web.ts` variant (an `isAvailable: false` stub) on web instead of the native file, so the web bundle never evaluates a native-only import. `react-native-web`/`react-dom` are `devDependencies`, used only for local web preview; CI runs `npx expo export --platform web` as a smoke check so a reintroduced top-level native import fails the build instead of only being catchable by a manual web run.
 
 ### Local development
 
 ```bash
 cd app
-npm install         # install dependencies
-npm test            # run the Jest test suites
-npx tsc --noEmit    # type-check
-npx expo start      # launch the Expo dev server
+npm install           # install dependencies
+npm test              # run the Jest test suites
+npx tsc --noEmit      # type-check
+npx expo start        # launch the Expo dev server
+npx expo start --web  # preview in a browser (layout/styling only - no native video playback)
 ```
