@@ -1,8 +1,11 @@
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional, Protocol
 
+from visio_recorder.led import LedDriver, LedState, apply_led_state
+from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
 from visio_recorder.wifi_onboard import (
     OnboardingPayload,
     QrDecodeError,
@@ -10,6 +13,8 @@ from visio_recorder.wifi_onboard import (
     write_nm_keyfile,
     write_session_credentials,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 class QrScanner(Protocol):
@@ -57,3 +62,60 @@ def run_onboarding(
             continue
         return payload
     return None
+
+
+class ConnectionActivator(Protocol):
+    def activate(self, connection_id: str) -> None: ...
+
+
+class NmcliConnectionActivator:
+    """Makes NetworkManager pick up and bring up a freshly written keyfile.
+
+    NetworkManager does not reliably load keyfiles dropped into
+    system-connections while running, so onboarding must reload before it can
+    bring the profile up.
+    """
+
+    def __init__(self, command_runner: CommandRunner | None = None) -> None:
+        self._runner = command_runner or SubprocessCommandRunner()
+
+    def activate(self, connection_id: str) -> None:
+        self._runner.run(["nmcli", "connection", "reload"])
+        self._runner.run(["nmcli", "connection", "up", connection_id])
+
+
+def reactivate_connection_if_configured(
+    activator: ConnectionActivator, connection_id: str, nm_keyfile_path: Path
+) -> None:
+    """Best-effort activation retry for restart boots.
+
+    A first boot can fail activation after the keyfile is written (e.g. the
+    daemon races NetworkManager coming up), and NM does not reliably load
+    dropped-in keyfiles on its own, so restart boots retry reload/up whenever
+    the keyfile exists. Failure is logged but never fatal: the device may
+    already be online via autoconnect.
+    """
+    if not nm_keyfile_path.exists():
+        return
+    try:
+        activator.activate(connection_id)
+    except Exception:
+        _logger.exception(
+            "best-effort reactivation of NetworkManager connection %r failed",
+            connection_id,
+        )
+
+
+def activate_connection(
+    activator: ConnectionActivator, connection_id: str, led_driver: LedDriver
+) -> bool:
+    try:
+        activator.activate(connection_id)
+    except Exception:
+        _logger.exception(
+            "failed to activate NetworkManager connection %r; device stays offline",
+            connection_id,
+        )
+        apply_led_state(led_driver, LedState.CRITICAL)
+        return False
+    return True

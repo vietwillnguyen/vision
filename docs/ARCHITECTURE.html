@@ -24,7 +24,7 @@
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
-<!-- source-sha256: bbcdfcd44e3ade727eda389a31fa361d2094b4195829f1371afebd5014e5380a -->
+<!-- source-sha256: 741bf51391d90b333709938b5d3a3af345dabc15fec72b4b744a6c4bc7fa4adc -->
 <!-- source-file: docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- regenerated-at: 2026-07-12 (spec-sync) -->
 
@@ -155,7 +155,8 @@ flowchart TD
             <td colspan="2">
               <div class="flex flex-wrap gap-2">
                 <span class="badge badge-success badge-soft">#5 orchestrator — landed (nightly-reel workflow)</span>
-                <span class="badge badge-info badge-soft">#7 daemon glue — PR #15 open, awaiting merge</span>
+                <span class="badge badge-success badge-soft">#7 daemon glue — merged (PR #15)</span>
+                <span class="badge badge-success badge-soft">#18/#19 flag button + NM activation — landed</span>
                 <span class="badge badge-warning badge-soft">#8 app screen wiring — open</span>
                 <span class="badge badge-success badge-soft">#9 FLAG date fix — merged (PR #13)</span>
                 <span class="badge badge-success badge-soft">#6/#12 CI hardening — merged (PR #11/#14)</span>
@@ -181,13 +182,17 @@ flowchart TD
   B -- no --> C{"session.json exists?"}
   C -- "no (first boot)" --> D["QR onboarding: WiFi NM keyfile<br/>+ Supabase auth, up to 60 attempts"]
   D -- "never succeeds" --> D1["exit 1"]
-  D -- "succeeds" --> E
-  C -- yes --> E["load_or_create_device_id"]
+  D -- "succeeds" --> D2["nmcli connection reload<br/>+ up visio"]
+  D2 -- "activation fails" --> D3["CRITICAL LED, exit 1<br/>(systemd retries)"]
+  D2 -- ok --> E
+  C -- yes --> C1["best-effort nmcli reload + up<br/>(if keyfile exists; never fatal)"]
+  C1 --> E["load_or_create_device_id"]
   E --> F{"device_registered marker exists?"}
   F -- no --> G["register_device, then touch marker"]
   F -- yes --> H
   G --> H["flush_pending queue"]
-  H --> I["run_recording_loop"]
+  H --> I0["start flag-upload worker,<br/>register GPIO 17 flag-button listener"]
+  I0 --> I["run_recording_loop"]
         </pre>
       </div>
       <div class="card bg-base-100 shadow p-4">
@@ -218,12 +223,12 @@ flowchart TD
 
   <section id="gaps" class="space-y-4">
     <h2 class="text-2xl font-bold">As-built gaps</h2>
-    <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed.</p>
-    <div class="alert alert-warning alert-soft" role="alert">
-      <span><strong>Manual flag button not wired.</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">firmware/visio_recorder/flag_button.py</span>'s <span class="font-mono text-xs bg-base-200 rounded px-1">write_flag_marker</span> exists from Epic 1, but nothing in the Epic 5 daemon-glue plan connects a GPIO button press to it from <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span>. Blocks the Epic 5 hardware checklist's flag-button smoke test.</span>
+    <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed. Both previously tracked firmware gaps are now closed:</p>
+    <div class="alert alert-success alert-soft" role="alert">
+      <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, and hands it to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread never touches the network); a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for next-boot flush - the same retry contract as segments.</span>
     </div>
-    <div class="alert alert-warning alert-soft" role="alert">
-      <span><strong>NetworkManager keyfile isn't activated after write.</strong> Nothing runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span>/<span class="font-mono text-xs bg-base-200 rounded px-1">up</span> or reboots after onboarding writes the keyfile. First boot currently only recovers once NetworkManager's own file-watch picks it up, via crash-restart. Needs an explicit activation step before Epic 5 hardware bring-up.</span>
+    <div class="alert alert-success alert-soft" role="alert">
+      <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
     </div>
   </section>
 

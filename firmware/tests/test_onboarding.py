@@ -1,6 +1,14 @@
 import json
 
-from visio_recorder.onboarding import run_onboarding
+from visio_recorder.led import LedPattern
+from visio_recorder.onboarding import (
+    NmcliConnectionActivator,
+    activate_connection,
+    reactivate_connection_if_configured,
+    run_onboarding,
+)
+
+from tests.fakes import FakeCommandRunner, FakeLedDriver
 
 VALID_PAYLOAD = json.dumps(
     {
@@ -58,9 +66,80 @@ def test_run_onboarding_treats_invalid_credentials_as_failed_attempt(tmp_path):
 def test_run_onboarding_gives_up_after_max_attempts(tmp_path):
     scanner = FakeScanner([None, "garbage"])
 
-    payload = run_onboarding(
-        scanner, tmp_path / "k", tmp_path / "s", max_attempts=2
-    )
+    payload = run_onboarding(scanner, tmp_path / "k", tmp_path / "s", max_attempts=2)
 
     assert payload is None
     assert not (tmp_path / "k").exists()
+
+
+def test_nmcli_activator_runs_reload_then_up_in_order():
+    runner = FakeCommandRunner()
+    activator = NmcliConnectionActivator(runner)
+
+    activator.activate("visio")
+
+    assert runner.calls == [
+        ["nmcli", "connection", "reload"],
+        ["nmcli", "connection", "up", "visio"],
+    ]
+
+
+def test_activate_connection_returns_true_and_leaves_led_alone_on_success():
+    led = FakeLedDriver()
+
+    ok = activate_connection(
+        NmcliConnectionActivator(FakeCommandRunner()), "visio", led
+    )
+
+    assert ok is True
+    assert led.calls == []
+
+
+class RaisingActivator:
+    def activate(self, connection_id: str) -> None:
+        raise RuntimeError("nmcli failed")
+
+
+def test_activate_connection_surfaces_failure_via_critical_led():
+    led = FakeLedDriver()
+
+    ok = activate_connection(RaisingActivator(), "visio", led)
+
+    assert ok is False
+    assert led.calls == [((255, 0, 0), LedPattern.FLASHING)]
+
+
+def test_reactivate_retries_reload_and_up_when_keyfile_exists(tmp_path):
+    # Restart boots must retry activation: a failed first-boot reload leaves
+    # the profile unloaded, and NM does not pick up dropped-in keyfiles alone.
+    keyfile = tmp_path / "visio.nmconnection"
+    keyfile.touch()
+    runner = FakeCommandRunner()
+
+    reactivate_connection_if_configured(
+        NmcliConnectionActivator(runner), "visio", keyfile
+    )
+
+    assert runner.calls == [
+        ["nmcli", "connection", "reload"],
+        ["nmcli", "connection", "up", "visio"],
+    ]
+
+
+def test_reactivate_does_nothing_when_keyfile_is_missing(tmp_path):
+    runner = FakeCommandRunner()
+
+    reactivate_connection_if_configured(
+        NmcliConnectionActivator(runner), "visio", tmp_path / "missing.nmconnection"
+    )
+
+    assert runner.calls == []
+
+
+def test_reactivate_swallows_activation_failure(tmp_path):
+    keyfile = tmp_path / "visio.nmconnection"
+    keyfile.touch()
+
+    # Best-effort: a restart boot may already be online via autoconnect, so a
+    # failed retry must not raise (or crash the daemon before flush/recording).
+    reactivate_connection_if_configured(RaisingActivator(), "visio", keyfile)
