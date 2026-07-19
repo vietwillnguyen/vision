@@ -273,6 +273,8 @@ Per day of full 8-hour recording (~16GB raw footage, ~96 segments):
 - Expo AV for video playback.
 - Expo Notifications for push notification handling.
 
+**As-built deviation (Epic 5 screen wiring, issue #8):** playback uses `expo-video`, not Expo AV - `expo-av` is deprecated in current Expo SDKs and was only ever installed because this spec predates that deprecation. Timeline thumbnails are generated per segment via `expo-video-thumbnails`.
+
 ### Screens
 
 **Tab 1 - Today's Reel**
@@ -281,6 +283,8 @@ Per day of full 8-hour recording (~16GB raw footage, ~96 segments):
 - Vintage toggle (applies client-side filter if cloud version was rendered without it).
 - Share button - exports to camera roll or native share sheet.
 - Regenerate button - opens a preferences bottom sheet: target length (30s / 60s / 90s / 2min), style (clean / vintage), mood weighting (conversation-heavy / action-heavy / balanced).
+
+**As-built gap:** the regenerate bottom sheet is not wired in Epic 5 - `validateRegenerateRequest` (Epic 3) has no backend consumer yet, so there is nothing for it to trigger. Out of scope for issue #8; tracked as follow-up work, not silently dropped.
 
 **Tab 2 - Raw Footage**
 
@@ -296,6 +300,8 @@ Per day of full 8-hour recording (~16GB raw footage, ~96 segments):
 - Upload progress: segments pending and uploaded today.
 - Recording active / paused indicator.
 - Settings: WiFi re-onboarding (show QR code), resolution, segment length, score weights.
+
+**As-built gap:** WiFi re-onboarding is not wired in Epic 5 - the Re-onboard button shows a "not available yet" alert instead of the QR display screen, since it has no backend consumer yet either (separate issue, out of scope for #8).
 
 **Tab 4 - Archive**
 

@@ -3,12 +3,28 @@ import { useEffect, useState } from 'react';
 
 import type { DeviceStatus } from '../types';
 
-export function useDeviceStatus(client: SupabaseClient, deviceId: string): DeviceStatus | null {
-  const [status, setStatus] = useState<DeviceStatus | null>(null);
+export type RealtimeHealth = 'connecting' | 'live' | 'stale';
+
+export type DeviceStatusState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready'; status: DeviceStatus; realtime: RealtimeHealth };
+
+type FetchState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready'; status: DeviceStatus };
+
+const NO_ROW_CODE = 'PGRST116';
+
+export function useDeviceStatus(client: SupabaseClient, deviceId: string): DeviceStatusState {
+  const [fetchState, setFetchState] = useState<FetchState>({ kind: 'loading' });
+  const [realtime, setRealtime] = useState<RealtimeHealth>('connecting');
 
   useEffect(() => {
     let isMounted = true;
-    let realtimeUpdateArrived = false;
+    setFetchState({ kind: 'loading' });
+    setRealtime('connecting');
 
     client
       .from('device_status')
@@ -16,13 +32,23 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
       .eq('device_id', deviceId)
       .single()
       .then(
-        ({ data }: { data: Record<string, unknown> | null }) => {
-          if (isMounted && !realtimeUpdateArrived && data) {
-            setStatus(mapRow(data));
-          }
+        ({ data, error }: { data: Record<string, unknown> | null; error?: { code?: string; message?: string } | null }) => {
+          if (!isMounted) return;
+          setFetchState((prev) => {
+            if (prev.kind === 'ready') return prev; // realtime beat the fetch
+            if (data) return { kind: 'ready', status: mapRow(data) };
+            // No row yet (first boot) stays loading; anything else is an error.
+            if (error && error.code !== NO_ROW_CODE) {
+              return { kind: 'error', message: error.message ?? 'device status fetch failed' };
+            }
+            return prev;
+          });
         },
         (error: unknown) => {
-          console.error('useDeviceStatus: initial fetch failed', error);
+          if (!isMounted) return;
+          setFetchState((prev) =>
+            prev.kind === 'ready' ? prev : { kind: 'error', message: String(error) },
+          );
         },
       );
 
@@ -35,12 +61,18 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
         { event: '*', schema: 'public', table: 'device_status', filter: `device_id=eq.${deviceId}` },
         (payload: { new: Record<string, unknown> }) => {
           if (isMounted) {
-            realtimeUpdateArrived = true;
-            setStatus(mapRow(payload.new));
+            setFetchState({ kind: 'ready', status: mapRow(payload.new) });
           }
         },
       )
-      .subscribe();
+      .subscribe((status: string) => {
+        if (!isMounted) return;
+        if (status === 'SUBSCRIBED') {
+          setRealtime('live');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          setRealtime('stale');
+        }
+      });
 
     return () => {
       isMounted = false;
@@ -48,7 +80,10 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
     };
   }, [client, deviceId]);
 
-  return status;
+  if (fetchState.kind === 'ready') {
+    return { kind: 'ready', status: fetchState.status, realtime };
+  }
+  return fetchState;
 }
 
 function mapRow(row: Record<string, unknown>): DeviceStatus {

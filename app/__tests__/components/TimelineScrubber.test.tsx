@@ -1,7 +1,8 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
 import { TimelineScrubber } from '../../src/components/TimelineScrubber';
+import { buildTimelineSlots } from '../../src/logic/timeline';
 import type { TimelineSlot } from '../../src/logic/timeline';
 import type { Segment } from '../../src/types';
 
@@ -38,5 +39,17 @@ describe('TimelineScrubber', () => {
     fireEvent(getByTestId('slot-5'), 'longPress');
 
     expect(onSlotLongPress).toHaveBeenCalledWith(slots[1]);
+  });
+
+  it('renders a thumbnail image for slots that have one', () => {
+    const daySlots = buildTimelineSlots([seg], new Date('2026-07-04T00:00:00Z'));
+    render(
+      <TimelineScrubber
+        slots={daySlots}
+        thumbnails={{ 5: 'file:///thumb.jpg' }}
+        onSlotLongPress={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId('thumb-5')).toBeTruthy();
   });
 });

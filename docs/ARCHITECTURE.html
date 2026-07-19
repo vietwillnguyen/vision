@@ -24,7 +24,7 @@
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
-<!-- source-sha256: 741bf51391d90b333709938b5d3a3af345dabc15fec72b4b744a6c4bc7fa4adc -->
+<!-- source-sha256: f16c3b1404bc8bfd1a67b7fa7e12fd2e21155949917534d9d4b9a68a927f5eb9 -->
 <!-- source-file: docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- regenerated-at: 2026-07-12 (spec-sync) -->
 
@@ -280,20 +280,26 @@ score = base_score * 1.5  (if manually flagged)
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Today's Reel</h3>
-        <p class="text-xs text-base-content/70 mt-1">Full-screen player, vintage toggle, share, regenerate with preferences.</p>
+        <p class="text-xs text-base-content/70 mt-1">Full-screen <span class="font-mono text-xs bg-base-200 rounded px-1">expo-video</span> player, vintage toggle, share. Regenerate button not wired (no backend consumer).</p>
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Raw Footage</h3>
-        <p class="text-xs text-base-content/70 mt-1">5-min-thumbnail timeline, include/exclude feedback, flag markers.</p>
+        <p class="text-xs text-base-content/70 mt-1">Per-segment thumbnail timeline (<span class="font-mono text-xs bg-base-200 rounded px-1">expo-video-thumbnails</span>), include/exclude feedback, flag markers.</p>
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Device</h3>
-        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime, WiFi re-onboarding QR.</p>
+        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime with a stale banner on channel error. WiFi re-onboarding QR not wired.</p>
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Archive</h3>
-        <p class="text-xs text-base-content/70 mt-1">Calendar heat-map of past reels.</p>
+        <p class="text-xs text-base-content/70 mt-1">Calendar heat-map of past reels, UTC-midnight-normalized 30-day range.</p>
       </div>
+    </div>
+    <div class="alert alert-info alert-soft text-sm" role="alert">
+      <span><strong>As-built (Epic 5 screen wiring, issue #8):</strong> playback uses <span class="font-mono text-xs bg-base-200 rounded px-1">expo-video</span>, not Expo AV - <span class="font-mono text-xs bg-base-200 rounded px-1">expo-av</span> is deprecated in current Expo SDKs and was only installed because this spec predates that deprecation. A bottom tab navigator composes all four screens behind real Supabase Auth (session restore + AsyncStorage persistence).</span>
+    </div>
+    <div class="alert alert-warning alert-soft" role="alert">
+      <span><strong>Regenerate bottom sheet and WiFi re-onboarding QR screen not wired.</strong> Neither has a backend consumer yet, so both are out of scope for issue #8. The regenerate button and Re-onboard button surface as inert/"not available yet" rather than functional.</span>
     </div>
   </section>
 

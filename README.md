@@ -23,8 +23,10 @@ pipeline/            -- Epic 2: nightly cloud AI pipeline (Python package)
 app/                 -- Epic 3: React Native (Expo) mobile companion app
   src/logic/         -- pure TypeScript calculation (no React imports)
   src/hooks/         -- Supabase data hooks (client injected for testing)
+  src/containers/    -- wires hooks to presentational screens/components
   src/screens/       -- presentational screens (props in, JSX out)
-  src/components/    -- presentational components (timeline, segment preview)
+  src/components/    -- presentational components (timeline, segment preview, reel player)
+  src/theme.ts       -- shared dark theme for StyleSheet styling
   __tests__/         -- Jest suites run via `npm test`
 docs/
   superpowers/
@@ -32,7 +34,7 @@ docs/
     plans/           -- executable implementation plans (one per epic)
 ```
 
-All three software subsystems (Epics 1-3) are implemented; the pipeline's nightly orchestrator has landed (issue #5), while the firmware and app's remaining device/UI wiring is deferred to Epic 5 per each plan's Handoff section.
+All three software subsystems (Epics 1-3) are implemented, including the Epic 5 device/UI wiring deferred by each plan's Handoff section: the pipeline's nightly orchestrator (issue #5), the firmware's daemon glue (issue #7), and the app's screen wiring (issue #8).
 
 ## Architecture doc
 
@@ -116,12 +118,16 @@ cd pipeline
 uv run --extra dev pytest   # run the unit test suite
 ```
 
-## Mobile companion app (Epic 3)
+## Mobile companion app (Epic 3 + Epic 5 screen wiring)
 
-The React Native (Expo, TypeScript) app foundation: auth form validation, regenerate-preferences validation, timeline bucketing, archive heat-map cells, segment preview/export, and a realtime device-status hook.
+The React Native (Expo, TypeScript) app: a bottom tab navigator (`@react-navigation/bottom-tabs`) composing Today's Reel, Raw Footage, Device, and Archive behind real Supabase Auth (sign-in, session restore, and `@react-native-async-storage/async-storage` session persistence), backed by `src/logic/` calculation, `src/hooks/` data fetching, and `src/containers/` wiring the two together to presentational screens/components.
 
-- Strict layering: `src/logic/` is pure TypeScript with zero React imports, hooks take an injected `SupabaseClient` (tested with a fake client, never a real network call), and screens/components are presentational.
-- Screen wiring is deferred to Epic 5 per the plan's Handoff section: the bottom tab navigator, container screens, real Supabase Auth, video playback, and timeline thumbnails.
+- Strict layering: `src/logic/` is pure TypeScript with zero React imports; hooks take an injected `SupabaseClient` as their first parameter (tested with a fake client, never a real network call, and never imported as a module-level singleton outside `App.tsx` and `src/lib/supabase.ts`); `src/containers/` wire hooks to presentational screens/components.
+- Video playback uses `expo-video` (registered as a config plugin in `app.json`), not the deprecated `expo-av`; timeline thumbnails are generated and cached per-segment via `expo-video-thumbnails`.
+- `useDeviceStatus` exposes a discriminated `loading | error | ready` state and a `subscribe()` status callback so realtime channel errors (`CHANNEL_ERROR`/`TIMED_OUT`/`CLOSED`) surface as a stale banner instead of silently-stale data.
+- Archive heat-map ranges are normalized to UTC midnight via `src/logic/dates.ts` (30-day inclusive range), avoiding the off-by-one the original plan's Handoff section warned about for users west of UTC.
+- Styling uses `StyleSheet` with a shared dark theme (`src/theme.ts`) and an `accessibilityLabel` on every interactive element.
+- Out of scope for this wiring pass (tracked separately, not silently dropped): the WiFi + auth re-onboarding QR screen (the Re-onboard button shows a "not available yet" alert) and the regenerate bottom sheet (`validateRegenerateRequest` has no backend consumer yet).
 - The Supabase client reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` from `app/.env` (gitignored).
 
 ### Local development

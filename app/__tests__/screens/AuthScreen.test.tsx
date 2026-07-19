@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
 import { AuthScreen } from '../../src/screens/AuthScreen';
@@ -54,5 +54,29 @@ describe('AuthScreen', () => {
     fireEvent.changeText(getByTestId('email-input'), 'new@example.com');
 
     expect(onEmailChange).toHaveBeenCalledWith('new@example.com');
+  });
+
+  it('renders an auth error when provided', () => {
+    render(
+      <AuthScreen
+        email=""
+        password=""
+        errors={{}}
+        authError="Invalid login credentials"
+        onEmailChange={jest.fn()}
+        onPasswordChange={jest.fn()}
+        onSubmit={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId('auth-error')).toHaveTextContent('Invalid login credentials');
+  });
+
+  it('labels inputs for accessibility', () => {
+    render(
+      <AuthScreen email="" password="" errors={{}} onEmailChange={jest.fn()} onPasswordChange={jest.fn()} onSubmit={jest.fn()} />,
+    );
+    expect(screen.getByLabelText('Email address')).toBeTruthy();
+    expect(screen.getByLabelText('Password')).toBeTruthy();
+    expect(screen.getByLabelText('Sign in')).toBeTruthy();
   });
 });
