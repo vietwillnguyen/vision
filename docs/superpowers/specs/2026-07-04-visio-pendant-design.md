@@ -301,7 +301,7 @@ Per day of full 8-hour recording (~16GB raw footage, ~96 segments):
 - Recording active / paused indicator.
 - Settings: WiFi re-onboarding (show QR code), resolution, segment length, score weights.
 
-**As-built gap:** WiFi re-onboarding is not wired in Epic 5 - the Re-onboard button shows a "not available yet" alert instead of the QR display screen, since it has no backend consumer yet either (separate issue, out of scope for #8).
+**As-built gap:** resolved - see [`2026-07-20-wifi-reonboard-qr-screen-design.md`](2026-07-20-wifi-reonboard-qr-screen-design.md). The Re-onboard button navigates to a QR display screen that encodes the WiFi credentials plus the signed-in user's current Supabase session tokens.
 
 **Tab 4 - Archive**
 
