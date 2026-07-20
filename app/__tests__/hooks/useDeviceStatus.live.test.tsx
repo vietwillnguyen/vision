@@ -1,7 +1,7 @@
 /**
  * Live-Supabase realtime test (Stage 3 of the test-validation-plan, see
- * .lavish/test-validation-plan.html and integration/README.md's "Deferred"
- * section).
+ * .lavish/test-validation-plan.html and integration/README.md's "Realtime
+ * channel-error handling (app package)" section).
  *
  * Every other useDeviceStatus test (useDeviceStatus.test.tsx) drives the hook
  * against a hand-rolled fake client, so `subscribe((status) => ...)` firing
@@ -10,11 +10,13 @@
  * those statuses against a live Postgres `postgres_changes` feed. This test
  * uses the real `createClient()` (same call as src/lib/supabase.ts) against a
  * running local Supabase instance: an authenticated device owner subscribes
- * through the real hook, then a second real client upserts that owner's
- * `device_status` row (the firmware daemon's write path, granted by
- * supabase/migrations/20260710090000_grant_device_status_writes.sql), and we
- * assert the hook's `realtime` field reaches 'live' and its `status` reflects
- * the row over the wire - not a mocked channel callback.
+ * through the real hook, then that same client - standing in for the
+ * firmware daemon, which authenticates as the device owner's own session
+ * rather than holding a service-role key (see
+ * supabase/migrations/20260710090000_grant_device_status_writes.sql) - upserts
+ * the owner's `device_status` row, and we assert the hook's `realtime` field
+ * reaches 'live' and its `status` reflects the row over the wire - not a
+ * mocked channel callback.
  *
  * Needs SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY pointing
  * at a `supabase start` instance (same env vars as integration/'s Python live

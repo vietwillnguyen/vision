@@ -57,10 +57,12 @@ lives outside this Python package, in
 `@supabase/supabase-js` `createClient()` (the same call as
 `app/src/lib/supabase.ts`) against a live local Supabase instance: an
 authenticated device owner subscribes through the real `useDeviceStatus`
-hook, then a second real client upserts that owner's `device_status` row
-(the firmware daemon's write path, granted by
-`supabase/migrations/20260710090000_grant_device_status_writes.sql`), and the
-test asserts the hook's `realtime` field reaches `'live'` and its `status`
+hook, then that same client - standing in for the firmware daemon, which
+authenticates as the device owner's own session rather than holding a
+service-role key (see
+`supabase/migrations/20260710090000_grant_device_status_writes.sql`) - upserts
+the owner's `device_status` row, and the test asserts the hook's `realtime`
+field reaches `'live'` and its `status`
 reflects the row over the wire - not a mocked channel callback like every
 other `useDeviceStatus` test. It reads the same `SUPABASE_URL` /
 `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` env vars as this package's
