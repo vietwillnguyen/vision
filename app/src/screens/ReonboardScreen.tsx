@@ -6,6 +6,12 @@ import { colors, spacing } from '../theme';
 
 export type ReonboardStep = 'form' | 'ready' | 'error';
 
+// The payload embeds two Supabase JWTs (~700-1000 chars each), pushing the
+// QR to a high version - the library's 100px default packs those modules
+// too small for a phone-held-to-camera scan, so size up and use the lowest
+// error-correction level to keep module density scannable.
+const QR_SIZE = 260;
+
 interface ReonboardScreenProps {
   step: ReonboardStep;
   ssid: string;
@@ -35,7 +41,7 @@ export function ReonboardScreen({
     return (
       <View style={styles.container}>
         <View style={styles.qrWrap}>
-          <QRCode value={qrValue} />
+          <QRCode value={qrValue} size={QR_SIZE} ecl="L" />
         </View>
         <Text style={styles.hint}>
           This code contains your WiFi password and an active login - only show it to your Visio

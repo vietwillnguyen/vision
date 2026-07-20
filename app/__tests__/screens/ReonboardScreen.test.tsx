@@ -1,9 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
-jest.mock('react-native-qrcode-svg', () => (props: { value: string }) => {
+jest.mock('react-native-qrcode-svg', () => (props: { value: string; size?: number; ecl?: string }) => {
   const { Text } = jest.requireActual('react-native');
-  return <Text testID="qr-code">{props.value}</Text>;
+  return (
+    <Text testID="qr-code" accessibilityValue={{ text: `${props.size}:${props.ecl}` }}>
+      {props.value}
+    </Text>
+  );
 });
 
 import { ReonboardScreen } from '../../src/screens/ReonboardScreen';
@@ -107,6 +111,7 @@ describe('ReonboardScreen', () => {
       />,
     );
     expect(screen.getByTestId('qr-code')).toHaveTextContent('{"ssid":"HomeNet"}');
+    expect(screen.getByTestId('qr-code').props.accessibilityValue.text).toBe('260:L');
     expect(
       screen.getByText(
         "This code contains your WiFi password and an active login - only show it to your Visio device's camera",
