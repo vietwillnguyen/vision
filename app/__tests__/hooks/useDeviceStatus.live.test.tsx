@@ -21,7 +21,7 @@
  * tests); skips automatically otherwise, e.g. in sandboxes without Docker.
  */
 import { renderHook, waitFor } from '@testing-library/react-native';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 import nodeFetch from 'node-fetch';
 
@@ -62,8 +62,11 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
   // update to arrive over realtime, even though the identical assertion
   // against the seeded row passed well within the same window. Give the
   // upsert's realtime propagation more headroom without loosening the
-  // assertion itself.
-  jest.setTimeout(45000);
+  // assertion itself. Set well above the sum of both waitFor timeouts
+  // (15000 + 30000) so the rest of the test's setup/teardown work (admin
+  // createUser, inserts, sign-in, upsert, unmount, disconnect, deleteUser)
+  // doesn't get squeezed out by Jest's own test-level timeout.
+  jest.setTimeout(60000);
 
   it('reaches live realtime and reflects a real postgres_changes upsert', async () => {
     const runId = Math.random().toString(36).slice(2, 10);
@@ -83,42 +86,44 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
     }
     const userId = created.user.id;
 
-    const { data: device, error: deviceError } = await adminClient
-      .from('devices')
-      .insert({ user_id: userId, name: `live device status test ${runId}` })
-      .select()
-      .single();
-    if (deviceError || !device) {
-      throw deviceError ?? new Error('failed to create test device');
-    }
-    const deviceId = device.device_id as string;
-
-    // Seed an initial row before the hook ever subscribes, mirroring real
-    // device behavior (firmware upserts a status row well before the app
-    // opens it). The hook only exposes its `realtime` field once its own
-    // initial fetch resolves to `kind: 'ready'` (see useDeviceStatus.ts) - with
-    // no row at all it stays `{ kind: 'loading' }` forever, so `realtime`
-    // would never appear in the returned object regardless of the actual
-    // channel status.
-    const { error: seedError } = await adminClient.from('device_status').insert({
-      device_id: deviceId,
-      battery_pct: 10,
-      storage_used_gb: 0,
-      storage_free_gb: 100,
-      segments_pending: 0,
-      segments_uploaded_today: 0,
-      recording_active: false,
-    });
-    if (seedError) throw seedError;
-
-    const ownerClient = createClient(SUPABASE_URL as string, SUPABASE_ANON_KEY as string, {
-      global: { fetch: restFetch },
-    });
+    let ownerClient: SupabaseClient | undefined;
     try {
-      const { error: signInError } = await ownerClient.auth.signInWithPassword({ email, password });
+      const { data: device, error: deviceError } = await adminClient
+        .from('devices')
+        .insert({ user_id: userId, name: `live device status test ${runId}` })
+        .select()
+        .single();
+      if (deviceError || !device) {
+        throw deviceError ?? new Error('failed to create test device');
+      }
+      const deviceId = device.device_id as string;
+
+      // Seed an initial row before the hook ever subscribes, mirroring real
+      // device behavior (firmware upserts a status row well before the app
+      // opens it). The hook only exposes its `realtime` field once its own
+      // initial fetch resolves to `kind: 'ready'` (see useDeviceStatus.ts) - with
+      // no row at all it stays `{ kind: 'loading' }` forever, so `realtime`
+      // would never appear in the returned object regardless of the actual
+      // channel status.
+      const { error: seedError } = await adminClient.from('device_status').insert({
+        device_id: deviceId,
+        battery_pct: 10,
+        storage_used_gb: 0,
+        storage_free_gb: 100,
+        segments_pending: 0,
+        segments_uploaded_today: 0,
+        recording_active: false,
+      });
+      if (seedError) throw seedError;
+
+      const client = createClient(SUPABASE_URL as string, SUPABASE_ANON_KEY as string, {
+        global: { fetch: restFetch },
+      });
+      ownerClient = client;
+      const { error: signInError } = await client.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
 
-      const { result, unmount } = renderHook(() => useDeviceStatus(ownerClient, deviceId));
+      const { result, unmount } = renderHook(() => useDeviceStatus(client, deviceId));
 
       await waitFor(
         () =>
@@ -130,7 +135,7 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
         { timeout: 15000 },
       );
 
-      const { error: upsertError } = await ownerClient.from('device_status').upsert({
+      const { error: upsertError } = await client.from('device_status').upsert({
         device_id: deviceId,
         battery_pct: 55,
         storage_used_gb: 3.5,
@@ -159,7 +164,9 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
       // so the websocket connection created by createClient() above stays
       // open and leaves Jest hanging ("did not exit one second after the
       // test run has completed") without this explicit disconnect.
-      await ownerClient.realtime.disconnect();
+      if (ownerClient) {
+        await ownerClient.realtime.disconnect();
+      }
       await adminClient.auth.admin.deleteUser(userId);
     }
   });
