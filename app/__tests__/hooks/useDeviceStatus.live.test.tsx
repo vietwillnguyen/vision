@@ -62,13 +62,21 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
   // this suite's local dev sandbox (where 15s was always plenty) - the first
   // real CI run of this test (PR #24) timed out waiting for the post-upsert
   // update to arrive over realtime, even though the identical assertion
-  // against the seeded row passed well within the same window. Give the
-  // upsert's realtime propagation more headroom without loosening the
-  // assertion itself. Set well above the sum of both waitFor timeouts
-  // (15000 + 30000) so the rest of the test's setup/teardown work (admin
-  // createUser, inserts, sign-in, upsert, unmount, disconnect, deleteUser)
-  // doesn't get squeezed out by Jest's own test-level timeout.
-  jest.setTimeout(60000);
+  // against the seeded row passed well within the same window. A first fix
+  // raised the post-upsert waitFor to 30s, but that still wasn't enough on a
+  // subsequent CI run (received the pre-upsert seed values unchanged after
+  // the full 30s), which only makes sense as replication delay: this `app`
+  // job's `npx jest --ci` fans out ~30 test suites across parallel workers on
+  // a 2-vCPU GH-hosted runner, and this is the only suite whose assertion
+  // depends on the local Supabase `realtime` container's WAL delivery, which
+  // is CPU-scheduled same as everything else - under that contention its
+  // latency doesn't just track a bit above local, it can spike well past 30s.
+  // Give the upsert's realtime propagation a much larger margin without
+  // loosening the assertion itself. Set well above the sum of both waitFor
+  // timeouts (15000 + 90000) so the rest of the test's setup/teardown work
+  // (admin createUser, inserts, sign-in, upsert, unmount, disconnect,
+  // deleteUser) doesn't get squeezed out by Jest's own test-level timeout.
+  jest.setTimeout(120000);
 
   it('reaches live realtime and reflects a real postgres_changes upsert', async () => {
     const runId = Math.random().toString(36).slice(2, 10);
@@ -155,7 +163,7 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
             realtime: 'live',
             status: { batteryPct: 55, recordingActive: true },
           }),
-        { timeout: 30000 },
+        { timeout: 90000 },
       );
 
       unmount();
