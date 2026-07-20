@@ -83,6 +83,26 @@ describe('ReonboardContainer', () => {
     );
   });
 
+  it('shows the error step when getSession rejects instead of resolving', async () => {
+    const rejectingClient = {
+      auth: { getSession: () => Promise.reject(new Error('fetch failed')) },
+    } as unknown as SupabaseClient;
+    render(
+      <ReonboardContainer
+        client={rejectingClient}
+        navigation={fakeNavigation()}
+        route={{ key: 'Reonboard', name: 'Reonboard' }}
+      />,
+    );
+    fireEvent.changeText(screen.getByTestId('ssid-input'), 'HomeNet');
+    fireEvent.changeText(screen.getByTestId('password-input'), 'hunter2');
+    fireEvent.press(screen.getByTestId('generate-qr-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('reonboard-error')).toHaveTextContent('fetch failed'),
+    );
+  });
+
   it('calls navigation.goBack() from onDone', async () => {
     const navigation = fakeNavigation();
     render(

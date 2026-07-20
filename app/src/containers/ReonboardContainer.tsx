@@ -21,22 +21,27 @@ export function ReonboardContainer({ client, navigation }: ReonboardContainerPro
     setSsid(submittedSsid);
     setPassword(submittedPassword);
 
-    const { data, error } = await client.auth.getSession();
-    if (error || !data.session) {
-      setErrorMessage(error ? error.message : 'No active session - please sign in again.');
-      setStep('error');
-      return;
-    }
+    try {
+      const { data, error } = await client.auth.getSession();
+      if (error || !data.session) {
+        setErrorMessage(error ? error.message : 'No active session - please sign in again.');
+        setStep('error');
+        return;
+      }
 
-    setQrValue(
-      JSON.stringify({
-        ssid: submittedSsid,
-        password: submittedPassword,
-        user_access_token: data.session.access_token,
-        user_refresh_token: data.session.refresh_token,
-      }),
-    );
-    setStep('ready');
+      setQrValue(
+        JSON.stringify({
+          ssid: submittedSsid,
+          password: submittedPassword,
+          user_access_token: data.session.access_token,
+          user_refresh_token: data.session.refresh_token,
+        }),
+      );
+      setStep('ready');
+    } catch (caughtError) {
+      setErrorMessage(caughtError instanceof Error ? caughtError.message : String(caughtError));
+      setStep('error');
+    }
   };
 
   return (
