@@ -43,6 +43,47 @@ jobs:
       - name: Run pytest
         run: uv run --locked --extra dev pytest
 
+  integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local Supabase
+        working-directory: .
+        run: supabase start
+      - name: Export local Supabase connection env
+        working-directory: .
+        # supabase status has no plain key=value output flag as of the CLI
+        # version pinned above, so this maps its `-o env` NAME values to the
+        # SUPABASE_* vars conftest.py's live_supabase_env fixture reads.
+        run: |
+          eval "$(supabase status -o env)"
+          {
+            echo "SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+          } >> "$GITHUB_ENV"
+      - name: Run pytest
+        # Zero-Docker contract tests (filename/marker round-trip, segments/reels
+        # row-shape vs. migrations and app hooks) plus the live-Supabase RLS
+        # end-to-end and storage-ingestion handoff tests, now that this job
+        # starts a real local Supabase instance. Realtime channel-error
+        # handling is covered separately in the app job - see integration/README.md.
+        run: uv run --locked --extra dev pytest
+      - name: Stop local Supabase
+        if: always()
+        working-directory: .
+        run: supabase stop
+
   app:
     runs-on: ubuntu-latest
     defaults:
@@ -55,6 +96,23 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local Supabase
+        working-directory: .
+        run: supabase start
+      - name: Export local Supabase connection env
+        working-directory: .
+        # Same NAME mapping as the integration job, so useDeviceStatus.live.test.tsx's
+        # SUPABASE_* checks see a real instance instead of skipping.
+        run: |
+          eval "$(supabase status -o env)"
+          {
+            echo "SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+          } >> "$GITHUB_ENV"
       - name: Install dependencies
         run: npm ci
         env:
@@ -68,6 +126,10 @@ jobs:
         run: npx tsc --noEmit
       - name: Run jest
         run: npx jest --ci
+      - name: Stop local Supabase
+        if: always()
+        working-directory: .
+        run: supabase stop
       - name: Web bundle smoke check
         # Catches native-only modules (expo-media-library, expo-file-system,
         # expo-video-thumbnails) reintroduced at module top-level, which crash
