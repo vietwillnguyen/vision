@@ -99,11 +99,16 @@ presentational component consistent with the rest of the app
 
 - **`form`**: SSID `TextInput`, password `TextInput` with
   `secureTextEntry`, a "Generate QR" button that calls
-  `onSubmit(ssid, password)`. Disabled while empty.
-- **`ready`**: renders `<QRCode value={qrValue} />`, a short privacy hint
-  ("This code contains your WiFi password and an active login - only show
-  it to your Visio device's camera"), and a "Done" button that calls
-  `onDone()`.
+  `onSubmit(ssid, password)`. Disabled while empty (as built: also disabled,
+  with a "Generating..." label, while the container's `getSession()` call is
+  in flight, so a slow network can't be raced into a duplicate submit).
+- **`ready`**: renders `<QRCode value={qrValue} />` (as built: with an
+  explicit `size={260}` and `ecl="L"` - the payload embeds two ~700-1000
+  char Supabase JWTs, which pushes the QR to a high version that the
+  library's 100px default renders too small/dense to scan reliably), a
+  short privacy hint ("This code contains your WiFi password and an active
+  login - only show it to your Visio device's camera"), and a "Done" button
+  that calls `onDone()`.
 - **`error`**: the error message plus a "Try again" button that calls
   `onRetry()`, returning to the `form` step.
 
@@ -116,7 +121,10 @@ presentational component consistent with the rest of the app
   reaching this screen should always have a session, but network/expiry
   edge cases are handled explicitly rather than crashing). On success,
   builds the JSON payload with the exact four fields firmware expects and
-  transitions to `ready`.
+  transitions to `ready`. As built: the `getSession()` call itself is
+  wrapped in `try`/`catch`, since a rejected promise (as opposed to a
+  resolved `{ error }`) would otherwise leave the screen silently stuck
+  with no feedback - both paths transition to `error`.
 - `onDone`: calls `navigation.goBack()`.
 
 ### `DeviceContainer` changes

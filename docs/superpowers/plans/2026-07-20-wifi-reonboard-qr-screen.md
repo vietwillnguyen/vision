@@ -43,7 +43,7 @@
 **Interfaces:**
 - Produces: `react-native-svg` (peer dep), `react-native-qrcode-svg`'s default export `QRCode` (`{ value: string }` prop, used in Task 2), `@react-navigation/native-stack`'s `createNativeStackNavigator` and `NativeStackScreenProps` type (used in Tasks 3-5).
 
-- [ ] **Step 1: Install the Expo-managed peer dependency**
+- [x] **Step 1: Install the Expo-managed peer dependency**
 
 Run from `app/`:
 ```bash
@@ -51,7 +51,7 @@ npx expo install react-native-svg
 ```
 Expected: adds `"react-native-svg"` to `app/package.json` `dependencies` at the version Expo SDK 57 recommends (`~15.15.4` at time of writing - accept whatever `expo install` resolves).
 
-- [ ] **Step 2: Install the QR renderer and the new stack navigator**
+- [x] **Step 2: Install the QR renderer and the new stack navigator**
 
 Run from `app/`:
 ```bash
@@ -59,7 +59,7 @@ npx expo install react-native-qrcode-svg @react-navigation/native-stack
 ```
 Expected: adds both to `app/package.json` `dependencies`. Neither is Expo-managed, so `expo install` falls back to `npm install` for them - that's expected and fine.
 
-- [ ] **Step 3: Verify the existing suite still passes with the new deps present**
+- [x] **Step 3: Verify the existing suite still passes with the new deps present**
 
 Run from `app/`:
 ```bash
@@ -67,7 +67,7 @@ npm test -- --watchAll=false
 ```
 Expected: all existing tests still pass (no new tests reference the new packages yet, so this only confirms nothing broke at install time - e.g. no peer-dependency conflict).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/package.json app/package-lock.json
@@ -86,7 +86,7 @@ git commit -m "chore(app): add react-native-svg, react-native-qrcode-svg, native
 - Consumes: `colors`, `spacing` from `app/src/theme.ts` (existing).
 - Produces: `export type ReonboardStep = 'form' | 'ready' | 'error';` and `export function ReonboardScreen(props: ReonboardScreenProps)` with props `{ step: ReonboardStep; ssid: string; password: string; qrValue: string; errorMessage: string; onSsidChange: (value: string) => void; onPasswordChange: (value: string) => void; onSubmit: (ssid: string, password: string) => void; onDone: () => void; onRetry: () => void }`. Consumed by `ReonboardContainer` in Task 3.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `app/__tests__/screens/ReonboardScreen.test.tsx`:
 
@@ -252,7 +252,7 @@ describe('ReonboardScreen', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run from `app/`:
 ```bash
@@ -260,7 +260,7 @@ npm test -- __tests__/screens/ReonboardScreen.test.tsx --watchAll=false
 ```
 Expected: FAIL - `Cannot find module '../../src/screens/ReonboardScreen'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `app/src/screens/ReonboardScreen.tsx`:
 
@@ -396,7 +396,7 @@ const styles = StyleSheet.create({
 });
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run from `app/`:
 ```bash
@@ -404,7 +404,7 @@ npm test -- __tests__/screens/ReonboardScreen.test.tsx --watchAll=false
 ```
 Expected: PASS (7 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/screens/ReonboardScreen.tsx app/__tests__/screens/ReonboardScreen.test.tsx
@@ -423,7 +423,7 @@ git commit -m "feat(app): add ReonboardScreen presentational component"
 - Consumes: `ReonboardScreen`, `ReonboardStep` from Task 2. `NativeStackScreenProps<DeviceStackParamList, 'Reonboard'>` type from `../navigation/DeviceStack` (Task 5 - forward reference via `import type`, safe: Babel's TypeScript transform strips `import type` entirely, so Jest never tries to `require` the not-yet-created file).
 - Produces: `export function ReonboardContainer(props: ReonboardContainerProps)` where `ReonboardContainerProps = NativeStackScreenProps<DeviceStackParamList, 'Reonboard'> & { client: SupabaseClient }`. Consumed by `DeviceStack` in Task 5.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `app/__tests__/containers/ReonboardContainer.test.tsx`:
 
@@ -551,7 +551,7 @@ describe('ReonboardContainer', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run from `app/`:
 ```bash
@@ -559,7 +559,7 @@ npm test -- __tests__/containers/ReonboardContainer.test.tsx --watchAll=false
 ```
 Expected: FAIL - `Cannot find module '../../src/containers/ReonboardContainer'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `app/src/containers/ReonboardContainer.tsx`:
 
@@ -622,7 +622,7 @@ export function ReonboardContainer({ client, navigation }: ReonboardContainerPro
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run from `app/`:
 ```bash
@@ -630,7 +630,7 @@ npm test -- __tests__/containers/ReonboardContainer.test.tsx --watchAll=false
 ```
 Expected: PASS (5 tests). Note: this only exercises `ReonboardContainer`/`ReonboardScreen` in isolation - `DeviceStackParamList` is a type-only import that Babel strips, so the test runs fine even though `app/src/navigation/DeviceStack.tsx` doesn't exist until Task 5. Full type-checking of this forward reference happens in Task 6's `tsc --noEmit`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/containers/ReonboardContainer.tsx app/__tests__/containers/ReonboardContainer.test.tsx
@@ -649,7 +649,7 @@ git commit -m "feat(app): add ReonboardContainer wiring getSession to QR payload
 - Consumes: `NativeStackScreenProps<DeviceStackParamList, 'DeviceHome'>` type from `../navigation/DeviceStack` (Task 5 - forward reference, same `import type` erasure reasoning as Task 3).
 - Produces: `DeviceContainer` now requires a `navigation` prop. Consumed by `DeviceStack` in Task 5.
 
-- [ ] **Step 1: Update the failing test**
+- [x] **Step 1: Update the failing test**
 
 Replace `app/__tests__/containers/DeviceContainer.test.tsx` in full:
 
@@ -719,7 +719,7 @@ it('navigates to Reonboard when the re-onboard button is pressed', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run from `app/`:
 ```bash
@@ -727,7 +727,7 @@ npm test -- __tests__/containers/DeviceContainer.test.tsx --watchAll=false
 ```
 Expected: FAIL - TypeScript/prop-shape error or `navigation.navigate` not called, since `DeviceContainer` doesn't accept/use a `navigation` prop yet.
 
-- [ ] **Step 3: Update the implementation**
+- [x] **Step 3: Update the implementation**
 
 Replace `app/src/containers/DeviceContainer.tsx` in full:
 
@@ -753,7 +753,7 @@ export function DeviceContainer({ client, deviceId, navigation }: DeviceContaine
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run from `app/`:
 ```bash
@@ -761,7 +761,7 @@ npm test -- __tests__/containers/DeviceContainer.test.tsx --watchAll=false
 ```
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/containers/DeviceContainer.tsx app/__tests__/containers/DeviceContainer.test.tsx
@@ -781,7 +781,7 @@ git commit -m "feat(app): navigate to Reonboard from DeviceContainer instead of 
 
 There is no dedicated `DeviceStack.test.tsx` per the spec's Testing section (only `ReonboardScreen`, `ReonboardContainer`, and `DeviceContainer` are listed) - this navigator gets exercised end-to-end by the existing `App.test.tsx` suite once wired in Task 6, and by `npx tsc --noEmit` for type correctness of the forward references from Tasks 3-4.
 
-- [ ] **Step 1: Write the implementation**
+- [x] **Step 1: Write the implementation**
 
 Create `app/src/navigation/DeviceStack.tsx`:
 
@@ -819,7 +819,7 @@ export function DeviceStack({ client, deviceId }: DeviceStackProps) {
 }
 ```
 
-- [ ] **Step 2: Type-check this file in isolation**
+- [x] **Step 2: Type-check this file in isolation**
 
 Run from `app/`:
 ```bash
@@ -827,7 +827,7 @@ npx tsc --noEmit
 ```
 Expected: this will still report errors from `App.tsx` (not updated until Task 6) if any, but must report zero errors originating from `app/src/navigation/DeviceStack.tsx`, `app/src/containers/DeviceContainer.tsx`, or `app/src/containers/ReonboardContainer.tsx`. If it reports an error on one of those three files, fix it before proceeding - this is the check that the Task 3/4 forward references now resolve correctly.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add app/src/navigation/DeviceStack.tsx
@@ -844,7 +844,7 @@ git commit -m "feat(app): add DeviceStack navigator for Device tab"
 **Interfaces:**
 - Consumes: `DeviceStack` from Task 5.
 
-- [ ] **Step 1: Update the import**
+- [x] **Step 1: Update the import**
 
 In `app/App.tsx`, replace line 10:
 
@@ -858,7 +858,7 @@ with:
 import { DeviceStack } from './src/navigation/DeviceStack';
 ```
 
-- [ ] **Step 2: Update the Device tab screen**
+- [x] **Step 2: Update the Device tab screen**
 
 In `app/App.tsx`, replace lines 90-92:
 
@@ -876,7 +876,7 @@ with:
         </Tab.Screen>
 ```
 
-- [ ] **Step 3: Run the full app test suite**
+- [x] **Step 3: Run the full app test suite**
 
 Run from `app/`:
 ```bash
@@ -884,7 +884,7 @@ npm test -- --watchAll=false
 ```
 Expected: PASS, all suites (including `__tests__/App.test.tsx`, which renders the Device tab through `AppRoot` and asserts on tab labels - this confirms `DeviceStack` mounts correctly inside `NavigationContainer`/`Tab.Navigator` without a nested `NavigationContainer` conflict).
 
-- [ ] **Step 4: Type-check the whole project**
+- [x] **Step 4: Type-check the whole project**
 
 Run from `app/`:
 ```bash
@@ -892,7 +892,7 @@ npx tsc --noEmit
 ```
 Expected: zero errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/App.tsx
@@ -908,7 +908,7 @@ git commit -m "feat(app): mount DeviceStack in the Device tab"
 - Modify: `docs/superpowers/plans/2026-07-04-visio-epics-overview.md:99`
 - Modify: `docs/superpowers/specs/2026-07-04-visio-pendant-design.md:304`
 
-- [ ] **Step 1: Update `2026-07-04-visio-app.md`'s Handoff section**
+- [x] **Step 1: Update `2026-07-04-visio-app.md`'s Handoff section**
 
 In `docs/superpowers/plans/2026-07-04-visio-app.md`, replace the bullet at line 1338:
 
@@ -922,7 +922,7 @@ with:
 - **The WiFi + auth re-onboarding QR display screen - resolved** (see [`2026-07-20-wifi-reonboard-qr-screen-design.md`](../specs/2026-07-20-wifi-reonboard-qr-screen-design.md)). `DeviceStack` adds a `Reonboard` route; `ReonboardContainer` calls `supabase.auth.getSession()` and encodes `{"ssid": "...", "password": "...", "user_access_token": "...", "user_refresh_token": "..."}` - the exact shape firmware's `parse_onboarding_qr_payload` from [`2026-07-04-visio-firmware.md`](2026-07-04-visio-firmware.md) Task 8 expects - as a `react-native-qrcode-svg` QR code. The Device screen's "Re-onboard WiFi" button now navigates there instead of showing a "not available yet" alert.
 ```
 
-- [ ] **Step 2: Update `2026-07-04-visio-epics-overview.md`'s follow-up-issues list**
+- [x] **Step 2: Update `2026-07-04-visio-epics-overview.md`'s follow-up-issues list**
 
 In `docs/superpowers/plans/2026-07-04-visio-epics-overview.md`, replace the `#8` bullet at line 99:
 
@@ -936,7 +936,7 @@ with:
 - [#8 App: Epic 5 screen wiring](https://github.com/vietwillnguyen/vision/issues/8) - landed as the bottom tab navigator, real Supabase Auth, `expo-video` playback, timeline thumbnails, styling/accessibility, and realtime channel-error handling via [PR #22](https://github.com/vietwillnguyen/vision/pull/22). The WiFi + auth re-onboarding QR screen was deliberately left out of scope at the time (see [`2026-07-04-visio-app.md`](2026-07-04-visio-app.md)'s Handoff) but has since landed per [`2026-07-20-wifi-reonboard-qr-screen-design.md`](2026-07-20-wifi-reonboard-qr-screen-design.md) - the checklist's "Onboard the device to WiFi via the Epic 3 app's QR flow" step below now has a screen to run.
 ```
 
-- [ ] **Step 3: Update `2026-07-04-visio-pendant-design.md`'s As-built gap line**
+- [x] **Step 3: Update `2026-07-04-visio-pendant-design.md`'s As-built gap line**
 
 In `docs/superpowers/specs/2026-07-04-visio-pendant-design.md`, replace line 304:
 
@@ -950,7 +950,7 @@ with:
 **As-built gap:** resolved - see [`2026-07-20-wifi-reonboard-qr-screen-design.md`](2026-07-20-wifi-reonboard-qr-screen-design.md). The Re-onboard button navigates to a QR display screen that encodes the WiFi credentials plus the signed-in user's current Supabase session tokens.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-07-04-visio-app.md docs/superpowers/plans/2026-07-04-visio-epics-overview.md docs/superpowers/specs/2026-07-04-visio-pendant-design.md
@@ -963,7 +963,7 @@ git commit -m "docs: mark WiFi re-onboarding QR screen gap resolved"
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Full test suite**
+- [x] **Step 1: Full test suite**
 
 Run from `app/`:
 ```bash
@@ -971,7 +971,7 @@ npm test -- --watchAll=false
 ```
 Expected: PASS, all suites, no `console.error`/`console.warn` noise from the new files.
 
-- [ ] **Step 2: Full type-check**
+- [x] **Step 2: Full type-check**
 
 Run from `app/`:
 ```bash
@@ -979,7 +979,7 @@ npx tsc --noEmit
 ```
 Expected: zero errors.
 
-- [ ] **Step 3: Web export smoke check (the reason `react-native-qrcode-svg` was chosen over canvas/native-module alternatives)**
+- [x] **Step 3: Web export smoke check (the reason `react-native-qrcode-svg` was chosen over canvas/native-module alternatives)**
 
 Run from `app/`:
 ```bash
@@ -995,7 +995,7 @@ npx expo start --web
 ```
 In the browser: sign in, open the Device tab, tap "Re-onboard WiFi", confirm the form renders, type an SSID and password, tap "Generate QR", confirm a QR code renders with the privacy hint text, tap "Done", confirm it returns to the Device screen.
 
-- [ ] **Step 5: Confirm branch state**
+- [x] **Step 5: Confirm branch state**
 
 ```bash
 git log --oneline main..HEAD
@@ -1003,6 +1003,6 @@ git status
 ```
 Expected: a clean sequence of commits from Task 1-7 on top of `main`, no uncommitted changes.
 
-- [ ] **Step 6: Hand off to `/no-mistakes`**
+- [x] **Step 6: Hand off to `/no-mistakes`**
 
 Once Steps 1-5 all pass, run the `/no-mistakes` pipeline (code review, tests, lint, docs, push, PR, CI) per the spec's Delivery section, targeting `main` (the branch this work is built on, since the spec's originally-named target branch `gnhf/continue-your-worktr-bd0870` has since merged into `main` as PR #24).
