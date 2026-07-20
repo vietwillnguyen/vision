@@ -23,6 +23,7 @@ describe('ReonboardScreen', () => {
         password=""
         qrValue=""
         errorMessage=""
+        isSubmitting={false}
         onSsidChange={noop}
         onPasswordChange={noop}
         onSubmit={noop}
@@ -42,6 +43,7 @@ describe('ReonboardScreen', () => {
         password=""
         qrValue=""
         errorMessage=""
+        isSubmitting={false}
         onSsidChange={noop}
         onPasswordChange={noop}
         onSubmit={noop}
@@ -50,6 +52,27 @@ describe('ReonboardScreen', () => {
       />,
     );
     expect(screen.getByTestId('generate-qr-button').props.accessibilityState.disabled).toBe(true);
+  });
+
+  it('disables Generate QR and shows a submitting label while isSubmitting is true', () => {
+    render(
+      <ReonboardScreen
+        step="form"
+        ssid="HomeNet"
+        password="hunter2"
+        qrValue=""
+        errorMessage=""
+        isSubmitting={true}
+        onSsidChange={noop}
+        onPasswordChange={noop}
+        onSubmit={noop}
+        onDone={noop}
+        onRetry={noop}
+      />,
+    );
+    const button = screen.getByTestId('generate-qr-button');
+    expect(button.props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByText('Generating...')).toBeTruthy();
   });
 
   it('calls onSubmit with the typed SSID and password', () => {
@@ -61,6 +84,7 @@ describe('ReonboardScreen', () => {
         password="hunter2"
         qrValue=""
         errorMessage=""
+        isSubmitting={false}
         onSsidChange={noop}
         onPasswordChange={noop}
         onSubmit={onSubmit}
@@ -82,6 +106,7 @@ describe('ReonboardScreen', () => {
         password=""
         qrValue=""
         errorMessage=""
+        isSubmitting={false}
         onSsidChange={onSsidChange}
         onPasswordChange={onPasswordChange}
         onSubmit={noop}
@@ -103,6 +128,7 @@ describe('ReonboardScreen', () => {
         password="hunter2"
         qrValue='{"ssid":"HomeNet"}'
         errorMessage=""
+        isSubmitting={false}
         onSsidChange={noop}
         onPasswordChange={noop}
         onSubmit={noop}
@@ -128,6 +154,7 @@ describe('ReonboardScreen', () => {
         password="hunter2"
         qrValue='{"ssid":"HomeNet"}'
         errorMessage=""
+        isSubmitting={false}
         onSsidChange={noop}
         onPasswordChange={noop}
         onSubmit={noop}
@@ -148,6 +175,7 @@ describe('ReonboardScreen', () => {
         password="hunter2"
         qrValue=""
         errorMessage="No active session - please sign in again."
+        isSubmitting={false}
         onSsidChange={noop}
         onPasswordChange={noop}
         onSubmit={noop}

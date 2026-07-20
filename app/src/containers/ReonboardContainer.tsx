@@ -16,10 +16,15 @@ export function ReonboardContainer({ client, navigation }: ReonboardContainerPro
   const [password, setPassword] = useState('');
   const [qrValue, setQrValue] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const onSubmit = async (submittedSsid: string, submittedPassword: string) => {
+    if (isSubmitting) {
+      return;
+    }
     setSsid(submittedSsid);
     setPassword(submittedPassword);
+    setIsSubmitting(true);
 
     try {
       const { data, error } = await client.auth.getSession();
@@ -41,6 +46,8 @@ export function ReonboardContainer({ client, navigation }: ReonboardContainerPro
     } catch (caughtError) {
       setErrorMessage(caughtError instanceof Error ? caughtError.message : String(caughtError));
       setStep('error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -51,6 +58,7 @@ export function ReonboardContainer({ client, navigation }: ReonboardContainerPro
       password={password}
       qrValue={qrValue}
       errorMessage={errorMessage}
+      isSubmitting={isSubmitting}
       onSsidChange={setSsid}
       onPasswordChange={setPassword}
       onSubmit={onSubmit}

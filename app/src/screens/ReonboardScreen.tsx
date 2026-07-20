@@ -18,6 +18,7 @@ interface ReonboardScreenProps {
   password: string;
   qrValue: string;
   errorMessage: string;
+  isSubmitting: boolean;
   onSsidChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onSubmit: (ssid: string, password: string) => void;
@@ -31,6 +32,7 @@ export function ReonboardScreen({
   password,
   qrValue,
   errorMessage,
+  isSubmitting,
   onSsidChange,
   onPasswordChange,
   onSubmit,
@@ -108,10 +110,10 @@ export function ReonboardScreen({
       <View style={styles.buttonWrap}>
         <Button
           testID="generate-qr-button"
-          title="Generate QR"
+          title={isSubmitting ? 'Generating...' : 'Generate QR'}
           color={colors.accent}
           accessibilityLabel="Generate onboarding QR code"
-          disabled={!ssid || !password}
+          disabled={!ssid || !password || isSubmitting}
           onPress={() => onSubmit(ssid, password)}
         />
       </View>

@@ -103,6 +103,35 @@ describe('ReonboardContainer', () => {
     );
   });
 
+  it('ignores a second press while getSession is still in flight', async () => {
+    let resolveSession: (value: { data: { session: Session | null }; error: null }) => void;
+    const getSession = jest.fn(
+      () =>
+        new Promise<{ data: { session: Session | null }; error: null }>((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+    const client = { auth: { getSession } } as unknown as SupabaseClient;
+
+    render(
+      <ReonboardContainer
+        client={client}
+        navigation={fakeNavigation()}
+        route={{ key: 'Reonboard', name: 'Reonboard' }}
+      />,
+    );
+    fireEvent.changeText(screen.getByTestId('ssid-input'), 'HomeNet');
+    fireEvent.changeText(screen.getByTestId('password-input'), 'hunter2');
+    fireEvent.press(screen.getByTestId('generate-qr-button'));
+    fireEvent.press(screen.getByTestId('generate-qr-button'));
+
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('generate-qr-button').props.accessibilityState.disabled).toBe(true);
+
+    resolveSession!({ data: { session: SESSION }, error: null });
+    await waitFor(() => expect(screen.getByTestId('qr-code')).toBeTruthy());
+  });
+
   it('calls navigation.goBack() from onDone', async () => {
     const navigation = fakeNavigation();
     render(
