@@ -58,24 +58,26 @@ if (!hasLiveEnv) {
 }
 
 describeLive('useDeviceStatus against a live Supabase instance', () => {
-  // GitHub-hosted runners replicate postgres_changes noticeably slower than
-  // this suite's local dev sandbox (where 15s was always plenty) - the first
-  // real CI run of this test (PR #24) timed out waiting for the post-upsert
-  // update to arrive over realtime, even though the identical assertion
-  // against the seeded row passed well within the same window. A first fix
-  // raised the post-upsert waitFor to 30s, but that still wasn't enough on a
-  // subsequent CI run (received the pre-upsert seed values unchanged after
-  // the full 30s), which only makes sense as replication delay: this `app`
-  // job's `npx jest --ci` fans out ~30 test suites across parallel workers on
-  // a 2-vCPU GH-hosted runner, and this is the only suite whose assertion
-  // depends on the local Supabase `realtime` container's WAL delivery, which
-  // is CPU-scheduled same as everything else - under that contention its
-  // latency doesn't just track a bit above local, it can spike well past 30s.
-  // Give the upsert's realtime propagation a much larger margin without
-  // loosening the assertion itself. Set well above the sum of both waitFor
-  // timeouts (15000 + 90000) so the rest of the test's setup/teardown work
-  // (admin createUser, inserts, sign-in, upsert, unmount, disconnect,
-  // deleteUser) doesn't get squeezed out by Jest's own test-level timeout.
+  // Two prior CI-only failures here were mistakenly diagnosed as "replication
+  // is just slow" and fixed by repeatedly raising the post-upsert waitFor
+  // (15s, then 30s, then 90s) - all three still failed the same way: the
+  // hook's `status` stayed frozen at the pre-upsert seed values for the
+  // *entire* timeout window, never partially catching up. Genuine WAL lag
+  // would show the update arriving late, not never; the real signal was in
+  // the CI console output, which logged the hook's realtime channel firing
+  // CHANNEL_ERROR/TIMED_OUT/CLOSED (see useDeviceStatus.ts's `setRealtime`
+  // call site) mid-test. GitHub-hosted runners fan `npx jest --ci` out across
+  // ~30 suites on a 2-vCPU box, and this is the only suite whose WebSocket
+  // needs to stay continuously connected - under that contention its
+  // heartbeat can miss, dropping the channel. @supabase/realtime-js
+  // auto-rejoins after a drop, but rejoining only resumes *future* postgres_changes
+  // - it can't retroactively deliver a change that landed while disconnected.
+  // A single upsert can therefore have its one and only change event lost
+  // forever, no matter how long the assertion waits afterward. The fix is to
+  // keep re-issuing the upsert while polling (see the retry loop below)
+  // instead of gambling on one write surviving the socket's entire connected
+  // lifetime - so a reconnect just means the *next* write's event gets
+  // through instead of the test being stuck.
   jest.setTimeout(120000);
 
   it('reaches live realtime and reflects a real postgres_changes upsert', async () => {
@@ -145,26 +147,41 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
         { timeout: 15000 },
       );
 
-      const { error: upsertError } = await client.from('device_status').upsert({
-        device_id: deviceId,
-        battery_pct: 55,
-        storage_used_gb: 3.5,
-        storage_free_gb: 100,
-        segments_pending: 2,
-        segments_uploaded_today: 7,
-        recording_active: true,
-      });
-      if (upsertError) throw upsertError;
+      // Re-upsert on every attempt rather than once-then-wait: if the
+      // channel drops and rejoins between attempts, the *previous* upsert's
+      // change event is gone for good, but this attempt's own write still
+      // gets a fresh one delivered once the socket is live again.
+      const deadline = Date.now() + 90000;
+      let lastAssertionError: unknown;
+      do {
+        const { error: upsertError } = await client.from('device_status').upsert({
+          device_id: deviceId,
+          battery_pct: 55,
+          storage_used_gb: 3.5,
+          storage_free_gb: 100,
+          segments_pending: 2,
+          segments_uploaded_today: 7,
+          recording_active: true,
+        });
+        if (upsertError) throw upsertError;
 
-      await waitFor(
-        () =>
-          expect(result.current).toMatchObject({
-            kind: 'ready',
-            realtime: 'live',
-            status: { batteryPct: 55, recordingActive: true },
-          }),
-        { timeout: 90000 },
-      );
+        try {
+          await waitFor(
+            () =>
+              expect(result.current).toMatchObject({
+                kind: 'ready',
+                realtime: 'live',
+                status: { batteryPct: 55, recordingActive: true },
+              }),
+            { timeout: 5000 },
+          );
+          lastAssertionError = undefined;
+          break;
+        } catch (err) {
+          lastAssertionError = err;
+        }
+      } while (Date.now() < deadline);
+      if (lastAssertionError) throw lastAssertionError;
 
       unmount();
     } finally {
