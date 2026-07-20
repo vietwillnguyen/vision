@@ -56,7 +56,14 @@ if (!hasLiveEnv) {
 }
 
 describeLive('useDeviceStatus against a live Supabase instance', () => {
-  jest.setTimeout(20000);
+  // GitHub-hosted runners replicate postgres_changes noticeably slower than
+  // this suite's local dev sandbox (where 15s was always plenty) - the first
+  // real CI run of this test (PR #24) timed out waiting for the post-upsert
+  // update to arrive over realtime, even though the identical assertion
+  // against the seeded row passed well within the same window. Give the
+  // upsert's realtime propagation more headroom without loosening the
+  // assertion itself.
+  jest.setTimeout(45000);
 
   it('reaches live realtime and reflects a real postgres_changes upsert', async () => {
     const runId = Math.random().toString(36).slice(2, 10);
@@ -141,7 +148,7 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
             realtime: 'live',
             status: { batteryPct: 55, recordingActive: true },
           }),
-        { timeout: 15000 },
+        { timeout: 30000 },
       );
 
       unmount();
