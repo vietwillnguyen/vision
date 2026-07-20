@@ -987,13 +987,15 @@ npx expo export --platform web --output-dir /tmp/web-export-smoke
 ```
 Expected: exits 0, no bundling error referencing `react-native-qrcode-svg` or `react-native-svg`.
 
-- [ ] **Step 4: Manual walkthrough (documented, not automated - matches the spec's non-goal of not verifying real device reconnection)**
+- [x] **Step 4: Manual walkthrough (documented, not automated - matches the spec's non-goal of not verifying real device reconnection)**
 
 Run from `app/`:
 ```bash
 npx expo start --web
 ```
 In the browser: sign in, open the Device tab, tap "Re-onboard WiFi", confirm the form renders, type an SSID and password, tap "Generate QR", confirm a QR code renders with the privacy hint text, tap "Done", confirm it returns to the Device screen.
+
+Completed against a sandboxed Playwright Chromium (headless, remote-debugging, no system/root install) driving a real `npx expo start --web` session and a seeded local Supabase test user/device: signed in, opened the Device tab (live seeded status), tapped "Re-onboard device WiFi", confirmed "Generate QR" stays disabled until both fields are filled, entered SSID/password, generated a well-formed 260px/`ecl=L` QR code with the privacy-hint copy, tapped "Finish re-onboarding", and confirmed return to the Device screen with status intact. No console errors beyond an unrelated React-Navigation-web focus warning. Test fixtures were deleted after the run.
 
 - [x] **Step 5: Confirm branch state**
 
