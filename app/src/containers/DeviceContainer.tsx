@@ -1,25 +1,19 @@
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
-import { Alert } from 'react-native';
 
+import type { DeviceStackParamList } from '../navigation/DeviceStack';
 import { useDeviceStatus } from '../hooks/useDeviceStatus';
 import { DeviceScreen } from '../screens/DeviceScreen';
 
-interface DeviceContainerProps {
+type DeviceContainerProps = NativeStackScreenProps<DeviceStackParamList, 'DeviceHome'> & {
   client: SupabaseClient;
   deviceId: string;
-}
+};
 
-export function DeviceContainer({ client, deviceId }: DeviceContainerProps) {
+export function DeviceContainer({ client, deviceId, navigation }: DeviceContainerProps) {
   const state = useDeviceStatus(client, deviceId);
   return (
-    <DeviceScreen
-      state={state}
-      onReonboardPress={() =>
-        // The re-onboarding QR screen ships separately (see issue #8 scope);
-        // surfacing that honestly beats a dead button.
-        Alert.alert('Not available yet', 'WiFi re-onboarding is coming in a later update.')
-      }
-    />
+    <DeviceScreen state={state} onReonboardPress={() => navigation.navigate('Reonboard')} />
   );
 }
