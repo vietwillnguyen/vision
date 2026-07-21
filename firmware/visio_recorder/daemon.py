@@ -14,6 +14,7 @@ from visio_recorder.device_identity import load_or_create_device_id, register_de
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
     PiJuiceBatteryReader,
+    UnmeteredPowerReader,
     Ws2812LedDriver,
 )
 from visio_recorder.flag_button import FlagUploadWorker, make_flag_press_handler
@@ -45,6 +46,22 @@ _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnecti
 _NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
 _DEVICE_NAME = "visio-pendant"
 
+_BATTERY_READER_FACTORIES: dict[str, Callable[[], BatteryReader]] = {
+    "pijuice": PiJuiceBatteryReader,
+    "none": UnmeteredPowerReader,
+}
+
+
+def resolve_battery_reader_factory(source: str) -> Callable[[], BatteryReader]:
+    try:
+        return _BATTERY_READER_FACTORIES[source]
+    except KeyError:
+        valid = ", ".join(sorted(_BATTERY_READER_FACTORIES))
+        raise ValueError(
+            f"unrecognized VISIO_BATTERY_SOURCE {source!r}; must be one of: {valid}"
+        ) from None
+
+
 _logger = logging.getLogger(__name__)
 
 
@@ -55,6 +72,7 @@ class DaemonConfig:
     data_dir: Path
     segment_duration_ms: int
     framerate: int
+    battery_source: str
 
 
 def load_config(env: Mapping[str, str]) -> DaemonConfig:
@@ -69,6 +87,7 @@ def load_config(env: Mapping[str, str]) -> DaemonConfig:
             env.get("VISIO_SEGMENT_DURATION_MS", _DEFAULT_SEGMENT_DURATION_MS)
         ),
         framerate=int(env.get("VISIO_FRAMERATE", _DEFAULT_FRAMERATE)),
+        battery_source=env.get("VISIO_BATTERY_SOURCE", "pijuice"),
     )
 
 
@@ -204,7 +223,7 @@ def main() -> int:
     queue_dir = config.data_dir / "queue"
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
-    battery_reader = PiJuiceBatteryReader()
+    battery_reader = resolve_battery_reader_factory(config.battery_source)()
     led_driver = Ws2812LedDriver()
 
     startup = run_startup_sequence(battery_reader, led_driver)

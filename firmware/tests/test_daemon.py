@@ -7,9 +7,11 @@ import pytest
 from visio_recorder.daemon import (
     LoopDeps,
     load_config,
+    resolve_battery_reader_factory,
     run_recording_loop,
     run_startup_sequence,
 )
+from visio_recorder.drivers import PiJuiceBatteryReader, UnmeteredPowerReader
 from visio_recorder.led import LedPattern
 
 from tests.fakes import (
@@ -75,6 +77,42 @@ def test_load_config_missing_supabase_anon_key_raises_value_error_naming_it():
 
     with pytest.raises(ValueError, match="SUPABASE_ANON_KEY"):
         load_config(env)
+
+
+def test_load_config_defaults_battery_source_to_pijuice():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+    }
+
+    config = load_config(env)
+
+    assert config.battery_source == "pijuice"
+
+
+def test_load_config_reads_battery_source_override():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_BATTERY_SOURCE": "none",
+    }
+
+    config = load_config(env)
+
+    assert config.battery_source == "none"
+
+
+def test_resolve_battery_reader_factory_returns_pijuice_reader_class():
+    assert resolve_battery_reader_factory("pijuice") is PiJuiceBatteryReader
+
+
+def test_resolve_battery_reader_factory_returns_unmetered_reader_class():
+    assert resolve_battery_reader_factory("none") is UnmeteredPowerReader
+
+
+def test_resolve_battery_reader_factory_rejects_unrecognized_source():
+    with pytest.raises(ValueError, match="bogus"):
+        resolve_battery_reader_factory("bogus")
 
 
 def _make_deps(
