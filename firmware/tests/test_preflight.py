@@ -157,6 +157,16 @@ def test_check_camera_detected_fails_when_command_times_out():
     assert "timeout" in result.detail
 
 
+def test_check_camera_detected_fails_when_permission_denied():
+    result = check_camera_detected(
+        run=lambda args: _raise(PermissionError("permission denied"))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "unavailable" in result.detail
+
+
 def test_check_networkmanager_running_fails_when_binary_missing():
     result = check_networkmanager_running(
         run=lambda args: _raise(FileNotFoundError("nmcli not found"))
@@ -176,6 +186,16 @@ def test_check_networkmanager_running_fails_when_command_times_out():
     assert result.ok is False
     assert result.severity == BLOCK
     assert "timeout" in result.detail
+
+
+def test_check_networkmanager_running_fails_when_permission_denied():
+    result = check_networkmanager_running(
+        run=lambda args: _raise(PermissionError("permission denied"))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "unavailable" in result.detail
 
 
 def test_run_checks_includes_pijuice_and_i2c_when_battery_source_is_pijuice():

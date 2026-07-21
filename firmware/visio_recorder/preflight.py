@@ -82,12 +82,19 @@ def check_camera_detected(
 ) -> CheckResult:
     try:
         result = run(["rpicam-hello", "--list-cameras"])
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (FileNotFoundError, PermissionError) as exc:
         return CheckResult(
             name="camera",
             severity=BLOCK,
             ok=False,
-            detail=f"rpicam-hello unavailable - {type(exc).__name__}: check apt install step" if isinstance(exc, (FileNotFoundError, PermissionError)) else f"rpicam-hello timeout - camera may be unresponsive",
+            detail=f"rpicam-hello unavailable - {type(exc).__name__}: check apt install step",
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(
+            name="camera",
+            severity=BLOCK,
+            ok=False,
+            detail="rpicam-hello timeout - camera may be unresponsive",
         )
     detected = result.returncode == 0 and re.search(r"^\d+\s*:", result.stdout, re.MULTILINE) is not None
     return CheckResult(
@@ -105,12 +112,19 @@ def check_networkmanager_running(
 ) -> CheckResult:
     try:
         result = run(["nmcli", "general", "status"])
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (FileNotFoundError, PermissionError) as exc:
         return CheckResult(
             name="networkmanager",
             severity=BLOCK,
             ok=False,
-            detail=f"nmcli unavailable - check apt install step" if isinstance(exc, (FileNotFoundError, PermissionError)) else f"nmcli timeout - NetworkManager may be unresponsive",
+            detail=f"nmcli unavailable - check apt install step",
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(
+            name="networkmanager",
+            severity=BLOCK,
+            ok=False,
+            detail="nmcli timeout - NetworkManager may be unresponsive",
         )
     ok = result.returncode == 0
     return CheckResult(
