@@ -11,6 +11,7 @@ from pathlib import Path
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import record_segment
 from visio_recorder.device_identity import load_or_create_device_id, register_device
+from visio_recorder import preflight
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
     PiJuiceBatteryReader,
@@ -215,6 +216,12 @@ def main() -> int:
     Epic 5 rather than through additional unit tests (see the plan's
     Handoff section).
     """
+    preflight_battery_source = os.environ.get("VISIO_BATTERY_SOURCE", "pijuice")
+    preflight_results = preflight.run_checks(preflight_battery_source)
+    print(preflight.format_report(preflight_results))
+    if preflight.has_blocking_failure(preflight_results):
+        return 1
+
     config = load_config(os.environ)
 
     session_path = config.data_dir / "session.json"
