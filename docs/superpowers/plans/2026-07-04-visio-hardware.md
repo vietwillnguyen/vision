@@ -8,6 +8,8 @@
 
 **Tech Stack:** Raspberry Pi Zero 2W, Raspberry Pi Camera Module 3 Wide, PiJuice Zero pHAT, 3000mAh LiPo, WS2812B NeoPixel, 6mm tactile button, 3D-printed enclosure.
 
+> **Status note (2026-07-21):** the PiJuice Zero pHAT below is currently blocked on availability. Bring-up and integration testing are proceeding on a generic USB power bank into the Pi's power input instead - Task 3's PiJuice-specific steps (mount, verify charge API) are deferred until real battery hardware is sourced. See [`2026-07-21-visio-device-provisioning-design.md`](../specs/2026-07-21-visio-device-provisioning-design.md) for the firmware-side handling (`VISIO_BATTERY_SOURCE=none`) and researched alternatives (PiSugar 2/3, generic I2C-fuel-gauge UPS HATs, or a hand-built TP4056/IP5306 + MAX17048 combo).
+
 ## Global Constraints
 
 - Total BOM under $110 (spec target: ~$91.50 with the standard camera, ~$74.50 with the vintage OV5647 alternative).

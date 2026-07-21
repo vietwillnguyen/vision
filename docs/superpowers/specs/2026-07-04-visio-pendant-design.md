@@ -81,6 +81,8 @@ The device records passively all day, uploads footage to the cloud over home WiF
 | **Total (standard camera)** | | **~$91.50** |
 | **Total (vintage camera)** | | **~$74.50** |
 
+> **Status note (2026-07-21):** the PiJuice Zero pHAT is currently blocked on availability. Bring-up is proceeding on a generic USB power bank instead; see [`2026-07-21-visio-device-provisioning-design.md`](2026-07-21-visio-device-provisioning-design.md) for the firmware-side handling and researched replacement candidates (PiSugar 2/3, generic I2C-fuel-gauge UPS HATs, or a hand-built TP4056/IP5306 + MAX17048 combo).
+
 ### Form Factor
 
 - Dimensions: approximately 65mm x 45mm x 18mm (thick credit card).

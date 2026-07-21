@@ -24,9 +24,9 @@
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
-<!-- source-sha256: f16c3b1404bc8bfd1a67b7fa7e12fd2e21155949917534d9d4b9a68a927f5eb9 -->
+<!-- source-sha256: 63e4a269104f725b03ebd4614e14280c22458a3ee0e73310fc8935e1afb18a14 -->
 <!-- source-file: docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
-<!-- regenerated-at: 2026-07-12 (spec-sync) -->
+<!-- regenerated-at: 2026-07-21 (spec-sync) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -46,7 +46,7 @@
     </ul>
   </div>
   <div class="navbar-end">
-    <span class="badge badge-ghost text-xs">regenerated 2026-07-12</span>
+    <span class="badge badge-ghost text-xs">regenerated 2026-07-21</span>
   </div>
 </div>
 
@@ -223,12 +223,15 @@ flowchart TD
 
   <section id="gaps" class="space-y-4">
     <h2 class="text-2xl font-bold">As-built gaps</h2>
-    <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed. Both previously tracked firmware gaps are now closed:</p>
+    <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed. Both previously tracked firmware gaps are closed; one hardware substitution is open:</p>
     <div class="alert alert-success alert-soft" role="alert">
       <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, and hands it to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread never touches the network); a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for next-boot flush - the same retry contract as segments.</span>
     </div>
     <div class="alert alert-success alert-soft" role="alert">
       <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
+    </div>
+    <div class="alert alert-warning alert-soft" role="alert">
+      <span><strong>PiJuice deferred to a USB power bank (2026-07-21).</strong> The spec's PiJuice Zero pHAT is currently blocked on availability; bring-up and integration testing run on a generic USB power bank into the Pi's power input instead — no HAT, no I2C battery telemetry. Firmware handles this via a new <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_BATTERY_SOURCE</span> config (<span class="font-mono text-xs bg-base-200 rounded px-1">pijuice</span> default, or <span class="font-mono text-xs bg-base-200 rounded px-1">none</span> → a new <span class="font-mono text-xs bg-base-200 rounded px-1">UnmeteredPowerReader</span> that reports a fixed 100% so the halt/low-battery thresholds never false-trigger while mains-equivalent powered), and the preflight check treats missing PiJuice hardware as a warning, not a startup-blocking failure. See <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">the provisioning &amp; preflight spec</a>. <span class="font-mono text-xs bg-base-200 rounded px-1">BatteryReader</span> is a <span class="font-mono text-xs bg-base-200 rounded px-1">Protocol</span>, so a real replacement (PiSugar 2/3, a generic I2C-fuel-gauge UPS HAT, or a hand-built TP4056/IP5306 + MAX17048 combo) is a contained future swap, not a firmware rewrite.</span>
     </div>
   </section>
 
