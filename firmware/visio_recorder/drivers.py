@@ -60,3 +60,19 @@ class GpioZeroFlagButton:
 
     def on_press(self, callback: Callable[[], None]) -> None:
         self._button.when_pressed = callback
+
+
+class UnmeteredPowerReader:
+    """Battery source for VISIO_BATTERY_SOURCE=none: no battery HAT present.
+
+    Always reports full charge. battery.py's read_battery_status is purely
+    numeric (should_halt = pct < 10, is_low = pct < 20), so any fallback
+    value has to clear both thresholds or it would falsely halt the device,
+    or show a low-battery LED, while running from a mains-equivalent USB
+    power bank. There is no meaningful percentage to report and "unknown"
+    isn't a valid int for BatteryReader.get_charge_pct(), so 100 - not a
+    sentinel - is the only value that's actually correct here.
+    """
+
+    def get_charge_pct(self) -> int:
+        return 100
