@@ -126,3 +126,49 @@ def test_check_i2c_enabled_fails_when_device_missing(tmp_path):
 
     assert result.ok is False
     assert result.severity == WARN
+
+
+def _raise(exc):
+    raise exc
+
+
+def test_check_camera_detected_fails_when_binary_missing():
+    result = check_camera_detected(
+        run=lambda args: _raise(FileNotFoundError("rpicam-hello not found"))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "rpicam-hello" in result.detail
+    assert "unavailable" in result.detail
+
+
+def test_check_camera_detected_fails_when_command_times_out():
+    result = check_camera_detected(
+        run=lambda args: _raise(subprocess.TimeoutExpired(cmd=args, timeout=5))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "timeout" in result.detail
+
+
+def test_check_networkmanager_running_fails_when_binary_missing():
+    result = check_networkmanager_running(
+        run=lambda args: _raise(FileNotFoundError("nmcli not found"))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "nmcli" in result.detail
+    assert "unavailable" in result.detail
+
+
+def test_check_networkmanager_running_fails_when_command_times_out():
+    result = check_networkmanager_running(
+        run=lambda args: _raise(subprocess.TimeoutExpired(cmd=args, timeout=5))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "timeout" in result.detail
