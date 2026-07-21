@@ -82,12 +82,12 @@ def check_camera_detected(
 ) -> CheckResult:
     try:
         result = run(["rpicam-hello", "--list-cameras"])
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         return CheckResult(
             name="camera",
             severity=BLOCK,
             ok=False,
-            detail=f"rpicam-hello unavailable - {type(exc).__name__}: check apt install step" if isinstance(exc, FileNotFoundError) else f"rpicam-hello timeout - camera may be unresponsive",
+            detail=f"rpicam-hello unavailable - {type(exc).__name__}: check apt install step" if isinstance(exc, (FileNotFoundError, PermissionError)) else f"rpicam-hello timeout - camera may be unresponsive",
         )
     detected = result.returncode == 0 and re.search(r"^\d+\s*:", result.stdout, re.MULTILINE) is not None
     return CheckResult(
@@ -105,12 +105,12 @@ def check_networkmanager_running(
 ) -> CheckResult:
     try:
         result = run(["nmcli", "general", "status"])
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         return CheckResult(
             name="networkmanager",
             severity=BLOCK,
             ok=False,
-            detail=f"nmcli unavailable - check apt install step" if isinstance(exc, FileNotFoundError) else f"nmcli timeout - NetworkManager may be unresponsive",
+            detail=f"nmcli unavailable - check apt install step" if isinstance(exc, (FileNotFoundError, PermissionError)) else f"nmcli timeout - NetworkManager may be unresponsive",
         )
     ok = result.returncode == 0
     return CheckResult(
@@ -139,3 +139,51 @@ def check_i2c_enabled(path: Path = _I2C_DEVICE) -> CheckResult:
         ok=ok,
         detail="I2C bus enabled" if ok else "I2C not enabled - run setup-device.sh, may need a reboot",
     )
+
+
+def run_checks(battery_source: str) -> list[CheckResult]:
+    results = [
+        check_binary_on_path("rpicam-vid"),
+        check_binary_on_path("rpicam-still"),
+        check_binary_on_path("zbarimg"),
+        check_binary_on_path("ffmpeg"),
+        check_binary_on_path("nmcli"),
+        check_importable("rpi_ws281x"),
+        check_importable("gpiozero"),
+        check_importable("supabase"),
+        check_camera_detected(),
+        check_networkmanager_running(),
+        check_data_dir_writable(),
+    ]
+    if battery_source == "pijuice":
+        results.append(check_pijuice_importable())
+        results.append(check_i2c_enabled())
+    return results
+
+
+def has_blocking_failure(results: list[CheckResult]) -> bool:
+    return any(not r.ok and r.severity == BLOCK for r in results)
+
+
+def format_report(results: list[CheckResult]) -> str:
+    lines = [
+        f"[{'OK' if r.ok else r.severity.upper()}] {r.name}: {r.detail}" for r in results
+    ]
+    return "\n".join(lines)
+
+
+def main() -> int:
+    """CLI entrypoint: python3 -m visio_recorder.preflight.
+
+    Thin on purpose, same convention as daemon.py's main() - no branching
+    logic beyond what run_checks/has_blocking_failure already own, so it's
+    not unit tested itself.
+    """
+    battery_source = os.environ.get("VISIO_BATTERY_SOURCE", "pijuice")
+    results = run_checks(battery_source)
+    print(format_report(results))
+    return 1 if has_blocking_failure(results) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -10,6 +10,7 @@ import subprocess
 from visio_recorder.preflight import (
     BLOCK,
     WARN,
+    CheckResult,
     check_binary_on_path,
     check_camera_detected,
     check_data_dir_writable,
@@ -17,6 +18,9 @@ from visio_recorder.preflight import (
     check_importable,
     check_networkmanager_running,
     check_pijuice_importable,
+    format_report,
+    has_blocking_failure,
+    run_checks,
 )
 
 
@@ -172,3 +176,47 @@ def test_check_networkmanager_running_fails_when_command_times_out():
     assert result.ok is False
     assert result.severity == BLOCK
     assert "timeout" in result.detail
+
+
+def test_run_checks_includes_pijuice_and_i2c_when_battery_source_is_pijuice():
+    names = {r.name for r in run_checks("pijuice")}
+
+    assert "pijuice" in names
+    assert "i2c" in names
+
+
+def test_run_checks_excludes_pijuice_and_i2c_when_battery_source_is_none():
+    names = {r.name for r in run_checks("none")}
+
+    assert "pijuice" not in names
+    assert "i2c" not in names
+
+
+def test_has_blocking_failure_true_when_a_block_check_fails():
+    results = [
+        CheckResult(name="a", severity=BLOCK, ok=False, detail="x"),
+        CheckResult(name="b", severity=WARN, ok=True, detail="y"),
+    ]
+
+    assert has_blocking_failure(results) is True
+
+
+def test_has_blocking_failure_false_when_only_warn_checks_fail():
+    results = [
+        CheckResult(name="a", severity=BLOCK, ok=True, detail="x"),
+        CheckResult(name="b", severity=WARN, ok=False, detail="y"),
+    ]
+
+    assert has_blocking_failure(results) is False
+
+
+def test_format_report_marks_failures_with_severity_and_passes_as_ok():
+    results = [
+        CheckResult(name="a", severity=BLOCK, ok=True, detail="fine"),
+        CheckResult(name="b", severity=WARN, ok=False, detail="missing"),
+    ]
+
+    report = format_report(results)
+
+    assert "[OK] a: fine" in report
+    assert "[WARN] b: missing" in report
