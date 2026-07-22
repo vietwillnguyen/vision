@@ -19,11 +19,27 @@ if [[ "${EUID}" -ne 0 ]]; then
   exec sudo -E bash "$0" "$@"
 fi
 
-log "Step 1/8: apt packages"
+log "Step 1/9: swap size"
+SWAP_CONF="/etc/dphys-swapfile"
+SWAP_SIZE_MB=1024
+if [[ -f "${SWAP_CONF}" ]]; then
+  current_swap="$(grep -E '^CONF_SWAPSIZE=' "${SWAP_CONF}" | cut -d= -f2- || echo 0)"
+  if [[ "${current_swap:-0}" -lt "${SWAP_SIZE_MB}" ]]; then
+    sed -i "s/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=${SWAP_SIZE_MB}/" "${SWAP_CONF}"
+    systemctl restart dphys-swapfile
+    log "Swap was ${current_swap:-0}MB - increased to ${SWAP_SIZE_MB}MB (Pi Zero 2W's 512MB RAM needs this for apt/dpkg operations, or package configuration can thrash swap badly enough to look like a hung/dropped SSH session)"
+  else
+    log "Swap already ${current_swap}MB (>= ${SWAP_SIZE_MB}MB) - no change needed"
+  fi
+else
+  log "No ${SWAP_CONF} found - skipping swap size check (non-standard OS image?)"
+fi
+
+log "Step 2/9: apt packages"
 apt-get update -y
 apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git pijuice-base
 
-log "Step 2/8: interfaces"
+log "Step 3/9: interfaces"
 current_i2c="$(raspi-config nonint get_i2c || echo 1)"
 if [[ "${current_i2c}" != "0" ]]; then
   raspi-config nonint do_i2c 0
@@ -46,7 +62,7 @@ else
   log "No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)"
 fi
 
-log "Step 3/8: uv"
+log "Step 4/9: uv"
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="${HOME}/.local/bin:${PATH}"
@@ -54,7 +70,7 @@ else
   log "uv already installed"
 fi
 
-log "Step 4/8: code"
+log "Step 5/9: code"
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
   git -C "${INSTALL_DIR}" pull
 else
@@ -62,12 +78,12 @@ else
 fi
 (cd "${INSTALL_DIR}/firmware" && uv sync --locked)
 
-log "Step 5/8: systemd"
+log "Step 6/9: systemd"
 cp "${INSTALL_DIR}/${SYSTEMD_UNIT_SRC}" "${SYSTEMD_UNIT_DST}"
 systemctl daemon-reload
 systemctl enable visio-recorder
 
-log "Step 6/8: env file"
+log "Step 7/9: env file"
 if [[ ! -f "${ENV_FILE}" ]]; then
   cat > "${ENV_FILE}" <<'EOF'
 SUPABASE_URL=
@@ -96,10 +112,10 @@ else
   log "${ENV_FILE} already configured"
 fi
 
-log "Step 7/8: data dir"
+log "Step 8/9: data dir"
 mkdir -p "${DATA_DIR}"
 
-log "Step 8/8: summary"
+log "Step 9/9: summary"
 battery_source="$(grep -E '^VISIO_BATTERY_SOURCE=' "${ENV_FILE}" | cut -d= -f2- || echo pijuice)"
 battery_source="${battery_source:-pijuice}"
 log "VISIO_BATTERY_SOURCE=${battery_source}"
