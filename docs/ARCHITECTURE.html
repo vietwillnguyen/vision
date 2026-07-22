@@ -24,7 +24,7 @@
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
-<!-- source-sha256: 63e4a269104f725b03ebd4614e14280c22458a3ee0e73310fc8935e1afb18a14 -->
+<!-- source-sha256: e35b9750f2c45e05deaf8dcb07c54d16a78369e9e86594cba864ec4be0ff0771 -->
 <!-- source-file: docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- regenerated-at: 2026-07-21 (spec-sync) -->
 
@@ -291,7 +291,7 @@ score = base_score * 1.5  (if manually flagged)
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Device</h3>
-        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime with a stale banner on channel error. WiFi re-onboarding QR not wired.</p>
+        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime with a stale banner on channel error. Re-onboard button opens a QR display screen encoding WiFi credentials plus the signed-in user's current Supabase session tokens.</p>
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Archive</h3>
@@ -302,7 +302,10 @@ score = base_score * 1.5  (if manually flagged)
       <span><strong>As-built (Epic 5 screen wiring, issue #8):</strong> playback uses <span class="font-mono text-xs bg-base-200 rounded px-1">expo-video</span>, not Expo AV - <span class="font-mono text-xs bg-base-200 rounded px-1">expo-av</span> is deprecated in current Expo SDKs and was only installed because this spec predates that deprecation. A bottom tab navigator composes all four screens behind real Supabase Auth (session restore + AsyncStorage persistence).</span>
     </div>
     <div class="alert alert-warning alert-soft" role="alert">
-      <span><strong>Regenerate bottom sheet and WiFi re-onboarding QR screen not wired.</strong> Neither has a backend consumer yet, so both are out of scope for issue #8. The regenerate button and Re-onboard button surface as inert/"not available yet" rather than functional.</span>
+      <span><strong>Regenerate bottom sheet not wired.</strong> It has no backend consumer yet, so it stays out of scope for issue #8; the regenerate button surfaces as inert/"not available yet" rather than functional.</span>
+    </div>
+    <div class="alert alert-info alert-soft text-sm" role="alert">
+      <span><strong>WiFi re-onboarding QR screen - resolved.</strong> The Device tab's Re-onboard button now navigates to a <span class="font-mono text-xs bg-base-200 rounded px-1">@react-navigation/native-stack</span> route rendering a form (SSID/password) then a <span class="font-mono text-xs bg-base-200 rounded px-1">react-native-qrcode-svg</span> QR code, encoding the exact <span class="font-mono text-xs bg-base-200 rounded px-1">{ssid, password, user_access_token, user_refresh_token}</span> shape firmware's <span class="font-mono text-xs bg-base-200 rounded px-1">parse_onboarding_qr_payload</span> expects.</span>
     </div>
   </section>
 
