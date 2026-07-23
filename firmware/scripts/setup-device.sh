@@ -36,6 +36,16 @@ else
 fi
 
 log "Step 2/9: apt packages"
+# Bookworm's needrestart hook can pop an interactive "which services to
+# restart" prompt on packages like network-manager that touch running
+# daemons; over a non-interactive SSH pipe that hangs the script forever
+# instead of failing loudly. Force fully-automatic mode.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+# Defensive: if a prior run was killed mid dpkg-configure (e.g. the
+# swap-thrashing hang Step 1 now prevents), finish that before proceeding
+# rather than letting apt-get fail confusingly on a half-configured package.
+dpkg --configure -a
 apt-get update -y
 apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git pijuice-base
 
