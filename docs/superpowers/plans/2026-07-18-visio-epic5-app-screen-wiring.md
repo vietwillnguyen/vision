@@ -18,7 +18,7 @@ Every hook returns a discriminated-union state (`kind: 'loading' | 'error' | ...
 - Tabs, in order: Today's Reel, Raw Footage, Device, Archive.
 - Realtime channel statuses `CHANNEL_ERROR`, `TIMED_OUT`, `CLOSED` must surface to the UI as a stale indicator, never go silent.
 - Every interactive element gets an `accessibilityLabel`; screens get StyleSheet styling (they currently render unstyled by design).
-- The regenerate bottom sheet and the WiFi re-onboarding QR screen are **out of scope** (no backend consumer / separate issue); the existing Re-onboard button shows a "not available yet" alert.
+- The regenerate bottom sheet and the WiFi re-onboarding QR screen are **out of scope** (no backend consumer / separate issue); the existing Re-onboard button shows a "not available yet" alert. (The QR screen has since landed - see [`2026-07-20-wifi-reonboard-qr-screen-design.md`](../specs/2026-07-20-wifi-reonboard-qr-screen-design.md).)
 - Storage buckets are `segments` and `reels`; object keys follow `{device_id}/{filename}` and RLS resolves the first path folder to the owning user.
 - All hooks accept `client: SupabaseClient` as their first parameter (existing `useDeviceStatus` convention) so tests inject fakes; no module-level `supabase` import inside hooks or containers.
 - Run all commands from `app/`.
@@ -3322,6 +3322,6 @@ git commit -m "feat(app): auth-gated bottom tab navigation composing all four sc
 
 ## Self-Review
 
-- Issue #8 scope coverage: tabs + containers (Tasks 5, 10, 12, 13, 14), real auth with AsyncStorage persistence (Tasks 1, 6), `expo-video` playback (Tasks 10, 12), timeline thumbnails + reel playback surfaces (Tasks 10, 11, 13), styling + a11y labels (every screen task), `subscribe()` status callback + fetch discriminant (Task 4), UTC-midnight normalization (Tasks 2, 13). Out of scope per issue: regenerate sheet, QR re-onboarding screen (button alerts honestly, Task 5).
+- Issue #8 scope coverage: tabs + containers (Tasks 5, 10, 12, 13, 14), real auth with AsyncStorage persistence (Tasks 1, 6), `expo-video` playback (Tasks 10, 12), timeline thumbnails + reel playback surfaces (Tasks 10, 11, 13), styling + a11y labels (every screen task), `subscribe()` status callback + fetch discriminant (Task 4), UTC-midnight normalization (Tasks 2, 13). Out of scope per issue at the time: regenerate sheet (still open), QR re-onboarding screen (button alerted honestly, Task 5) - since landed per [`2026-07-20-wifi-reonboard-qr-screen-design.md`](../specs/2026-07-20-wifi-reonboard-qr-screen-design.md).
 - Type consistency: `DeviceStatusState`/`RealtimeHealth` (Task 4) consumed in Task 5; `SignedUrlRequest` widened in Task 3 consumed by Tasks 9, 11; `signIn` signature `(email, password) => Promise<string | null>` consistent across Tasks 6 and 14; `now?: () => Date` injection consistent across Tasks 10, 12, 13.
 - Mocked-native caveat: `expo-video`, `expo-video-thumbnails`, `expo-media-library`, and `expo-file-system` are jest-mocked; real-device behavior needs a manual Expo run (out of CI scope, noted for the PR description).

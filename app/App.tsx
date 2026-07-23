@@ -7,7 +7,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { ArchiveContainer } from './src/containers/ArchiveContainer';
 import { AuthContainer } from './src/containers/AuthContainer';
-import { DeviceContainer } from './src/containers/DeviceContainer';
+import { DeviceStack } from './src/navigation/DeviceStack';
 import { RawFootageContainer } from './src/containers/RawFootageContainer';
 import { TodayReelContainer } from './src/containers/TodayReelContainer';
 import { useAuth } from './src/hooks/useAuth';
@@ -88,7 +88,7 @@ function SignedInApp({ client }: { client: SupabaseClient }) {
           {() => <RawFootageContainer client={client} deviceId={deviceId} />}
         </Tab.Screen>
         <Tab.Screen name="Device">
-          {() => <DeviceContainer client={client} deviceId={deviceId} />}
+          {() => <DeviceStack client={client} deviceId={deviceId} />}
         </Tab.Screen>
         <Tab.Screen name="Archive">
           {() => <ArchiveContainer client={client} deviceId={deviceId} />}
