@@ -79,6 +79,11 @@ while read -r candidate; do
     *.md) ;;
     *) continue ;;
   esac
+  # A staged deletion is not a coverage gap - removing a spec can only shrink
+  # what needs guarding. Retiring one (delete the spec, drop its manifest line)
+  # must stay reachable without --no-verify; deleting it while the manifest
+  # still lists it is caught above as drift.
+  git cat-file -e ":$candidate" 2>/dev/null || continue
   candidate_dir=$(dirname -- "$candidate")
   printf '%s\n' "$spec_dirs" | grep -qxF -- "$candidate_dir" || continue
   printf '%s\n' "$tracked_specs" | grep -qxF -- "$candidate" && continue

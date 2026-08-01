@@ -220,6 +220,14 @@ commit_staged "delete tracked spec"
 assert_status 1
 assert_contains "$SPEC_B"
 
+it "commits cleanly when a retired spec is deleted along with its manifest line"
+new_repo
+git rm --quiet "$SPEC_B"
+write_doc "$SPEC_A" "$SPEC_C"
+git add docs/ARCHITECTURE.html
+commit_staged "retire spec B"
+assert_status 0
+
 it "ignores a non-spec markdown file elsewhere in docs/"
 new_repo
 printf 'a plan\n' >docs/superpowers/plans-note.md
