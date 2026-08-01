@@ -21,7 +21,9 @@ def run_captured(command: list[str]) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(command, check=True, capture_output=True)
     except subprocess.CalledProcessError as exc:
-        stderr_tail = (exc.stderr or b"")[-STDERR_TAIL_BYTES:].decode("utf-8", "replace")
+        stderr_tail = (exc.stderr or b"")[-STDERR_TAIL_BYTES:].decode(
+            "utf-8", "replace"
+        )
         raise RuntimeError(
             f"{command[0]} exited with code {exc.returncode}: {stderr_tail}"
         ) from exc

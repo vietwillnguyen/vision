@@ -1,7 +1,11 @@
 from datetime import datetime
 from pathlib import Path
 
-from visio_recorder.capture import build_rpicam_command, record_segment, segment_filename
+from visio_recorder.capture import (
+    build_rpicam_command,
+    record_segment,
+    segment_filename,
+)
 
 
 def test_segment_filename_uses_recording_start_time():
@@ -28,11 +32,15 @@ def test_build_rpicam_command_records_h264_for_the_given_duration():
     cmd = build_rpicam_command(Path("/data/20260709_080530.h264"), 300000, 30)
     assert cmd == [
         "rpicam-vid",
-        "-t", "300000",
-        "--framerate", "30",
-        "--codec", "h264",
+        "-t",
+        "300000",
+        "--framerate",
+        "30",
+        "--codec",
+        "h264",
         "-n",
-        "-o", "/data/20260709_080530.h264",
+        "-o",
+        "/data/20260709_080530.h264",
     ]
 
 

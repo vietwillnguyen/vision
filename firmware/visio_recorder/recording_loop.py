@@ -75,9 +75,7 @@ def flush_pending(
         try:
             upload_segment(storage_client, device_id, path)
         except Exception:
-            _logger.exception(
-                "flush_pending failed to upload queued segment %s", path
-            )
+            _logger.exception("flush_pending failed to upload queued segment %s", path)
             continue
         mark_uploaded(path)
         uploaded += 1

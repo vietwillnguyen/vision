@@ -40,12 +40,9 @@ def test_firmware_uploaded_object_is_ingested_by_pipeline_listing(
     owner_email = f"storage-owner-{run_id}@example.test"
     password = "correct-horse-battery-staple"
 
-    owner_id = (
-        admin_client.auth.admin.create_user(
-            {"email": owner_email, "password": password, "email_confirm": True}
-        )
-        .user.id
-    )
+    owner_id = admin_client.auth.admin.create_user(
+        {"email": owner_email, "password": password, "email_confirm": True}
+    ).user.id
 
     device_id = None
     stub_segment = None
