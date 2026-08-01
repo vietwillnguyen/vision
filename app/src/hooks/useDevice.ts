@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
+import { useResetOnInputChange } from './useResetOnInputChange';
+
 export type DeviceState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
@@ -10,9 +12,10 @@ export type DeviceState =
 export function useDevice(client: SupabaseClient): DeviceState {
   const [state, setState] = useState<DeviceState>({ kind: 'loading' });
 
+  useResetOnInputChange([client], () => setState({ kind: 'loading' }));
+
   useEffect(() => {
     let isMounted = true;
-    setState({ kind: 'loading' });
 
     client
       .from('devices')
