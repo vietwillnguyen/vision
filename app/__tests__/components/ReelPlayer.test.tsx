@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
+import { ReelPlayer } from '../../src/components/ReelPlayer';
+
 jest.mock('expo-video', () => {
   const { View } = jest.requireActual('react-native');
   return {
@@ -8,8 +10,6 @@ jest.mock('expo-video', () => {
     VideoView: (props: Record<string, unknown>) => <View testID="video-view" {...props} />,
   };
 });
-
-import { ReelPlayer } from '../../src/components/ReelPlayer';
 
 describe('ReelPlayer', () => {
   it('renders the video view with an accessibility label when a uri is ready', () => {

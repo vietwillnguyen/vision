@@ -1,14 +1,14 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-jest.mock('expo-video-thumbnails', () => ({
-  getThumbnailAsync: jest.fn((uri: string) => Promise.resolve({ uri: `thumb:${uri}` })),
-}));
-
 import * as VideoThumbnails from 'expo-video-thumbnails';
 
 import { useSlotThumbnails } from '../../src/hooks/useSlotThumbnails';
 import type { TimelineSlot } from '../../src/logic/timeline';
+
+jest.mock('expo-video-thumbnails', () => ({
+  getThumbnailAsync: jest.fn((uri: string) => Promise.resolve({ uri: `thumb:${uri}` })),
+}));
 
 const SEGMENT = {
   id: 's1',
