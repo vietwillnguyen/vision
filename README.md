@@ -53,7 +53,7 @@ The hook's own suite is [`scripts/hooks/tests/test-pre-commit.sh`](scripts/hooks
 
 ## Continuous integration
 
-[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs all four test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) on every pull request targeting `main` and every push to `main`.
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs the four subsystem test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) on every pull request targeting `main` and every push to `main`; the pre-commit hook's own suite runs separately in [`.github/workflows/hooks.yml`](.github/workflows/hooks.yml) (see [Architecture doc](#architecture-doc) above).
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.

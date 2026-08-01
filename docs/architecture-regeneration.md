@@ -43,7 +43,8 @@ every commit.
 Instead:
 
 - A **pre-commit hook** (`scripts/hooks/pre-commit`, wired via `git config
-  core.hooksPath scripts/hooks` - already set in this repo) blocks any commit
+  core.hooksPath scripts/hooks`, which every clone must set - see
+  [Bootstrapping a new clone](#bootstrapping-a-new-clone)) blocks any commit
   that changes a spec file without also updating that spec's line in
   `docs/ARCHITECTURE.html`'s embedded `source-sha256` manifest.
   It is a fast, deterministic staleness check, not a generator.
