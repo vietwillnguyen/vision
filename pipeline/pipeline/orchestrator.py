@@ -23,7 +23,8 @@ failure retries the escalation on the next run.
 """
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -131,11 +132,10 @@ class OrchestratorDeps:
 @dataclass
 class NightlyRunResult:
     devices_processed: int = 0
-    devices_failed: list[str] | None = None
-
-    def __post_init__(self) -> None:
-        if self.devices_failed is None:
-            self.devices_failed = []
+    # default_factory rather than a None sentinel normalized in __post_init__:
+    # same runtime behavior, but the field is never actually Optional, so
+    # callers (and __main__'s len()) do not have to defend against None.
+    devices_failed: list[str] = field(default_factory=list)
 
 
 def run_nightly(deps: OrchestratorDeps, day: date) -> NightlyRunResult:
@@ -225,13 +225,20 @@ def _process_device_segments(
             "style": "vintage" if deps.vintage else "clean",
         }
     )
-    if device.push_token:
+    # Bind the token before building the thunk: the lambda would otherwise
+    # re-read device.push_token at call time, and _deliver_push clears exactly
+    # that attribute on PushTokenNotRegisteredError - so the `if` guard above
+    # does not actually constrain what the lambda sees.
+    push_token = device.push_token
+    if push_token:
         _deliver_push(
-            deps, device, lambda: notify_reel_ready(deps.push, device.push_token, day)
+            deps, device, lambda: notify_reel_ready(deps.push, push_token, day)
         )
 
 
-def _deliver_push(deps: OrchestratorDeps, device: DeviceRecord, send) -> bool:
+def _deliver_push(
+    deps: OrchestratorDeps, device: DeviceRecord, send: Callable[[], None]
+) -> bool:
     """Attempt delivery; True when delivered or permanently undeliverable."""
     try:
         send()
@@ -271,13 +278,13 @@ def _apply_dlq_policy(
         store.record_dlq(device.device_id, to_record)
     if to_escalate:
         notified = True
-        if device.push_token:
+        # Bound before the thunk for the same reason as in _process_device_segments.
+        push_token = device.push_token
+        if push_token:
             notified = _deliver_push(
                 deps,
                 device,
-                lambda: deps.push.send(
-                    device.push_token, ESCALATION_TITLE, ESCALATION_BODY
-                ),
+                lambda: deps.push.send(push_token, ESCALATION_TITLE, ESCALATION_BODY),
             )
         if notified:
             store.escalate_dlq(device.device_id, to_escalate)

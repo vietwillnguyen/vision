@@ -24,6 +24,25 @@ visio-pipeline = { path = "../pipeline" }
 [tool.ruff]
 extend = "../ruff.toml"
 
+# mypy has no `extend` mechanism and only discovers config in the current
+# directory, so unlike ruff.toml this block is repeated per package; the
+# settings below are kept identical across firmware/, pipeline/, and
+# integration/, and only `files` differs.
+[tool.mypy]
+python_version = "3.11"
+files = ["tests"]
+# The load-bearing setting. This codebase's every hardware/network boundary is a
+# typing.Protocol with a fake, and a fake is only ever wired to its Protocol
+# inside a test function - whose body mypy skips entirely by default. Without
+# check_untyped_defs the Protocol discipline is paid for and never collected.
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+strict_equality = true
+extra_checks = true
+
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

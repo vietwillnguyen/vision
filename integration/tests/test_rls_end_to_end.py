@@ -19,6 +19,7 @@ Needs a running `supabase start` instance; skips automatically otherwise
 
 import uuid
 from datetime import UTC, date, datetime
+from typing import Any, cast
 
 import pytest
 from supabase import create_client
@@ -55,13 +56,16 @@ def test_owner_can_read_pipeline_written_rows_but_other_user_cannot(
     other_id = _make_owner_user(admin_client, other_email, password)
 
     try:
-        device = (
+        # supabase-py types APIResponse.data as bare JSON (it can be any JSON
+        # value), so the row shape has to be narrowed here before it is indexed.
+        inserted = cast(
+            list[dict[str, Any]],
             admin_client.table("devices")
             .insert({"user_id": owner_id, "name": f"RLS test device {run_id}"})
             .execute()
-            .data[0]
+            .data,
         )
-        device_id = device["device_id"]
+        device_id = str(inserted[0]["device_id"])
 
         day = date(2026, 7, 14)
         recorded_at = datetime(2026, 7, 14, 9, 0, 0, tzinfo=UTC)

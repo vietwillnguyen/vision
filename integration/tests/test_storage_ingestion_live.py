@@ -19,6 +19,7 @@ Needs a running `supabase start` instance; skips automatically otherwise
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from supabase import create_client
@@ -44,16 +45,19 @@ def test_firmware_uploaded_object_is_ingested_by_pipeline_listing(
         {"email": owner_email, "password": password, "email_confirm": True}
     ).user.id
 
-    device_id = None
-    stub_segment = None
+    device_id: str | None = None
+    stub_segment: Path | None = None
     try:
-        device = (
+        # supabase-py types APIResponse.data as bare JSON (it can be any JSON
+        # value), so the row shape has to be narrowed here before it is indexed.
+        inserted = cast(
+            list[dict[str, Any]],
             admin_client.table("devices")
             .insert({"user_id": owner_id, "name": f"storage test device {run_id}"})
             .execute()
-            .data[0]
+            .data,
         )
-        device_id = device["device_id"]
+        device_id = str(inserted[0]["device_id"])
 
         recorded_at = datetime(2026, 7, 14, 9, 0, 0, tzinfo=UTC)
         stub_segment = tmp_path / recorded_at.strftime("%Y%m%d_%H%M%S.mp4")

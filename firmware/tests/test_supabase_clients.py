@@ -17,7 +17,7 @@ class FakeAuthResponse:
 class FakeAuth:
     def __init__(self, user_id: str) -> None:
         self._user_id = user_id
-        self.session_set_with = None
+        self.session_set_with: tuple[str, str] | None = None
 
     def set_session(self, access_token: str, refresh_token: str) -> FakeAuthResponse:
         self.session_set_with = (access_token, refresh_token)
