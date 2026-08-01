@@ -57,6 +57,31 @@ It is a step inside that job rather than a job of its own because the suites fin
 The step runs before the pytest step: each suite wraps itself in `begin`/`rollback`, so it leaves the freshly migrated database untouched for the tests that follow.
 The Supabase CLI is pinned through the workflow-level `SUPABASE_CLI_VERSION` env var rather than `version: latest`, so CI cannot change underneath a commit; Dependabot bumps action refs but not action inputs, so that pin is a manual bump.
 
+## Lint, format, and type-check
+
+[`.github/workflows/lint.yml`](.github/workflows/lint.yml) gates the same commands on every pull request targeting `main` and every push to `main`.
+It needs neither Docker nor a Supabase instance.
+
+Python uses [ruff](https://docs.astral.sh/ruff/) for both linting and formatting (it replaces black, flake8, and isort) and [mypy](https://mypy.readthedocs.io/) for type checking.
+The rule set is shared: the repo-root [`ruff.toml`](ruff.toml) holds it, and each package's `pyproject.toml` extends it.
+Run all three from any of `firmware/`, `pipeline/`, or `integration/`:
+
+```bash
+uv run --extra dev ruff check .           # lint
+uv run --extra dev ruff check --fix .     # lint, fixing what is auto-fixable
+uv run --extra dev ruff format .          # format (--check to verify only)
+uv run --extra dev mypy                   # type-check (paths come from pyproject.toml)
+```
+
+The app uses ESLint with [`eslint-config-expo`](https://docs.expo.dev/guides/using-eslint/) and `tsc`:
+
+```bash
+cd app
+npm run lint        # eslint, warnings included (--max-warnings 0)
+npm run lint -- --fix
+npm run typecheck   # tsc --noEmit
+```
+
 ## Supabase foundation (Epic 0)
 
 The shared database contract every other subsystem codes against:
