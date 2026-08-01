@@ -7,10 +7,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0"]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.14.0",
+    "mypy>=1.18.0",
+]
 
 [tool.setuptools]
 packages = ["visio_recorder"]
+
+# Shared rule set lives in the repo-root ruff.toml so the three packages
+# cannot drift apart; see its header comment.
+[tool.ruff]
+extend = "../ruff.toml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
