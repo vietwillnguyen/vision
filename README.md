@@ -28,9 +28,12 @@ app/                 -- Epic 3: React Native (Expo) mobile companion app
   src/components/    -- presentational components (timeline, segment preview, reel player)
   src/theme.ts       -- shared dark theme for StyleSheet styling
   __tests__/         -- Jest suites run via `npm test`
+integration/         -- Epic 5: cross-service integration suite (Python package)
+  tests/             -- pytest suites running firmware + pipeline + app's real code
+                        against each other, and against a live local Supabase
 docs/
   superpowers/
-    specs/           -- approved design spec
+    specs/           -- approved design specs (rendered by docs/ARCHITECTURE.html)
     plans/           -- executable implementation plans (one per epic)
 ```
 
@@ -38,13 +41,15 @@ All three software subsystems (Epics 1-3) are implemented, including the Epic 5 
 
 ## Architecture doc
 
-[`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) is a living, visual rendering of the design spec - open it directly in a browser.
-It is generated from `docs/superpowers/specs/2026-07-04-visio-pendant-design.md`; edit the spec, then see [`docs/architecture-regeneration.md`](docs/architecture-regeneration.md) to regenerate the page.
-A pre-commit hook enforces that the two stay in sync - run this once per clone (worktrees share it):
+[`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) is a living, visual rendering of the design specs - open it directly in a browser.
+It is generated from every spec under `docs/superpowers/specs/`; edit the specs, then see [`docs/architecture-regeneration.md`](docs/architecture-regeneration.md) to regenerate the page.
+The page embeds one `<!-- source-sha256: <hash>  <spec path> -->` comment per spec it renders, and a pre-commit hook blocks any commit that changes a spec without updating that spec's line - run this once per clone (worktrees share it):
 
 ```sh
 git config core.hooksPath scripts/hooks
 ```
+
+The hook's own suite is [`scripts/hooks/tests/test-pre-commit.sh`](scripts/hooks/tests/test-pre-commit.sh) (plain `git` + `sha256sum`, no test framework); [`.github/workflows/hooks.yml`](.github/workflows/hooks.yml) runs it on every PR and also re-verifies the committed manifest against the specs on disk.
 
 ## Continuous integration
 
@@ -175,3 +180,21 @@ npx expo start --web  # preview in a browser (layout/styling only - no native vi
 ```
 
 Lint and type-check commands are in [Lint, format, and type-check](#lint-format-and-type-check).
+
+## Cross-service integration suite (Epic 5)
+
+A fourth Python package whose tests run each subsystem's *real* code against the others, rather than against each subsystem's private fakes: firmware's marker/segment writers against pipeline's parsers, pipeline's real row shapes against the migrations and the app's `mapReelRow()`, and pipeline's real `SupabaseStore` plus firmware's real uploader against a live local Supabase instance for the RLS and storage-ingestion handoffs.
+Tests that need a live instance skip themselves when the `SUPABASE_*` env vars are unset, so the suite is runnable without Docker.
+`.github/workflows/tests.yml`'s `integration` job starts a real Supabase instance, so those tests actually run (not skip) on every PR.
+
+See [`integration/README.md`](integration/README.md) for what each test file proves and why, including the one integration test that lives in the `app` package instead (Realtime channel-error handling).
+
+### Local development
+
+Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).
+
+```bash
+cd integration
+uv sync --extra dev   # install dependencies from uv.lock
+uv run pytest         # run the suite (live-Supabase tests skip without SUPABASE_* set)
+```
