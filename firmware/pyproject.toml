@@ -13,13 +13,59 @@ dev = [
     "mypy>=1.18.0",
 ]
 
+# Without a build-system table uv treats this as a virtual project: the package
+# is never installed into .venv and only imports because uv run puts the cwd on
+# sys.path, so `python -m visio_recorder.*` breaks from any other directory.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [tool.setuptools]
 packages = ["visio_recorder"]
+# PEP 561: ship the inline type hints so downstream consumers (integration/)
+# type-check against them instead of falling back to Any.
+package-data = { visio_recorder = ["py.typed"] }
 
 # Shared rule set lives in the repo-root ruff.toml so the three packages
 # cannot drift apart; see its header comment.
 [tool.ruff]
 extend = "../ruff.toml"
+
+# mypy has no `extend` mechanism and only discovers config in the current
+# directory, so unlike ruff.toml this block is repeated per package; the
+# settings below are kept identical across firmware/, pipeline/, and
+# integration/, and only `files` differs.
+[tool.mypy]
+python_version = "3.11"
+files = ["visio_recorder", "tests"]
+# The load-bearing setting. This codebase's every hardware/network boundary is a
+# typing.Protocol with a fake, and a fake is only ever wired to its Protocol
+# inside a test function - whose body mypy skips entirely by default. Without
+# check_untyped_defs the Protocol discipline is paid for and never collected.
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+strict_equality = true
+extra_checks = true
+
+# Source modules must be fully annotated. Test modules are deliberately exempt
+# for now: `def test_x():` with no `-> None` is idiomatic pytest, and requiring
+# it would add ~300 annotation-only lines to this change for no type coverage
+# that check_untyped_defs does not already provide.
+[[tool.mypy.overrides]]
+module = ["visio_recorder.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+# pijuice / rpi_ws281x / gpiozero are Raspberry Pi system packages installed via
+# apt on the device and deliberately not project dependencies - each import is
+# deferred into __init__ so drivers.py stays importable off-device (see its
+# module docstring). No stubs exist to install.
+[[tool.mypy.overrides]]
+module = ["pijuice.*", "rpi_ws281x.*", "gpiozero.*"]
+ignore_missing_imports = true
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
