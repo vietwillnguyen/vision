@@ -92,6 +92,8 @@ Missing PiJuice hardware only warns (`VISIO_BATTERY_SOURCE=none` is the current 
 
 The script provisions an explicit revision rather than pulling: it defaults to the exact commit of the clone you run it from, so two devices set up from the same checkout get identical firmware, and `VISIO_GIT_REF=<tag|branch|sha>` overrides it.
 It also installs editor and shell conveniences (neovim, `ls`/history aliases, a branch-aware prompt) into the invoking user's `~/.bashrc`; set `VISIO_DEV_SHELL=0` in `/etc/visio-recorder.env` to skip that for an appliance image.
+The env file is written before that step runs, so on a fresh device the script stops at the template with the switch already in it - setting it to `0` there gives a device that never installs the dev toolchain at all.
+Flipping it to `0` later removes the managed `~/.bashrc` block on the next run but deliberately leaves the installed packages alone, since silently purging an operator's editor mid-bring-up is worse than leaving it.
 
 ### Local development
 

@@ -2,10 +2,15 @@
 
 Checks are grouped by severity: BLOCK means the daemon cannot function
 without it - the check's failure should stop the daemon from starting.
-WARN means the daemon can still run, degraded - currently only the
-PiJuice/I2C checks, since a missing battery HAT is an accepted, expected
-state while VISIO_BATTERY_SOURCE=none (see
-docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md).
+WARN means the daemon is unaffected: the PiJuice/I2C checks, since a
+missing battery HAT is an accepted, expected state while
+VISIO_BATTERY_SOURCE=none (see
+docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md),
+and the data-dir check when the caller is not the uid the daemon runs as.
+
+Severity is therefore not always a property of the check alone - it can
+depend on who is running it, because this module is both the daemon's
+own startup gate and a diagnostic an operator runs over SSH.
 
 Every check takes an injectable seam so it can be unit tested without
 touching real hardware, matching the rest of firmware/'s Protocol/fake
@@ -26,6 +31,10 @@ WARN = "warn"
 
 _DATA_DIR = Path("/var/lib/visio-recorder")
 _I2C_DEVICE = Path("/dev/i2c-1")
+
+# The uid the systemd unit starts the daemon as (User= is unset, so root).
+# Only that caller is gated on the data dir being writable.
+_DAEMON_UID = 0
 
 
 @dataclass
@@ -117,7 +126,7 @@ def check_networkmanager_running(
             name="networkmanager",
             severity=BLOCK,
             ok=False,
-            detail=f"nmcli unavailable - check apt install step",
+            detail=f"nmcli unavailable - {type(exc).__name__}: check apt install step",
         )
     except subprocess.TimeoutExpired:
         return CheckResult(
@@ -135,13 +144,39 @@ def check_networkmanager_running(
     )
 
 
-def check_data_dir_writable(path: Path = _DATA_DIR) -> CheckResult:
-    ok = path.is_dir() and os.access(path, os.W_OK)
+def check_data_dir_writable(
+    path: Path = _DATA_DIR, getuid: Callable[[], int] = os.getuid
+) -> CheckResult:
+    """Writability is caller-relative, so the severity of failing it is too.
+
+    The daemon runs as ``_DAEMON_UID`` and cannot function without a writable
+    data dir, so for that caller this stays BLOCK - the same gate the unit's
+    ExecStartPre has always applied. A diagnostic run by an operator over SSH
+    is a different uid and is *expected* to fail: the directory stays
+    root-owned on purpose because it holds recorded video. Reporting that as
+    BLOCK made a healthy device look mis-provisioned and advised a re-run of
+    setup-device.sh that would change nothing, so for any other caller the
+    same failure is a WARN that says so.
+    """
+    if path.is_dir() and os.access(path, os.W_OK):
+        return CheckResult(name="data_dir", severity=BLOCK, ok=True, detail=f"{path} writable")
+    uid = getuid()
+    if uid == _DAEMON_UID:
+        return CheckResult(
+            name="data_dir",
+            severity=BLOCK,
+            ok=False,
+            detail=f"{path} missing or not writable - run setup-device.sh",
+        )
+    reason = "not writable by" if path.is_dir() else "missing or not visible to"
     return CheckResult(
         name="data_dir",
-        severity=BLOCK,
-        ok=ok,
-        detail=f"{path} writable" if ok else f"{path} missing or not writable - run setup-device.sh",
+        severity=WARN,
+        ok=False,
+        detail=(
+            f"{path} {reason} uid {uid} - expected for a diagnostic run as a "
+            f"non-daemon user, not a fault; the daemon runs as uid {_DAEMON_UID}"
+        ),
     )
 
 

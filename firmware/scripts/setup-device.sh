@@ -82,11 +82,11 @@ SWAP_SIZE_MB=1024
 active_swap_mb="$(awk '/^SwapTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
 active_swap_mb="${active_swap_mb:-0}"
 if [[ -f "${SWAP_CONF}" ]]; then
-  # The `|| echo 0` fallback on this pipeline never fires - the exit status is
-  # cut's, not grep's - so a missing key yields an empty string, and a
-  # hand-edited CONF_SWAPSIZE can hold anything at all ("auto", "1024M", a
-  # comment). Either would make the arithmetic comparison below abort the
-  # script, so normalise to a plain integer first.
+  # A hand-edited CONF_SWAPSIZE can hold anything at all ("auto", "1024M", a
+  # trailing comment), and the `|| true` guard - which pipefail on line 2
+  # makes load-bearing when grep matches nothing - turns a missing key into an
+  # empty string. Either value would make the arithmetic comparison below
+  # abort the script, so normalise to a plain integer first.
   current_swap="$(grep -E '^CONF_SWAPSIZE=' "${SWAP_CONF}" | cut -d= -f2- || true)"
   if [[ ! "${current_swap}" =~ ^[0-9]+$ ]]; then
     log "CONF_SWAPSIZE in ${SWAP_CONF} is missing or not a plain integer ('${current_swap}') - treating it as 0"
@@ -216,7 +216,10 @@ fi
 # from a clean one. Untracked paths are deliberately left alone, because
 # firmware/.venv lives inside the checkout.
 #   $1 install dir   $2 clone URL   $3 ref (branch, tag, or SHA)
-# Returns non-zero without touching the working tree if the ref cannot resolve.
+# Resolution happens after the clone and fetch, so an unresolvable ref returns
+# non-zero with the checkout left at whatever revision it already had - on a
+# fresh device, that means the clone exists at origin's default branch. Nothing
+# is installed from it either way, and the next run converges.
 checkout_revision() {
   local install_dir="$1" repo_url="$2" ref="$3" sha="" candidate
   if [[ -d "${install_dir}/.git" ]]; then
@@ -272,10 +275,53 @@ cp "${INSTALL_DIR}/${SYSTEMD_UNIT_SRC}" "${SYSTEMD_UNIT_DST}"
 systemctl daemon-reload
 systemctl enable visio-recorder
 
-log "Step 7/10: developer shell"
+log "Step 7/10: env file"
+if [[ ! -f "${ENV_FILE}" ]]; then
+  cat > "${ENV_FILE}" <<'EOF'
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+# Bring-up default: no PiJuice HAT installed yet (availability blocked as of
+# 2026-07-21), running from a USB power bank instead. Switch to "pijuice"
+# once real battery hardware is wired - see
+# docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md
+VISIO_BATTERY_SOURCE=none
+# Editor and shell conveniences (neovim, ls/git aliases, history settings, a
+# branch-aware prompt) installed by setup-device.sh for whoever runs it.
+# Useful during bring-up; set to 0 for a shipped appliance image so the
+# pendant carries no dev toolchain. The daemon ignores this key.
+#
+# Setting it to 0 later removes the managed block from that user's ~/.bashrc
+# on the next run, but deliberately does NOT uninstall the packages - purging
+# neovim out from under an operator mid-bring-up is worse than leaving it
+# there. Setting it to 0 here, on this first run, is the way to get a device
+# that never installs the dev shell at all: this file is written before the
+# developer-shell step runs, so nothing has been installed yet.
+VISIO_DEV_SHELL=1
+EOF
+  chmod 600 "${ENV_FILE}"
+  log "Wrote template ${ENV_FILE} - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script"
+  exit 0
+else
+  missing=()
+  for key in SUPABASE_URL SUPABASE_ANON_KEY; do
+    value="$(grep -E "^${key}=" "${ENV_FILE}" | cut -d= -f2- || true)"
+    if [[ -z "${value}" ]]; then
+      missing+=("${key}")
+    fi
+  done
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    log "ERROR: ${ENV_FILE} exists but is missing values for: ${missing[*]}"
+    exit 1
+  fi
+  log "${ENV_FILE} already configured"
+fi
+
+log "Step 8/10: developer shell"
 # Gated so a shipped appliance image need not carry a dev toolchain: set
-# VISIO_DEV_SHELL=0 in ${ENV_FILE} (pre-seed the file to opt out from the very
-# first run). Defaults to enabled when the file or the key is absent.
+# VISIO_DEV_SHELL=0 in ${ENV_FILE}. This runs after the env-file step above
+# on purpose - a fresh device stops at the template with the switch already in
+# it, so nothing is installed before the operator has had the chance to see
+# and flip it. Defaults to enabled when the file or the key is absent.
 dev_shell_enabled() {
   local value=""
   if [[ -f "${ENV_FILE}" ]]; then
@@ -287,24 +333,29 @@ dev_shell_enabled() {
   esac
 }
 
+# Print $1 with this script's managed block removed, every other line
+# reproduced byte-for-byte. A file with no block, or no file at all, yields
+# the file's own contents unchanged. Shared by the write and remove paths so
+# both agree on exactly what "the block" is.
+strip_managed_block() {
+  local file="$1"
+  [[ -f "${file}" ]] || return 0
+  awk -v begin="${BASHRC_BEGIN}" -v end="${BASHRC_END}" '
+    $0 == begin { skip = 1 }
+    skip != 1   { print }
+    $0 == end   { skip = 0 }
+  ' "${file}"
+}
+
 # Replace this script's managed block in $1 with $2, leaving every other line
 # byte-identical. Trailing blank lines are normalised so a second run produces
 # exactly the same file as the first.
 write_managed_block() {
   local file="$1" body="$2" owner="$3" stripped tmp
   tmp="${file}.visio-setup.tmp"
-  if [[ -f "${file}" ]]; then
-    awk -v begin="${BASHRC_BEGIN}" -v end="${BASHRC_END}" '
-      $0 == begin { skip = 1 }
-      skip != 1   { print }
-      $0 == end   { skip = 0 }
-    ' "${file}" > "${tmp}"
-  else
-    : > "${tmp}"
-  fi
   # Command substitution strips every trailing newline; exactly one blank
   # separator line is then re-added, so the result is a fixed point.
-  stripped="$(cat "${tmp}")"
+  stripped="$(strip_managed_block "${file}")"
   {
     if [[ -n "${stripped}" ]]; then
       printf '%s\n\n' "${stripped}"
@@ -318,19 +369,44 @@ write_managed_block() {
   mv "${tmp}" "${file}"
 }
 
-if ! dev_shell_enabled; then
-  log "VISIO_DEV_SHELL is disabled in ${ENV_FILE} - skipping editor and shell setup"
-else
-  # This script re-execs itself as root, so $HOME is /root. The conveniences
-  # belong to whoever invoked it.
-  dev_user="${SUDO_USER:-root}"
-  dev_home="$(getent passwd "${dev_user}" | cut -d: -f6)"
-  dev_group="$(id -gn "${dev_user}")"
-  if [[ -z "${dev_home}" || ! -d "${dev_home}" ]]; then
-    log "ERROR: cannot resolve a home directory for '${dev_user}' - skipping shell setup"
-    exit 1
+# The inverse: drop the managed block from $1 and leave the rest of the file
+# byte-identical. A no-op when the file does not exist or carries no block, so
+# it is safe to run on every disabled pass.
+remove_managed_block() {
+  local file="$1" owner="$2" stripped tmp
+  [[ -f "${file}" ]] || return 0
+  grep -qxF "${BASHRC_BEGIN}" "${file}" || return 0
+  tmp="${file}.visio-setup.tmp"
+  stripped="$(strip_managed_block "${file}")"
+  if [[ -n "${stripped}" ]]; then
+    printf '%s\n' "${stripped}" > "${tmp}"
+  else
+    : > "${tmp}"
   fi
+  chown "${owner}" "${tmp}"
+  chmod 644 "${tmp}"
+  mv "${tmp}" "${file}"
+}
 
+# This script re-execs itself as root, so $HOME is /root. The conveniences
+# belong to whoever invoked it. Both lookups are guarded rather than left to
+# abort under `set -o pipefail`: an account with no passwd entry, or one whose
+# home is on an unmounted volume, must skip this optional convenience step and
+# still reach the data dir and summary below.
+dev_user="${SUDO_USER:-root}"
+dev_home="$(getent passwd "${dev_user}" | cut -d: -f6 || true)"
+dev_group="$(id -gn "${dev_user}" 2>/dev/null || true)"
+if [[ -z "${dev_home}" || ! -d "${dev_home}" || -z "${dev_group}" ]]; then
+  log "Cannot resolve a home directory for '${dev_user}' - skipping the developer shell step"
+elif ! dev_shell_enabled; then
+  # Turning the switch off has to actually reverse the shell change, not merely
+  # stop refreshing it. Packages stay installed on purpose - purging neovim out
+  # from under an operator mid-bring-up is worse than leaving it - which is why
+  # ${ENV_FILE} documents pre-seeding the key as the way to get a device that
+  # never has the dev toolchain at all.
+  remove_managed_block "${dev_home}/.bashrc" "${dev_user}:${dev_group}"
+  log "VISIO_DEV_SHELL is disabled in ${ENV_FILE} - skipped the editor install and removed any managed block from ${dev_home}/.bashrc. Packages installed by an earlier run are left in place."
+else
   # tmux earns its place here specifically: bring-up over SSH on a 512MB board
   # has already produced apparent hangs and dropped sessions, and a detached
   # session survives them.
@@ -392,8 +468,8 @@ NVIMRC
   # at prompt time, not by this script.
   dev_shell_body="$(cat <<'BASHRC_BODY'
 # Regenerated on every setup-device.sh run - put personal settings outside
-# this block. Disable it entirely with VISIO_DEV_SHELL=0 in
-# /etc/visio-recorder.env.
+# this block. Set VISIO_DEV_SHELL=0 in /etc/visio-recorder.env and re-run the
+# script to delete this block; the packages it installed stay.
 
 # Colour. Raspberry Pi OS ships these commented out on some images.
 if [ -x /usr/bin/dircolors ]; then
@@ -464,40 +540,6 @@ BASHRC_BODY
 
   write_managed_block "${dev_home}/.bashrc" "${dev_shell_body}" "${dev_user}:${dev_group}"
   log "Managed dev-shell block written to ${dev_home}/.bashrc (owner ${dev_user}:${dev_group})"
-fi
-
-log "Step 8/10: env file"
-if [[ ! -f "${ENV_FILE}" ]]; then
-  cat > "${ENV_FILE}" <<'EOF'
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-# Bring-up default: no PiJuice HAT installed yet (availability blocked as of
-# 2026-07-21), running from a USB power bank instead. Switch to "pijuice"
-# once real battery hardware is wired - see
-# docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md
-VISIO_BATTERY_SOURCE=none
-# Editor and shell conveniences (neovim, ls/git aliases, history settings, a
-# branch-aware prompt) installed by setup-device.sh for whoever runs it.
-# Useful during bring-up; set to 0 for a shipped appliance image so the
-# pendant carries no dev toolchain. The daemon ignores this key.
-VISIO_DEV_SHELL=1
-EOF
-  chmod 600 "${ENV_FILE}"
-  log "Wrote template ${ENV_FILE} - fill in SUPABASE_URL and SUPABASE_ANON_KEY, then re-run this script"
-  exit 0
-else
-  missing=()
-  for key in SUPABASE_URL SUPABASE_ANON_KEY; do
-    value="$(grep -E "^${key}=" "${ENV_FILE}" | cut -d= -f2- || true)"
-    if [[ -z "${value}" ]]; then
-      missing+=("${key}")
-    fi
-  done
-  if [[ "${#missing[@]}" -gt 0 ]]; then
-    log "ERROR: ${ENV_FILE} exists but is missing values for: ${missing[*]}"
-    exit 1
-  fi
-  log "${ENV_FILE} already configured"
 fi
 
 log "Step 9/10: data dir"

@@ -5,8 +5,10 @@ verifiable on hardware. Two pieces are not, and both are easy to get subtly
 wrong, so they are pinned here:
 
 * the ``~/.bashrc`` managed block, whose whole contract is that re-running the
-  script is a byte-for-byte no-op rather than an append;
-* the ``VISIO_DEV_SHELL`` gate that lets an appliance image opt out.
+  script is a byte-for-byte no-op rather than an append - and that disabling
+  the gate removes it again, leaving the rest of the file untouched;
+* the ``VISIO_DEV_SHELL`` gate that lets an appliance image opt out, including
+  the step ordering that makes it reachable at all.
 
 Rather than restate the shell logic, each test extracts the real functions out
 of the script and runs them, so drift between script and test is impossible.
@@ -68,13 +70,24 @@ def _run(lib: Path, snippet: str, env_file: Path | None = None) -> subprocess.Co
     )
 
 
+def _dev_shell_step() -> str:
+    return _script_text().split('log "Step 8/10: developer shell"')[1].split('log "Step 9/10')[0]
+
+
 def _write_block(tmp_path: Path, rc: Path, times: int) -> None:
-    lib = _shell_lib(tmp_path, "write_managed_block")
+    lib = _shell_lib(tmp_path, "strip_managed_block", "write_managed_block")
     body = tmp_path / "body.txt"
     body.write_text(_extract_bashrc_body())
     snippet = "\n".join(
         [f'body="$(cat "{body}")"'] + [f'write_managed_block "{rc}" "$body" "$(id -un):$(id -gn)"'] * times
     )
+    result = _run(lib, snippet)
+    assert result.returncode == 0, result.stderr
+
+
+def _remove_block(tmp_path: Path, rc: Path, times: int = 1) -> None:
+    lib = _shell_lib(tmp_path, "strip_managed_block", "remove_managed_block")
+    snippet = "\n".join([f'remove_managed_block "{rc}" "$(id -un):$(id -gn)"'] * times)
     result = _run(lib, snippet)
     assert result.returncode == 0, result.stderr
 
@@ -129,6 +142,53 @@ def test_managed_block_is_written_when_bashrc_does_not_exist(tmp_path):
 
     assert rc.is_file()
     assert rc.read_text().count("# >>> visio-recorder dev shell") == 1
+
+
+def test_disabling_the_switch_removes_the_managed_block(tmp_path):
+    # Turning VISIO_DEV_SHELL off has to reverse the shell change, not merely
+    # stop refreshing it, or an appliance image can never be reached.
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    _write_block(tmp_path / "w", rc, times=1)
+    assert "visio-recorder dev shell" in rc.read_text()
+
+    _remove_block(tmp_path / "r", rc)
+
+    assert rc.read_bytes() == _EXISTING_BASHRC.encode()
+
+
+def test_removing_the_block_is_a_no_op_when_none_is_present(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+
+    _remove_block(tmp_path / "r", rc, times=3)
+
+    assert rc.read_bytes() == _EXISTING_BASHRC.encode()
+
+
+def test_removing_the_block_is_a_no_op_when_the_file_does_not_exist(tmp_path):
+    rc = tmp_path / "fresh" / ".bashrc"
+    rc.parent.mkdir()
+
+    _remove_block(tmp_path / "r", rc)
+
+    assert not rc.exists()
+
+
+def test_removing_and_rewriting_the_block_round_trips_to_the_same_bytes(tmp_path):
+    # Flipping the switch off and back on must land on the enabled fixed
+    # point, not accumulate blank lines at the seam.
+    once, cycled = tmp_path / "once" / ".bashrc", tmp_path / "cycled" / ".bashrc"
+    for rc in (once, cycled):
+        rc.parent.mkdir()
+        rc.write_text(_EXISTING_BASHRC)
+    _write_block(tmp_path / "a", once, times=1)
+
+    _write_block(tmp_path / "b", cycled, times=1)
+    _remove_block(tmp_path / "c", cycled)
+    _write_block(tmp_path / "d", cycled, times=1)
+
+    assert cycled.read_bytes() == once.read_bytes()
 
 
 def test_generated_bashrc_is_valid_bash_and_defines_the_conveniences(tmp_path):
@@ -187,12 +247,68 @@ def test_env_file_template_documents_the_dev_shell_switch():
     text = _script_text()
 
     assert "VISIO_DEV_SHELL=1" in text, "the env-file template must ship the key, defaulting to enabled"
+    template = text.split("""cat > "${ENV_FILE}" <<'EOF'""")[1].split("\nEOF\n")[0]
+    # The switch cannot uninstall packages, and pre-seeding is the only route
+    # to a device that never carries the toolchain. Both are limitations an
+    # operator must read rather than discover.
+    assert "does NOT uninstall" in template
+    assert "first run" in template
+
+
+# --------------------------------------------------------------------------
+# Step ordering. The gate is only honest if the operator can see the switch
+# before anything acts on it: on a fresh device the env-file step writes the
+# template and exits, so the developer-shell step first runs on the re-run.
+# --------------------------------------------------------------------------
+
+
+def test_the_env_file_step_runs_before_the_developer_shell_step():
+    text = _script_text()
+
+    assert text.index('log "Step 7/10: env file"') < text.index('log "Step 8/10: developer shell"')
+
+
+def test_step_numbering_is_contiguous_and_matches_the_stated_total():
+    numbers = [int(n) for n in re.findall(r'log "Step (\d+)/10: ', _script_text())]
+
+    assert numbers == list(range(1, 11))
+
+
+def test_the_disabled_branch_removes_the_block_rather_than_only_skipping():
+    disabled = _dev_shell_step().split("elif ! dev_shell_enabled; then")[1].split("\nelse\n")[0]
+
+    assert "remove_managed_block" in disabled
+    assert "apt-get" not in disabled, "the disabled branch must not install anything"
+
+
+def test_an_unresolvable_dev_user_skips_the_step_instead_of_aborting(tmp_path):
+    # `getent passwd` exits 2 for an unknown account and pipefail propagates
+    # that, so an unguarded lookup takes the whole run down at step 8 - losing
+    # the data dir and summary over an optional convenience. The guard's own
+    # message says "skipping", so it has to skip.
+    step = _dev_shell_step()
+    lookup = step.split('dev_user="${SUDO_USER:-root}"')[1].split("elif ! dev_shell_enabled")[0]
+    snippet = "\n".join(
+        [
+            'log() { echo "[log] $*"; }',
+            'dev_user="definitely-no-such-user"',
+            lookup.rstrip(),
+            "fi",
+            "echo REACHED_THE_NEXT_STEP",
+        ]
+    )
+
+    result = _run(_shell_lib(tmp_path), snippet)
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping the developer shell step" in result.stdout
+    assert "REACHED_THE_NEXT_STEP" in result.stdout
 
 
 def test_dev_shell_targets_the_invoking_user_not_root():
     # The script re-execs itself as root at the top, so $HOME is /root from
     # then on. Every path under the dev-shell step must derive from SUDO_USER.
-    step = _script_text().split('log "Step 7/10: developer shell"')[1].split('log "Step 8/10')[0]
+    step = _dev_shell_step()
 
     assert 'dev_user="${SUDO_USER:-root}"' in step
     assert 'dev_home="$(getent passwd "${dev_user}"' in step
