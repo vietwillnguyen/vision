@@ -179,15 +179,32 @@ def has_blocking_failure(results: list[CheckResult]) -> bool:
     return any(not r.ok and r.severity == BLOCK for r in results)
 
 
-def format_report(results: list[CheckResult]) -> str:
-    lines = [
+def install_root(module_file: str = __file__) -> Path:
+    """Directory the running ``visio_recorder`` package was imported from.
+
+    A device carries two clones - the provisioned one under
+    /opt/visio-recorder and the operator's own working clone - and nothing at
+    the shell prompt distinguishes them. Reporting the resolved path makes
+    every preflight transcript self-identifying, whether it came from an SSH
+    session or from the unit's ExecStartPre in ``journalctl``.
+    """
+    return Path(module_file).resolve().parent
+
+
+def format_report(results: list[CheckResult], root: Path | None = None) -> str:
+    lines = [f"[INFO] install: {root if root is not None else install_root()}"]
+    lines += [
         f"[{'OK' if r.ok else r.severity.upper()}] {r.name}: {r.detail}" for r in results
     ]
     return "\n".join(lines)
 
 
 def main() -> int:
-    """CLI entrypoint: python3 -m visio_recorder.preflight.
+    """CLI entrypoint, exposed as the ``visio-preflight`` console script.
+
+    Also reachable as ``python3 -m visio_recorder.preflight``; both resolve
+    from any working directory once the package is actually installed into
+    the venv (see this package's pyproject.toml [build-system] note).
 
     Thin on purpose, same convention as daemon.py's main() - no branching
     logic beyond what run_checks/has_blocking_failure already own, so it's

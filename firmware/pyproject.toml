@@ -9,6 +9,20 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
 
+[project.scripts]
+# Operator-facing diagnostic. Without this (and the [build-system] table below)
+# the package is never installed into the venv, and `python3 -m
+# visio_recorder.preflight` only resolves when the caller happens to be cd'd
+# into firmware/ - see tests/test_preflight_entrypoint.py.
+visio-preflight = "visio_recorder.preflight:main"
+
+# Required, not cosmetic: with no [build-system] uv classifies the project as
+# "virtual" (uv.lock records source = { virtual = "." }) and installs only its
+# dependencies, never visio_recorder itself.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [tool.setuptools]
 packages = ["visio_recorder"]
 
