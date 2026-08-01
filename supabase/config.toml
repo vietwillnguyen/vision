@@ -108,6 +108,14 @@ openai_api_key = "env(OPENAI_API_KEY)"
 # Email testing server. Emails sent with the local dev setup are not actually sent - rather, they
 # are monitored, and you can view the emails that would have been sent from the web interface.
 [local_smtp]
+# Kept on deliberately, even though nothing in this repo uses it today:
+# `inbucket`, `mailpit`, port 54324, `signUp`, `signInWithOtp`, and
+# `resetPasswordForEmail` all return zero hits, and [auth.email]
+# enable_confirmations is already false, so no local flow sends mail. Turning it
+# off would leave GoTrue with no local SMTP endpoint, so the first
+# password-reset or email-signup flow we add would silently fail in local dev.
+# Its mailpit container is 49.7MB, immaterial against the 4.37GB of image pulls
+# dropped by disabling studio, analytics, edge_runtime and storage.vector.
 enabled = true
 # Port to use for the email testing server web interface.
 port = 54324

@@ -6,8 +6,9 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Test surfaces
 
-Five suites, four runners. `.github/workflows/tests.yml` is the authoritative
-list of commands and their working directories - read it before inventing one.
+The tests here span several surfaces run by different tools.
+`.github/workflows/tests.yml` is the authoritative list of commands and their
+working directories - read it before inventing one.
 
 - `firmware/`, `pipeline/`, `integration/` - `uv run --locked --extra dev pytest`.
   All three carry a `uv.lock` and CI passes `--locked`, so dependency changes
