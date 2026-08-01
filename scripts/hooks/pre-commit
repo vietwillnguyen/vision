@@ -1,37 +1,118 @@
 #!/usr/bin/env bash
 # Blocks a commit that changes an architecture spec without also updating the
-# living HTML doc that renders it. Only runs the check when docs/ARCHITECTURE.html
-# exists in the index and declares which spec file it was rendered from.
-set -euo pipefail
+# living HTML doc that renders it.
+#
+# docs/ARCHITECTURE.html renders more than one spec, so it carries one manifest
+# line per spec, each self-describing:
+#
+#   <!-- source-sha256: <sha256>  <path/to/spec.md> -->
+#
+# The payload between "source-sha256:" and "-->" is verbatim `sha256sum` output,
+# so the whole manifest is checkable by hand in a single pipe:
+#
+#   sed -n 's|^<!-- source-sha256: \(.*\) -->$|\1|p' docs/ARCHITECTURE.html | sha256sum -c -
+#
+# This hook does the staged-content equivalent, restricted to the specs the
+# commit actually touches, plus one extra guard: a spec staged into a directory
+# the manifest already tracks but absent from the manifest also fails. That
+# silent coverage gap is exactly how the earlier single-spec version of this
+# check ended up guarding one spec out of three while still reporting "in sync".
+#
+# Tests: scripts/hooks/tests/test-pre-commit.sh
+set -uo pipefail
 
 ARCH_DOC="docs/ARCHITECTURE.html"
 
+# Nothing to check if the doc is not in this commit's index at all.
 arch_content=$(git show ":$ARCH_DOC" 2>/dev/null) || exit 0
 
-source_file=$(grep -m1 '<!-- source-file:' <<<"$arch_content" | sed -E 's/.*source-file:[[:space:]]*([^[:space:]]+)[[:space:]]*-->.*/\1/')
-embedded_hash=$(grep -m1 '<!-- source-sha256:' <<<"$arch_content" | sed -E 's/.*source-sha256:[[:space:]]*([a-f0-9]+)[[:space:]]*-->.*/\1/')
+manifest=$(
+  printf '%s\n' "$arch_content" |
+    sed -n 's|^<!-- source-sha256:[[:space:]]*\([0-9a-f]\{64\}\)[[:space:]][[:space:]]*\([^[:space:]]\{1,\}\)[[:space:]]*-->[[:space:]]*$|\1 \2|p'
+)
 
-[ -z "$source_file" ] && exit 0
-[ -z "$embedded_hash" ] && exit 0
+# No manifest comments (or an unrecognised shape) means nothing is declared -
+# stay out of the way rather than failing closed on an unrelated commit.
+[ -n "$manifest" ] || exit 0
 
-# Only enforce when this commit actually touches the declared source spec.
-git diff --cached --name-only | grep -qxF "$source_file" || exit 0
+staged_files=$(git diff --cached --name-only)
+[ -n "$staged_files" ] || exit 0
 
-staged_hash=$(git show ":$source_file" 2>/dev/null | sha256sum | cut -d' ' -f1)
+tracked_specs=""
+spec_dirs=""
+drift_report=""
 
-if [ "$staged_hash" != "$embedded_hash" ]; then
-  cat >&2 <<EOF
-error: $source_file changed but $ARCH_DOC's embedded source-sha256 comment
-       was not updated to match the staged content.
+while read -r embedded_hash source_file; do
+  [ -n "$source_file" ] || continue
 
-  Regenerate it, then stage the result:
-    claude -p "Regenerate $ARCH_DOC from $source_file per docs/architecture-regeneration.md, then update its source-sha256 comment to match."
+  tracked_specs="${tracked_specs}${source_file}"$'\n'
+  spec_dir=$(dirname -- "$source_file")
+  printf '%s\n' "$spec_dirs" | grep -qxF -- "$spec_dir" ||
+    spec_dirs="${spec_dirs}${spec_dir}"$'\n'
+
+  # Only enforce for the specs this commit actually touches.
+  printf '%s\n' "$staged_files" | grep -qxF -- "$source_file" || continue
+
+  if ! git cat-file -e ":$source_file" 2>/dev/null; then
+    drift_report="${drift_report}  - ${source_file}"$'\n'
+    drift_report="${drift_report}      manifest: ${embedded_hash}"$'\n'
+    drift_report="${drift_report}      staged:   (deleted - drop its manifest line too)"$'\n'
+    continue
+  fi
+
+  staged_hash=$(git show ":$source_file" | sha256sum | cut -d' ' -f1)
+  [ "$staged_hash" = "$embedded_hash" ] && continue
+
+  drift_report="${drift_report}  - ${source_file}"$'\n'
+  drift_report="${drift_report}      manifest: ${embedded_hash}"$'\n'
+  drift_report="${drift_report}      staged:   ${staged_hash}"$'\n'
+done <<EOF
+$manifest
+EOF
+
+# A spec added to a tracked spec directory but missing from the manifest is a
+# coverage gap, not a no-op: the doc is meant to render every spec.
+untracked_report=""
+while read -r candidate; do
+  [ -n "$candidate" ] || continue
+  case "$candidate" in
+    *.md) ;;
+    *) continue ;;
+  esac
+  candidate_dir=$(dirname -- "$candidate")
+  printf '%s\n' "$spec_dirs" | grep -qxF -- "$candidate_dir" || continue
+  printf '%s\n' "$tracked_specs" | grep -qxF -- "$candidate" && continue
+  untracked_report="${untracked_report}  - ${candidate}"$'\n'
+done <<EOF
+$staged_files
+EOF
+
+[ -z "$drift_report" ] && [ -z "$untracked_report" ] && exit 0
+
+spec_dir_list=$(printf '%s' "$spec_dirs" | tr '\n' ' ' | sed 's/ *$//')
+
+{
+  echo "error: $ARCH_DOC's embedded source-sha256 manifest does not match the"
+  echo "       specs staged in this commit."
+  echo
+  if [ -n "$drift_report" ]; then
+    echo "  Spec content changed, manifest hash not regenerated:"
+    printf '%s' "$drift_report"
+    echo
+  fi
+  if [ -n "$untracked_report" ]; then
+    echo "  Spec absent from the manifest, so nothing guards it:"
+    printf '%s' "$untracked_report"
+    echo
+  fi
+  cat <<EOF
+  Regenerate the doc per docs/architecture-regeneration.md, then stage it:
+    claude -p "Regenerate $ARCH_DOC from the specs in $spec_dir_list per docs/architecture-regeneration.md, then rewrite its <!-- source-sha256: ... --> manifest so there is one line per spec and each line matches that spec's sha256sum output."
     git add $ARCH_DOC
 
   Or bypass this check for this commit only:
     git commit --no-verify
 EOF
-  exit 1
-fi
+} >&2
 
-exit 0
+exit 1
