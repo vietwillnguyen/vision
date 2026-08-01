@@ -4,14 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from visio_recorder.daemon import (
-    LoopDeps,
-    load_config,
-    run_recording_loop,
-    run_startup_sequence,
-)
-from visio_recorder.led import LedPattern
-
 from tests.fakes import (
     FakeBatteryReader,
     FakeClock,
@@ -24,6 +16,13 @@ from tests.fakes import (
     ScriptedStorageClient,
     TriggerableBatteryReader,
 )
+from visio_recorder.daemon import (
+    LoopDeps,
+    load_config,
+    run_recording_loop,
+    run_startup_sequence,
+)
+from visio_recorder.led import LedPattern
 from visio_recorder.recording_loop import DiskStats
 
 CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)

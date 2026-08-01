@@ -17,7 +17,7 @@ Needs a running `supabase start` instance; skips automatically otherwise
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -55,7 +55,7 @@ def test_firmware_uploaded_object_is_ingested_by_pipeline_listing(
         )
         device_id = device["device_id"]
 
-        recorded_at = datetime(2026, 7, 14, 9, 0, 0, tzinfo=timezone.utc)
+        recorded_at = datetime(2026, 7, 14, 9, 0, 0, tzinfo=UTC)
         stub_segment = tmp_path / recorded_at.strftime("%Y%m%d_%H%M%S.mp4")
         stub_segment.write_bytes(b"stub mp4 bytes")
 

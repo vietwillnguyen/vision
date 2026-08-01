@@ -2,14 +2,13 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from tests.fakes import FailingStorageClient, FakeClock, FakeStorageClient
 from visio_recorder.flag_button import (
     FlagUploadWorker,
     make_flag_press_handler,
     write_flag_marker,
 )
 from visio_recorder.uploader import StorageClient
-
-from tests.fakes import FailingStorageClient, FakeClock, FakeStorageClient
 
 
 def test_write_flag_marker_creates_timestamped_file(tmp_path):

@@ -39,9 +39,7 @@ def _candidate_creates_same_location_adjacency(
     index = next(i for i, s in enumerate(chronological_segments) if s is candidate)
     if index > 0 and chronological_segments[index - 1].location == candidate.location:
         return True
-    if (
+    return (
         index < len(chronological_segments) - 1
         and chronological_segments[index + 1].location == candidate.location
-    ):
-        return True
-    return False
+    )

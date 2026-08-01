@@ -6,7 +6,7 @@ on ``s3_key``, so persistence selects existing keys and splits into
 insert-new versus update-scores rather than relying on upsert.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from pipeline.models import ScoreWeights
@@ -184,7 +184,7 @@ class SupabaseStore:
         entries = [entry for entry in entries if entry.key not in escalated_keys]
         if not entries:
             return
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         self._client.table(DLQ_TABLE).upsert(
             [
                 {

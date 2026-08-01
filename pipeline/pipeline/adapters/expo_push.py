@@ -5,7 +5,7 @@ Expo answers HTTP 200 even when delivery fails, reporting per-ticket errors
 returned tickets instead of trusting the status code alone.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import httpx
 

@@ -2,7 +2,7 @@ import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Protocol
 
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
@@ -18,11 +18,11 @@ _logger = logging.getLogger(__name__)
 
 
 class QrScanner(Protocol):
-    def scan(self) -> Optional[str]: ...
+    def scan(self) -> str | None: ...
 
 
 class RpicamZbarScanner:
-    def scan(self) -> Optional[str]:
+    def scan(self) -> str | None:
         with tempfile.TemporaryDirectory() as tmp:
             still = Path(tmp) / "qr.jpg"
             capture = subprocess.run(
@@ -44,7 +44,7 @@ def run_onboarding(
     nm_keyfile_path: Path,
     session_path: Path,
     max_attempts: int,
-) -> Optional[OnboardingPayload]:
+) -> OnboardingPayload | None:
     for _ in range(max_attempts):
         raw = scanner.scan()
         if raw is None:

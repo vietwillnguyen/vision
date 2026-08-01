@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 import tempfile
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from supabase import create_client
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(os.environ)
-    day = resolve_day(args.day, today=datetime.now(timezone.utc).date())
+    day = resolve_day(args.day, today=datetime.now(UTC).date())
 
     client = create_client(config.supabase_url, config.supabase_service_role_key)
     with tempfile.TemporaryDirectory(prefix="visio-pipeline-") as workdir:

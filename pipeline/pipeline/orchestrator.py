@@ -171,7 +171,7 @@ def _run_device_day(deps: OrchestratorDeps, device: DeviceRecord, day: date) -> 
         for key in unmatched
         if not _flag_persisted_segment(store, device.device_id, key)
     ]
-    failed_keys = {key: "rejected" for key in rejected}
+    failed_keys = dict.fromkeys(rejected, "rejected")
     failed_keys.update((key, "rejected") for key in marker_rejected)
     failed_keys.update((key, "unmatched") for key in unmatched)
     recovered = _apply_dlq_policy(deps, device, pending_by_key, failed_keys)

@@ -18,7 +18,7 @@ Needs a running `supabase start` instance; skips automatically otherwise
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from supabase import create_client
@@ -64,7 +64,7 @@ def test_owner_can_read_pipeline_written_rows_but_other_user_cannot(
         device_id = device["device_id"]
 
         day = date(2026, 7, 14)
-        recorded_at = datetime(2026, 7, 14, 9, 0, 0, tzinfo=timezone.utc)
+        recorded_at = datetime(2026, 7, 14, 9, 0, 0, tzinfo=UTC)
         service_store = SupabaseStore(admin_client)
         service_store.persist_segments(
             [

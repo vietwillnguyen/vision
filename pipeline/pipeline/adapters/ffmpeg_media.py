@@ -35,7 +35,10 @@ def compute_frame_diffs_from_raw(raw: bytes, frame_size: int) -> list[float]:
     for i in range(1, frame_count):
         prev = raw[(i - 1) * frame_size : i * frame_size]
         curr = raw[i * frame_size : (i + 1) * frame_size]
-        total = sum(abs(a - b) for a, b in zip(prev, curr))
+        # strict=True: both slices are exactly `frame_size` long for every i in
+        # range, so an unequal pair means the raw stream was truncated
+        # mid-frame - fail loudly rather than silently scoring a short frame.
+        total = sum(abs(a - b) for a, b in zip(prev, curr, strict=True))
         diffs.append(total / frame_size)
     return diffs
 
