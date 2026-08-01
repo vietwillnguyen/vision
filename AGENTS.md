@@ -2,7 +2,9 @@
 
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
-- Add durable project-specific notes here as they are discovered through real work.
+- **Wire the pre-commit hook before committing:** `git config core.hooksPath scripts/hooks`. It is local git config, so a fresh clone silently skips the guard that keeps `docs/ARCHITECTURE.html` in sync with the specs it renders. Worktrees share the clone's setting. Contract and regeneration steps: [`docs/architecture-regeneration.md`](docs/architecture-regeneration.md); hook tests: `scripts/hooks/tests/test-pre-commit.sh`.
+- **Edit the specs, never `docs/ARCHITECTURE.html` directly.** The page is a rendering of every spec under `docs/superpowers/specs/` and carries one `source-sha256` manifest line per spec.
+- Per-subsystem setup lives in [`README.md`](README.md); the integration suite's rationale lives in [`integration/README.md`](integration/README.md).
 
 ## Gates
 
