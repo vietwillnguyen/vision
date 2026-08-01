@@ -21,18 +21,49 @@ fi
 
 log "Step 1/9: swap size"
 SWAP_CONF="/etc/dphys-swapfile"
+RPI_SWAP_CONF="/etc/rpi/swap.conf"
+RPI_SWAP_DROPIN="/etc/rpi/swap.conf.d/10-visio.conf"
 SWAP_SIZE_MB=1024
+# The Pi Zero 2W's 512MB RAM needs a real swap file for apt/dpkg operations, or
+# package configuration can thrash swap badly enough to look like a hung or
+# dropped SSH session.
+active_swap_mb="$(awk '/^SwapTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
+active_swap_mb="${active_swap_mb:-0}"
 if [[ -f "${SWAP_CONF}" ]]; then
   current_swap="$(grep -E '^CONF_SWAPSIZE=' "${SWAP_CONF}" | cut -d= -f2- || echo 0)"
   if [[ "${current_swap:-0}" -lt "${SWAP_SIZE_MB}" ]]; then
     sed -i "s/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=${SWAP_SIZE_MB}/" "${SWAP_CONF}"
     systemctl restart dphys-swapfile
-    log "Swap was ${current_swap:-0}MB - increased to ${SWAP_SIZE_MB}MB (Pi Zero 2W's 512MB RAM needs this for apt/dpkg operations, or package configuration can thrash swap badly enough to look like a hung/dropped SSH session)"
+    log "Swap was ${current_swap:-0}MB - increased to ${SWAP_SIZE_MB}MB"
   else
     log "Swap already ${current_swap}MB (>= ${SWAP_SIZE_MB}MB) - no change needed"
   fi
+elif [[ -f "${RPI_SWAP_CONF}" ]]; then
+  # Trixie onwards: rpi-swap Replaces/Provides dphys-swapfile, so /etc/dphys-swapfile
+  # no longer exists. Its default "zram+file" mechanism sizes zram off RAM and uses
+  # the file only as writeback storage, not as swap - on 512MB that leaves SwapTotal
+  # well under what dpkg needs. Pin a plain swap file at the same size this script
+  # guaranteed on bookworm, via a drop-in rather than editing the vendor file
+  # (see swap.conf(5)). rpi-swap applies this from a boot-time systemd generator,
+  # so it takes a reboot - Step 2's apt still runs on current swap this pass.
+  if [[ "${active_swap_mb}" -lt "${SWAP_SIZE_MB}" ]]; then
+    mkdir -p "$(dirname "${RPI_SWAP_DROPIN}")"
+    cat > "${RPI_SWAP_DROPIN}" <<EOF
+# Managed by visio setup-device.sh - do not edit by hand.
+[Main]
+Mechanism=swapfile
+
+[File]
+FixedSizeMiB=${SWAP_SIZE_MB}
+EOF
+    systemctl daemon-reload
+    reboot_needed=true
+    log "Swap is ${active_swap_mb}MB - wrote ${RPI_SWAP_DROPIN} pinning a ${SWAP_SIZE_MB}MB swap file, applied on the reboot reported at the end"
+  else
+    log "Swap already ${active_swap_mb}MB (>= ${SWAP_SIZE_MB}MB) - no change needed"
+  fi
 else
-  log "No ${SWAP_CONF} found - skipping swap size check (non-standard OS image?)"
+  log "Neither ${SWAP_CONF} nor ${RPI_SWAP_CONF} found - skipping swap sizing (SwapTotal is ${active_swap_mb}MB)"
 fi
 
 log "Step 2/9: apt packages"
@@ -47,7 +78,21 @@ export NEEDRESTART_MODE=a
 # rather than letting apt-get fail confusingly on a half-configured package.
 dpkg --configure -a
 apt-get update -y
-apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git pijuice-base
+apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git
+
+# pijuice-base is deliberately not in the required list above. The Raspberry Pi
+# archive ships it for bookworm but dropped it in trixie, and a missing PiJuice
+# HAT is an accepted bring-up state (VISIO_BATTERY_SOURCE=none) - the same rule
+# preflight.py applies when it downgrades the pijuice check to a warning. Probe
+# the index rather than swallowing the install's exit code, so a genuine install
+# failure (dependency conflict, no disk) still aborts loudly.
+pijuice_candidate="$(apt-cache policy pijuice-base 2>/dev/null | awk -F ': ' '/^  Candidate:/ {print $2}')"
+if [[ -n "${pijuice_candidate}" && "${pijuice_candidate}" != "(none)" ]]; then
+  apt-get install -y pijuice-base
+  log "pijuice-base installed (${pijuice_candidate})"
+else
+  log "pijuice-base is not in this release's package index - skipping (expected on Raspberry Pi OS trixie, where the Raspberry Pi archive no longer ships it). Keep VISIO_BATTERY_SOURCE=none until a battery driver is installed another way."
+fi
 
 log "Step 3/9: interfaces"
 current_i2c="$(raspi-config nonint get_i2c || echo 1)"
