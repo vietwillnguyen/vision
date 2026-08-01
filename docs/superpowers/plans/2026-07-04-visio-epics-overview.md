@@ -37,12 +37,13 @@ Epic 4: Hardware Assembly (parallel track, gates Epic 5 only)
 - **Epic 4 (hardware)** has no software dependency and can start immediately, in parallel with Epic 0.
 - **Epic 5** requires a physical assembled device (Epic 4) running the firmware (Epic 1), a deployed pipeline (Epic 2), and an installed app (Epic 3). It is the only epic that requires real hardware.
 
-### Current status (as of 2026-07-19)
+### Current status (as of 2026-08-01)
 
-- **Epic 0, 1, 2:** done and merged.
-- **Epic 3:** in progress - issue [#8](https://github.com/vietwillnguyen/vision/issues/8) (screen wiring) is the last open item, being worked in a separate worktree.
-- **Epic 4:** hardware bring-up underway (Pi Zero 2W); see [`2026-07-04-visio-hardware.md`](2026-07-04-visio-hardware.md) for the checklist.
-- **Epic 5:** blocked on #8 and on Epic 4's Task 6 (fit and usability sign-off) before the integration checklist below can run.
+- **Epics 0, 1, 2, 3:** done and merged. Epic 3's last software item, issue [#8](https://github.com/vietwillnguyen/vision/issues/8) (screen wiring), landed via [PR #22](https://github.com/vietwillnguyen/vision/pull/22), and the WiFi + auth re-onboarding QR screen it deferred landed via [PR #25](https://github.com/vietwillnguyen/vision/pull/25).
+- **Every filed issue is closed** - all 8 of them, zero open. Nothing on this roadmap is now gated by a software issue.
+- **Epic 4:** no task recorded as done - every `[human]` task in [`2026-07-04-visio-hardware.md`](2026-07-04-visio-hardware.md) is still unchecked. The PiJuice Zero pHAT is blocked on availability, so bring-up is planned on a generic USB power bank instead (`VISIO_BATTERY_SOURCE=none`); see that plan's 2026-07-21 status note.
+- **Epic 5:** the only remaining gate, and it is a hardware gate, not a software one - the seven `[human]` checklist items below all need the physical Pi, which in turn needs Epic 4.
+- **Open work in flight:** [PR #26](https://github.com/vietwillnguyen/vision/pull/26) (device provisioning script + runtime preflight check) is a draft with all 5 checks green, held open pending validation on the physical device rather than pending review or CI.
 
 ---
 
@@ -104,6 +105,11 @@ Two more daemon-glue gaps surfaced after #7 landed and were closed via PR #21:
 - [#18 Firmware: wire GPIO flag button listener into the running daemon](https://github.com/vietwillnguyen/vision/issues/18) - landed: `main()` registers a gpiozero button listener (GPIO 17, pull-up, 50ms bounce) that hands marker writes to a dedicated upload worker thread so uploads never block later presses.
 - [#19 Firmware: activate NetworkManager connection after QR onboarding writes the keyfile](https://github.com/vietwillnguyen/vision/issues/19) - landed: `main()` runs `nmcli connection reload` then `nmcli connection up visio` behind a `ConnectionActivator` protocol after onboarding writes the NetworkManager keyfile.
 
+Every issue above is closed as of 2026-08-01, so none of them still gates Epic 5.
+One piece of work is still open, as a draft PR rather than an issue:
+
+- [PR #26 Firmware: device provisioning script and runtime preflight check](https://github.com/vietwillnguyen/vision/pull/26) - `firmware/scripts/setup-device.sh` plus a `preflight.py` startup check, per [`2026-07-21-visio-device-provisioning-design.md`](../specs/2026-07-21-visio-device-provisioning-design.md). All 5 checks are green; it is held in draft awaiting validation on the physical Pi, which makes it a companion to the checklist below rather than a blocker of it.
+
 ### Checklist
 
 No separate detailed plan - this is a checklist run once Epics 0-4 are done, using the real assembled device:
@@ -115,6 +121,7 @@ No separate detailed plan - this is a checklist run once Epics 0-4 are done, usi
 - [ ] [human] Trigger the Epic 2 pipeline manually (not waiting for the nightly cron) against the recorded segments; confirm a `reels` row and push notification are produced.
 - [ ] [human] Open the Epic 3 app; confirm the reel plays, the device tab shows live battery/storage, and the archive tab shows today's entry.
 - [ ] [human] Drain the battery below 20% (or fake it via PiJuice API for a faster check) and confirm the LED transitions to pulsing yellow, then red/halt below 10%.
+      Blocked while bring-up runs on a USB power bank: with `VISIO_BATTERY_SOURCE=none` there is no charge telemetry at all (`UnmeteredPowerReader` reports a fixed 100%), so this step needs real battery hardware to be sourced first - see Epic 4's 2026-07-21 status note.
 
 ---
 
