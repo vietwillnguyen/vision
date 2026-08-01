@@ -92,7 +92,12 @@ enabled = true
 # max_header_length = 4096
 
 [studio]
-enabled = true
+# Disabled: nothing in this repo drives Studio. It is a browser-only admin UI,
+# and CI has no browser - every job talks to Postgres or the REST API directly.
+# Turning it off also drops the postgres-meta container Studio depends on.
+# Re-enable locally (or run `supabase start` with it flipped on) if you want the
+# table editor while developing.
+enabled = false
 # Port to use for Supabase Studio.
 port = 54323
 # External URL of the API server that frontend connects to.
@@ -145,7 +150,11 @@ max_catalogs = 2
 
 # Store vector embeddings in S3 for large and durable datasets
 [storage.vector]
-enabled = true
+# Disabled: a Pro-plan S3 vector-bucket feature. This project stores only video
+# segments and reels in the `segments` and `reels` buckets (see
+# 20260704120600_storage_buckets.sql); no migration, adapter, or test declares a
+# vector bucket, and no embedding is ever written.
+enabled = false
 max_buckets = 10
 max_indexes = 5
 
@@ -372,7 +381,13 @@ authorization_url_path = "/oauth/consent"
 allow_dynamic_registration = false
 
 [edge_runtime]
-enabled = true
+# Disabled: there is no `supabase/functions/` directory and nothing in the app,
+# pipeline, firmware, or integration suites invokes an edge function
+# (`functions.invoke` / `/functions/v1` appear nowhere in the repo). Leaving it
+# on booted a Deno runtime container on every `supabase start`, including twice
+# per CI run. Create `supabase/functions/` and flip this back on if we ever add
+# one.
+enabled = false
 # Supported request policies: `oneshot`, `per_worker`.
 # `per_worker` (default) — enables hot reload during local development.
 # `oneshot` — fallback mode if hot reload causes issues (e.g. in large repos or with symlinks).
@@ -386,7 +401,11 @@ deno_version = 2
 # secret_key = "env(SECRET_VALUE)"
 
 [analytics]
-enabled = true
+# Disabled: this is the local Logflare log-explorer stack (a Logflare container
+# plus a Vector log-shipper sidecar). Nothing reads it - we have no dashboards
+# against it, and CI reads logs from `docker logs` / job output. It is the
+# single most expensive piece of `supabase start` for zero benefit here.
+enabled = false
 port = 54327
 # Configure one of the supported backends: `postgres`, `bigquery`.
 backend = "postgres"
@@ -406,6 +425,12 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 
 # pg-delta is the schema diff engine for db diff / db pull / db remote commit.
 # Set enabled = false to fall back to the legacy migra engine.
+#
+# Deliberately left enabled. Unlike the services trimmed above this starts no
+# container and costs `supabase start` nothing - it is an engine selection that
+# only takes effect when a developer runs `supabase db diff`/`db pull`. Turning
+# it off would not save CI a second; it would just downgrade those commands to
+# the deprecated migra engine.
 [experimental.pgdelta]
 enabled = true
 # Directory under `supabase/` where declarative files are written.
