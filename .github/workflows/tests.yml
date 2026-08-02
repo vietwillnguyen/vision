@@ -62,7 +62,7 @@ jobs:
         with:
           python-version: "3.11"
           enable-cache: true
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
       - name: Start local Supabase
@@ -119,7 +119,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
       - name: Start local Supabase
