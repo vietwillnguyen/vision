@@ -238,16 +238,21 @@ fi
 # the STALE remote-tracking ref left by the last successful fetch, print that
 # SHA and return 0 - reporting a successful provision of firmware the device
 # does not have. Diagnostics go to stderr; stdout carries only the SHA.
+#
+# Exit status: 0 with the SHA on stdout, 1 when the ref cannot be resolved and
+# the caller should say so, or 2 when a git command failed and this function has
+# already printed the only advice that fits. The two need opposite instructions
+# - fix your network versus push your branch - so they are not merged.
 checkout_revision() {
   local install_dir="$1" repo_url="$2" ref="$3" sha="" candidate
   if [[ -d "${install_dir}/.git" ]]; then
     if ! git -C "${install_dir}" remote set-url origin "${repo_url}"; then
       log "ERROR: cannot point ${install_dir}'s origin remote at ${repo_url}. Is ${install_dir} a healthy git checkout?" >&2
-      return 1
+      return 2
     fi
   elif ! git clone "${repo_url}" "${install_dir}"; then
     log "ERROR: cloning ${repo_url} into ${install_dir} failed. Check network access, DNS and credentials, then re-run - nothing was installed." >&2
-    return 1
+    return 2
   fi
   # Fetch every branch and tag explicitly rather than trusting the clone's
   # configured refspec, so a tag or SHA passed via VISIO_GIT_REF resolves too.
@@ -255,7 +260,7 @@ checkout_revision() {
     log "ERROR: fetching from ${repo_url} failed, so this run cannot know what '${ref}' points at now." >&2
     log "  ${install_dir} has been left on its current revision rather than provisioned from a stale copy of '${ref}'." >&2
     log "  This is a network, DNS or credentials problem, not a bad ref. Fix connectivity and re-run." >&2
-    return 1
+    return 2
   fi
   # origin/<ref> first: a stale local branch of the same name must never win.
   for candidate in "refs/remotes/origin/${ref}" "${ref}"; do
@@ -266,11 +271,11 @@ checkout_revision() {
   [[ -n "${sha}" ]] || return 1
   if ! git -C "${install_dir}" checkout --force --detach "${sha}"; then
     log "ERROR: checking out ${sha} in ${install_dir} failed - the checkout is NOT at the requested revision. Check free disk space and file permissions." >&2
-    return 1
+    return 2
   fi
   if ! git -C "${install_dir}" reset --hard --quiet "${sha}"; then
     log "ERROR: resetting ${install_dir} to ${sha} failed - tracked files may still carry local edits. Check free disk space and file permissions." >&2
-    return 1
+    return 2
   fi
   printf '%s\n' "${sha}"
 }
@@ -281,9 +286,13 @@ if [[ "${requested_ref}" == "${DEFAULT_GIT_REF}" && -z "${VISIO_GIT_REF:-}" ]]; 
   log "WARNING: this script is not running from a git checkout and VISIO_GIT_REF is unset, so it is falling back to '${DEFAULT_GIT_REF}'. That is a moving target - two devices provisioned on different days will not match. Set VISIO_GIT_REF to a tag or commit SHA for a reproducible install."
 fi
 
-if ! target_sha="$(checkout_revision "${INSTALL_DIR}" "${REPO_URL}" "${requested_ref}")"; then
-  log "ERROR: cannot resolve '${requested_ref}' in ${INSTALL_DIR}."
-  log "  If it is a commit on a local-only branch, push it first, or set VISIO_GIT_REF to a revision that exists on ${REPO_URL}."
+checkout_status=0
+target_sha="$(checkout_revision "${INSTALL_DIR}" "${REPO_URL}" "${requested_ref}")" || checkout_status=$?
+if [[ "${checkout_status}" -ne 0 ]]; then
+  if [[ "${checkout_status}" -eq 1 ]]; then
+    log "ERROR: cannot resolve '${requested_ref}' in ${INSTALL_DIR}."
+    log "  If it is a commit on a local-only branch, push it first, or set VISIO_GIT_REF to a revision that exists on ${REPO_URL}."
+  fi
   exit 1
 fi
 log "Provisioned revision ${target_sha} (requested '${requested_ref}')"
@@ -416,51 +425,79 @@ warn_unterminated_block() {
   log "  Leaving ${file} untouched. Repair the block by re-adding '${BASHRC_END}' after it, or delete the block by hand, then re-run."
 }
 
+# Put ${4} in the file ${1}, owned by ${3}, via the temp path ${2}. The write,
+# its byte count, the ownership, the mode and the rename are each checked, and
+# any failure removes the temp file and returns non-zero with ${1} untouched:
+# the operator's ~/.bashrc must never end up partial or empty, and a full SD
+# card is the realistic way that happens - step 2 and step 8 both apt-install
+# into this same filesystem. Only a temp file known to be complete is renamed,
+# and rename is atomic, so ${1} is either its old contents or the new ones.
+replace_file_via_tmp() {
+  local file="$1" tmp="$2" owner="$3" content="$4" expected written
+  expected="$(printf '%s' "${content}" | wc -c)"
+  if ! printf '%s' "${content}" > "${tmp}"; then
+    log "ERROR: writing ${tmp} failed - ${file} is unchanged. Check free disk space and file permissions."
+    rm -f "${tmp}"
+    return 1
+  fi
+  written="$(wc -c < "${tmp}" 2>/dev/null || true)"
+  if [[ "${written:-0}" -ne "${expected}" ]]; then
+    log "ERROR: ${tmp} holds ${written:-0} bytes but should hold ${expected} - refusing to move a partial file over ${file}, which is unchanged. Check free disk space."
+    rm -f "${tmp}"
+    return 1
+  fi
+  if ! chown "${owner}" "${tmp}"; then
+    log "ERROR: cannot give ${tmp} to ${owner} - ${file} is unchanged."
+    rm -f "${tmp}"
+    return 1
+  fi
+  if ! chmod 644 "${tmp}"; then
+    log "ERROR: cannot set mode 644 on ${tmp} - ${file} is unchanged."
+    rm -f "${tmp}"
+    return 1
+  fi
+  if ! mv "${tmp}" "${file}"; then
+    log "ERROR: cannot move ${tmp} onto ${file} - ${file} is unchanged."
+    rm -f "${tmp}"
+    return 1
+  fi
+}
+
 # Replace this script's managed block in $1 with $2, leaving every other line
 # byte-identical. Trailing blank lines are normalised so a second run produces
 # exactly the same file as the first.
 write_managed_block() {
-  local file="$1" body="$2" owner="$3" stripped tmp
-  tmp="${file}.visio-setup.tmp"
+  local file="$1" body="$2" owner="$3" stripped content
   # Command substitution strips every trailing newline; exactly one blank
   # separator line is then re-added, so the result is a fixed point.
   if ! stripped="$(strip_managed_block "${file}")"; then
     warn_unterminated_block "${file}"
     return 1
   fi
-  {
-    if [[ -n "${stripped}" ]]; then
-      printf '%s\n\n' "${stripped}"
-    fi
-    printf '%s\n' "${BASHRC_BEGIN}"
-    printf '%s\n' "${body}"
-    printf '%s\n' "${BASHRC_END}"
-  } > "${tmp}"
-  chown "${owner}" "${tmp}"
-  chmod 644 "${tmp}"
-  mv "${tmp}" "${file}"
+  content=""
+  if [[ -n "${stripped}" ]]; then
+    content="${stripped}"$'\n\n'
+  fi
+  content+="${BASHRC_BEGIN}"$'\n'"${body}"$'\n'"${BASHRC_END}"$'\n'
+  replace_file_via_tmp "${file}" "${file}.visio-setup.tmp" "${owner}" "${content}"
 }
 
 # The inverse: drop the managed block from $1 and leave the rest of the file
 # byte-identical. A no-op when the file does not exist or carries no block, so
 # it is safe to run on every disabled pass.
 remove_managed_block() {
-  local file="$1" owner="$2" stripped tmp
+  local file="$1" owner="$2" stripped content
   [[ -f "${file}" ]] || return 0
   grep -qxF "${BASHRC_BEGIN}" "${file}" || return 0
-  tmp="${file}.visio-setup.tmp"
   if ! stripped="$(strip_managed_block "${file}")"; then
     warn_unterminated_block "${file}"
     return 1
   fi
+  content=""
   if [[ -n "${stripped}" ]]; then
-    printf '%s\n' "${stripped}" > "${tmp}"
-  else
-    : > "${tmp}"
+    content="${stripped}"$'\n'
   fi
-  chown "${owner}" "${tmp}"
-  chmod 644 "${tmp}"
-  mv "${tmp}" "${file}"
+  replace_file_via_tmp "${file}" "${file}.visio-setup.tmp" "${owner}" "${content}"
 }
 
 # This script re-execs itself as root, so $HOME is /root. The conveniences

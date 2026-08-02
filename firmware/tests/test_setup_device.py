@@ -108,8 +108,15 @@ def _dev_shell_step() -> str:
     return _script_text().split('log "Step 8/10: developer shell"')[1].split('log "Step 9/10')[0]
 
 
+# Both managed-block entry points reach the operator's file through
+# replace_file_via_tmp, so every lib that exercises one carries the whole chain.
+_BLOCK_HELPERS = ("strip_managed_block", "warn_unterminated_block", "replace_file_via_tmp")
+_WRITE_FUNCTIONS = (*_BLOCK_HELPERS, "write_managed_block")
+_REMOVE_FUNCTIONS = (*_BLOCK_HELPERS, "remove_managed_block")
+
+
 def _write_block(tmp_path: Path, rc: Path, times: int) -> None:
-    lib = _shell_lib(tmp_path, "strip_managed_block", "write_managed_block")
+    lib = _shell_lib(tmp_path, *_WRITE_FUNCTIONS)
     body = tmp_path / "body.txt"
     body.write_text(_extract_bashrc_body())
     snippet = "\n".join(
@@ -120,7 +127,7 @@ def _write_block(tmp_path: Path, rc: Path, times: int) -> None:
 
 
 def _remove_block(tmp_path: Path, rc: Path, times: int = 1) -> None:
-    lib = _shell_lib(tmp_path, "strip_managed_block", "remove_managed_block")
+    lib = _shell_lib(tmp_path, *_REMOVE_FUNCTIONS)
     snippet = "\n".join([f'remove_managed_block "{rc}" "$(id -un):$(id -gn)"'] * times)
     result = _run(lib, snippet)
     assert result.returncode == 0, result.stderr
@@ -242,9 +249,7 @@ export OPERATOR_SETTING=1
 def test_writing_refuses_a_managed_block_with_no_end_marker(tmp_path):
     rc = tmp_path / ".bashrc"
     rc.write_text(_UNTERMINATED_BASHRC)
-    lib = _shell_lib(
-        tmp_path / "lib", "strip_managed_block", "warn_unterminated_block", "write_managed_block"
-    )
+    lib = _shell_lib(tmp_path / "lib", *_WRITE_FUNCTIONS)
     body = tmp_path / "body.txt"
     body.write_text(_extract_bashrc_body())
     snippet = "\n".join(
@@ -270,9 +275,7 @@ def test_writing_refuses_a_managed_block_with_no_end_marker(tmp_path):
 def test_removing_refuses_a_managed_block_with_no_end_marker(tmp_path):
     rc = tmp_path / ".bashrc"
     rc.write_text(_UNTERMINATED_BASHRC)
-    lib = _shell_lib(
-        tmp_path / "lib", "strip_managed_block", "warn_unterminated_block", "remove_managed_block"
-    )
+    lib = _shell_lib(tmp_path / "lib", *_REMOVE_FUNCTIONS)
     snippet = "\n".join(
         [
             f'if remove_managed_block "{rc}" "$(id -un):$(id -gn)"; then',
@@ -289,6 +292,110 @@ def test_removing_refuses_a_managed_block_with_no_end_marker(tmp_path):
     assert "REFUSED" in result.stdout
     assert rc.read_text() == _UNTERMINATED_BASHRC
     assert not (tmp_path / ".bashrc.visio-setup.tmp").exists()
+
+
+# --------------------------------------------------------------------------
+# A failing write. Both functions are called as `if fn ...; then`, which
+# suppresses errexit for their whole body, so nothing but an explicit check
+# stands between a half-written temp file and an mv over the operator's
+# ~/.bashrc. A full SD card is the realistic cause: step 2 and step 8 both
+# apt-install into this filesystem.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a read-only directory does not stop root")
+def test_writing_leaves_the_original_intact_when_the_temp_write_fails(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    lib = _shell_lib(tmp_path / "lib", *_WRITE_FUNCTIONS)
+    body = tmp_path / "body.txt"
+    body.write_text(_extract_bashrc_body())
+    snippet = "\n".join(
+        [
+            f'body="$(cat "{body}")"',
+            f'if write_managed_block "{rc}" "$body" "$(id -un):$(id -gn)"; then',
+            "  echo WROTE",
+            "else",
+            "  echo FAILED",
+            "fi",
+        ]
+    )
+    home.chmod(0o555)
+    try:
+        result = _run(lib, snippet)
+    finally:
+        home.chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    assert "FAILED" in result.stdout, "an unwritable temp path must not report success"
+    assert "is unchanged" in result.stdout
+    assert rc.read_bytes() == _EXISTING_BASHRC.encode()
+    assert not (home / ".bashrc.visio-setup.tmp").exists(), "no temp litter in the operator's home"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="a read-only directory does not stop root")
+def test_removing_leaves_the_original_intact_when_the_temp_write_fails(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    _write_block(tmp_path / "w", rc, times=1)
+    with_block = rc.read_bytes()
+    lib = _shell_lib(tmp_path / "lib", *_REMOVE_FUNCTIONS)
+    snippet = "\n".join(
+        [
+            f'if remove_managed_block "{rc}" "$(id -un):$(id -gn)"; then',
+            "  echo REMOVED",
+            "else",
+            "  echo FAILED",
+            "fi",
+        ]
+    )
+    home.chmod(0o555)
+    try:
+        result = _run(lib, snippet)
+    finally:
+        home.chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    assert "FAILED" in result.stdout
+    assert rc.read_bytes() == with_block
+    assert not (home / ".bashrc.visio-setup.tmp").exists()
+
+
+def test_a_partial_temp_file_is_never_moved_over_the_original(tmp_path):
+    # The ENOSPC window the checks above cannot reach: a write that reports
+    # success but lands short. Only a temp file whose byte count matches the
+    # content may be renamed over the operator's file.
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    lib = _shell_lib(tmp_path / "lib", "replace_file_via_tmp")
+    tmp_file = tmp_path / ".bashrc.visio-setup.tmp"
+    snippet = "\n".join(
+        [
+            # A short write that still reports success: full output down a pipe
+            # (so the expected length is honest), truncated to a file.
+            "printf() {",
+            '  if [[ -p /dev/stdout ]]; then command printf "$@"',
+            '  else command printf "%s" "${2:0:4}"; fi',
+            "}",
+            f'if replace_file_via_tmp "{rc}" "{tmp_file}" "$(id -un):$(id -gn)" "a much longer body"; then',
+            "  echo REPLACED",
+            "else",
+            "  echo REFUSED",
+            "fi",
+        ]
+    )
+
+    result = _run(lib, snippet)
+
+    assert result.returncode == 0, result.stderr
+    assert "REFUSED" in result.stdout
+    assert "refusing to move a partial file" in result.stdout
+    assert rc.read_bytes() == _EXISTING_BASHRC.encode()
+    assert not tmp_file.exists()
 
 
 def test_a_refused_bashrc_rewrite_does_not_abort_the_run():
@@ -614,7 +721,7 @@ def test_checkout_revision_fails_on_an_unresolvable_ref(tmp_path, origin):
 
     result = _checkout(tmp_path, install, repo, "no-such-branch")
 
-    assert result.returncode != 0
+    assert result.returncode == 1, "status 1 is what makes the caller print the ref advice"
     assert result.stdout.strip() == ""
     # The two failures need different operator advice - push your branch versus
     # fix your network - so they must not report each other.
@@ -639,7 +746,7 @@ def test_checkout_revision_fails_loudly_when_the_fetch_fails(tmp_path, origin):
 
     result = _checkout(tmp_path / "second", install, tmp_path / "unreachable-origin", "main")
 
-    assert result.returncode != 0
+    assert result.returncode == 2, "git failures report themselves and must not draw ref advice"
     assert result.stdout.strip() == "", "a SHA on stdout is read by the caller as a good provision"
     assert second not in result.stdout and third not in result.stdout
     assert "fetching" in result.stderr
@@ -652,7 +759,7 @@ def test_checkout_revision_fails_loudly_when_the_clone_fails(tmp_path):
 
     result = _checkout(tmp_path, install, tmp_path / "unreachable-origin", "main")
 
-    assert result.returncode != 0
+    assert result.returncode == 2
     assert result.stdout.strip() == ""
     assert "cloning" in result.stderr
 
@@ -667,7 +774,7 @@ def test_checkout_revision_fails_loudly_when_the_install_dir_is_not_a_healthy_re
 
     result = _checkout(tmp_path, install, repo, "main")
 
-    assert result.returncode != 0
+    assert result.returncode == 2
     assert result.stdout.strip() == ""
     assert "origin remote" in result.stderr
 
@@ -687,9 +794,58 @@ def test_checkout_revision_fails_loudly_when_the_working_tree_cannot_be_written(
     finally:
         install.chmod(0o755)
 
-    assert result.returncode != 0
+    assert result.returncode == 2
     assert second not in result.stdout
     assert (install / "firmware.txt").read_text() == "v1\n"
+
+
+# --------------------------------------------------------------------------
+# The caller's advice. checkout_revision fails for five distinct reasons; only
+# one of them is "that ref does not exist". The last line on the operator's
+# screen must not contradict the three lines above it.
+# --------------------------------------------------------------------------
+
+
+def _checkout_caller() -> str:
+    text = _script_text()
+    start = text.index("checkout_status=0")
+    return text[start : text.index('log "Provisioned revision', start)]
+
+
+def _run_caller(tmp_path: Path, status: int) -> subprocess.CompletedProcess:
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            'INSTALL_DIR="/opt/visio-recorder"',
+            'REPO_URL="https://example.invalid/vision.git"',
+            'requested_ref="some-ref"',
+            f"checkout_revision() {{ return {status}; }}",
+            _checkout_caller(),
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+
+
+def test_the_caller_gives_ref_advice_only_when_the_ref_is_the_problem(tmp_path):
+    unresolvable = _run_caller(tmp_path, 1)
+
+    assert unresolvable.returncode == 1
+    assert "cannot resolve 'some-ref'" in unresolvable.stdout
+    assert "push it first" in unresolvable.stdout
+
+
+def test_the_caller_stays_silent_when_the_function_already_explained(tmp_path):
+    git_failure = _run_caller(tmp_path, 2)
+
+    assert git_failure.returncode == 1, "a reported git failure is still fatal"
+    assert "push it first" not in git_failure.stdout, "this contradicts the real cause"
+    assert "cannot resolve" not in git_failure.stdout
 
 
 @pytest_git
