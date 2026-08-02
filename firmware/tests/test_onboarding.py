@@ -1,5 +1,6 @@
 import json
 
+from tests.fakes import FakeCommandRunner, FakeLedDriver
 from visio_recorder.led import LedPattern
 from visio_recorder.onboarding import (
     NmcliConnectionActivator,
@@ -7,8 +8,6 @@ from visio_recorder.onboarding import (
     reactivate_connection_if_configured,
     run_onboarding,
 )
-
-from tests.fakes import FakeCommandRunner, FakeLedDriver
 
 VALID_PAYLOAD = json.dumps(
     {

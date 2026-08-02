@@ -4,6 +4,12 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Add durable project-specific notes here as they are discovered through real work.
 
+## Gates
+
+Two workflows gate PRs: `.github/workflows/tests.yml` (pytest, jest, tsc, web-bundle smoke) and `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint).
+README's "Lint, format, and type-check" section has the exact local commands.
+Run them before proposing a change is done; `uv run --locked` means a dependency edit must be followed by `uv lock` in that package.
+
 ## Test surfaces
 
 The tests here span several surfaces run by different tools.
@@ -36,6 +42,13 @@ publication via migration. Do not disable those.
 
 The CLI version is pinned in `tests.yml` (`SUPABASE_CLI_VERSION`). Dependabot
 bumps action refs but not action inputs, so that one is a manual bump.
+
+## Sharp edges
+
+- The Python rule set is shared: repo-root `ruff.toml`, extended from each package's `pyproject.toml`. Change it in one place, not three. mypy has no `extend`, so its config is per-package by necessity and the blocks are meant to stay identical.
+- `firmware/` and `pipeline/` are consumed by `integration/` as path dependencies. Both need their `[build-system]` table and their `py.typed` marker to stay put, or `integration/` silently degrades every cross-package call to `Any` and `python -m` stops resolving outside the package directory.
+- Under jest-expo, `global.fetch` is React Native's XHR polyfill and resolves with `status`/`body` undefined against plain http localhost - live tests must inject a real fetch. `WebSocket` is *not* replaced, so Node's native one is used directly.
+- `app/AGENTS.md` pins the Expo SDK doc version to read before writing app code.
 
 ## Maintaining this file
 

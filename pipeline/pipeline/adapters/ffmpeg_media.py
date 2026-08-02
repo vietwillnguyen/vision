@@ -21,7 +21,9 @@ def run_captured(command: list[str]) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(command, check=True, capture_output=True)
     except subprocess.CalledProcessError as exc:
-        stderr_tail = (exc.stderr or b"")[-STDERR_TAIL_BYTES:].decode("utf-8", "replace")
+        stderr_tail = (exc.stderr or b"")[-STDERR_TAIL_BYTES:].decode(
+            "utf-8", "replace"
+        )
         raise RuntimeError(
             f"{command[0]} exited with code {exc.returncode}: {stderr_tail}"
         ) from exc
@@ -33,7 +35,12 @@ def compute_frame_diffs_from_raw(raw: bytes, frame_size: int) -> list[float]:
     for i in range(1, frame_count):
         prev = raw[(i - 1) * frame_size : i * frame_size]
         curr = raw[i * frame_size : (i + 1) * frame_size]
-        total = sum(abs(a - b) for a, b in zip(prev, curr))
+        # Both slices are always exactly `frame_size` long: frame_count floor-
+        # divides, so a trailing partial frame is dropped before the loop runs
+        # and the strict check can never fire today. strict=True satisfies B905
+        # and pins that invariant, so a future change to the slicing fails
+        # loudly instead of silently scoring a short frame.
+        total = sum(abs(a - b) for a, b in zip(prev, curr, strict=True))
         diffs.append(total / frame_size)
     return diffs
 

@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
+import { SegmentPreview } from '../../src/components/SegmentPreview';
+import type { Segment } from '../../src/types';
+
 jest.mock('expo-video', () => {
   const { View } = jest.requireActual('react-native');
   return {
@@ -8,9 +11,6 @@ jest.mock('expo-video', () => {
     VideoView: (props: Record<string, unknown>) => <View testID="video-view" {...props} />,
   };
 });
-
-import { SegmentPreview } from '../../src/components/SegmentPreview';
-import type { Segment } from '../../src/types';
 
 const seg: Segment = {
   id: 'seg-1',

@@ -56,7 +56,9 @@ def test_uploaded_segment_object_key_matches_pipeline_device_prefix_convention()
         def run(self, args):
             pass
 
-    local_path = mux_segment(NoopRunner(), Path(segment_filename(started_at)), framerate=30)
+    local_path = mux_segment(
+        NoopRunner(), Path(segment_filename(started_at)), framerate=30
+    )
     client = RecordingStorageClient()
 
     object_key = upload_segment(client, "device-123", local_path)

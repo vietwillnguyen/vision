@@ -149,7 +149,9 @@ class FakeRunner:
         output.write_bytes(b"out")
 
 
-DEVICE = DeviceRecord(device_id="dev-1", user_id="user-1", push_token="ExponentPushToken[x]")
+DEVICE = DeviceRecord(
+    device_id="dev-1", user_id="user-1", push_token="ExponentPushToken[x]"
+)
 DAY = date(2026, 7, 14)
 
 
@@ -235,7 +237,9 @@ class TestHappyPath:
         assert len(concat_commands) == 1
 
     def test_uses_per_user_score_weights(self, tmp_path):
-        heavy_motion = ScoreWeights(scene_weight=0.0, audio_weight=0.0, motion_weight=1.0)
+        heavy_motion = ScoreWeights(
+            scene_weight=0.0, audio_weight=0.0, motion_weight=1.0
+        )
         store = FakeStore(
             devices=[DEVICE],
             segment_keys={"dev-1": [segment_key("090000")]},
@@ -287,9 +291,7 @@ class TestEdgeCases:
         assert result.devices_failed == []
         assert store.cleared_push_tokens == []
 
-    def test_dead_reel_push_token_is_cleared_and_device_still_processed(
-        self, tmp_path
-    ):
+    def test_dead_reel_push_token_is_cleared_and_device_still_processed(self, tmp_path):
         device = DeviceRecord(
             device_id="dev-1", user_id="user-1", push_token="ExponentPushToken[x]"
         )
@@ -384,7 +386,9 @@ class TestDlqPolicy:
             segment_keys={"dev-1": [segment_key("090000")]},
             pending_dlq={
                 "dev-1": [
-                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                    DlqEntry(
+                        key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1
+                    )
                 ]
             },
         )
@@ -423,7 +427,9 @@ class TestDlqPolicy:
             devices=[DEVICE],
             pending_dlq={
                 "dev-1": [
-                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                    DlqEntry(
+                        key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1
+                    )
                 ]
             },
             segment_rows={
@@ -454,7 +460,9 @@ class TestDlqPolicy:
             segment_keys={"dev-1": [segment_key("090000")]},
             pending_dlq={
                 "dev-1": [
-                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                    DlqEntry(
+                        key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1
+                    )
                 ]
             },
         )
@@ -477,7 +485,9 @@ class TestDlqPolicy:
             segment_keys={"dev-1": [segment_key("090000")]},
             pending_dlq={
                 "dev-1": [
-                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                    DlqEntry(
+                        key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1
+                    )
                 ]
             },
         )
@@ -498,7 +508,9 @@ class TestDlqPolicy:
             segment_keys={"dev-1": [segment_key("090000")]},
             pending_dlq={
                 "dev-1": [
-                    DlqEntry(key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1)
+                    DlqEntry(
+                        key=marker, kind="unmatched", attempts=MAX_DLQ_ATTEMPTS - 1
+                    )
                 ]
             },
         )

@@ -1,7 +1,7 @@
 import logging
 import shutil
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -75,9 +75,7 @@ def flush_pending(
         try:
             upload_segment(storage_client, device_id, path)
         except Exception:
-            _logger.exception(
-                "flush_pending failed to upload queued segment %s", path
-            )
+            _logger.exception("flush_pending failed to upload queued segment %s", path)
             continue
         mark_uploaded(path)
         uploaded += 1
@@ -128,7 +126,7 @@ def on_segment_complete(
         segments_pending=len(list_pending(queue_dir)),
         segments_uploaded_today=segments_uploaded_today,
         recording_active=True,
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
     )
     status_client.upsert_device_status(asdict(status))
 

@@ -1,16 +1,20 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
-jest.mock('react-native-qrcode-svg', () => (props: { value: string; size?: number; ecl?: string }) => {
-  const { Text } = jest.requireActual('react-native');
-  return (
-    <Text testID="qr-code" accessibilityValue={{ text: `${props.size}:${props.ecl}` }}>
-      {props.value}
-    </Text>
-  );
-});
-
 import { ReonboardScreen } from '../../src/screens/ReonboardScreen';
+
+jest.mock(
+  'react-native-qrcode-svg',
+  () =>
+    function MockQrCode(props: { value: string; size?: number; ecl?: string }) {
+      const { Text } = jest.requireActual('react-native');
+      return (
+        <Text testID="qr-code" accessibilityValue={{ text: `${props.size}:${props.ecl}` }}>
+          {props.value}
+        </Text>
+      );
+    },
+);
 
 function noop() {}
 

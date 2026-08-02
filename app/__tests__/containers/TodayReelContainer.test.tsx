@@ -2,6 +2,8 @@ import { render, screen, waitFor } from '@testing-library/react-native';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 
+import { TodayReelContainer } from '../../src/containers/TodayReelContainer';
+
 jest.mock('expo-video', () => {
   const { View } = jest.requireActual('react-native');
   return {
@@ -9,8 +11,6 @@ jest.mock('expo-video', () => {
     VideoView: (props: Record<string, unknown>) => <View testID="video-view" {...props} />,
   };
 });
-
-import { TodayReelContainer } from '../../src/containers/TodayReelContainer';
 
 const REEL_ROW = {
   id: 'r1',

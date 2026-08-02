@@ -124,7 +124,7 @@ def test_apply_flag_markers_does_not_flag_a_same_time_segment_from_another_day()
     assert segments[0].manually_flagged is False
 
 
-def test_apply_flag_markers_rejects_undated_legacy_markers_instead_of_guessing_the_day():
+def test_apply_flag_markers_rejects_undated_legacy_markers_instead_of_guessing():
     segments, _ = build_segments_from_object_keys(
         ["device-abc/20260704_120000.mp4"], device_id="device-abc"
     )

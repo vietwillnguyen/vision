@@ -121,7 +121,7 @@ def run_recording_loop(
     CRITICAL LED is applied after the drain so it is the final LED state and
     cannot be overwritten by the drained segments' LED restores.
     """
-    work: "queue.Queue[Path | None]" = queue.Queue()
+    work: queue.Queue[Path | None] = queue.Queue()
 
     def worker() -> None:
         segments_uploaded_today = 0
