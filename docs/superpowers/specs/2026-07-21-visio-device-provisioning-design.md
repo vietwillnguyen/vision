@@ -76,10 +76,15 @@ Each check carries a severity. `block` means the daemon cannot function without 
 | `rpi_ws281x`, `gpiozero`, `supabase` importable | `importlib.util.find_spec()` | block |
 | Camera detected | `rpicam-hello --list-cameras` reports at least one camera | block |
 | NetworkManager running | `nmcli general status` succeeds | block |
-| Data dir writable | `/var/lib/visio-recorder` exists and is writable | block **for the daemon's own uid**, warn otherwise - see below |
+| Data dir writable | `/var/lib/visio-recorder` exists and is writable | block, except **exists-but-unwritable for a non-daemon caller**, which is warn - see below |
 | `pijuice` importable, I2C enabled (`/dev/i2c-1` exists) | `importlib.util.find_spec()`, path check | **warn** - and only run at all when `VISIO_BATTERY_SOURCE=pijuice`; skipped entirely under `=none` since there's nothing to warn about in the intended bring-up state |
 
-The data-dir check's severity depends on who is running preflight, because the same module is both the daemon's startup gate and an operator diagnostic. `os.access(W_OK)` is caller-relative, and the directory is deliberately root-owned - it holds the captain's recorded video, so it is not widened for a diagnostic's benefit. Run by the uid the unit starts the daemon as, a missing or unwritable data dir is still `block` with the same "run setup-device.sh" advice. Run by an operator over SSH it is `warn`, saying plainly that the directory is not writable by that user and that this is expected rather than a fault - otherwise every healthy device reports a spurious blocking failure during the physical checklist.
+The data-dir check splits along which half of it is caller-relative, because the same module is both the daemon's startup gate and an operator diagnostic.
+Existence is not caller-relative: `/var/lib` is 0755 root:root, so a missing data dir looks missing to every uid, and a device without one is simply not provisioned - `setup-device.sh` exits at the env-file step before it ever reaches the data-dir step, both on a fresh device and whenever the Supabase keys are unfilled.
+That case stays `block` for every caller, with the actionable "run setup-device.sh" advice.
+Writability is caller-relative, and the directory is deliberately root-owned - it holds the captain's recorded video, so it is not widened for a diagnostic's benefit.
+An existing-but-unwritable directory is therefore still `block` for the uid the unit starts the daemon as, and `warn` for an operator over SSH, saying plainly that this is expected rather than a fault - otherwise every healthy device reports a spurious blocking failure during the physical checklist.
+`_DAEMON_UID` is pinned to the unit by a test asserting `visio-recorder.service` carries no `User=` directive, so the deferred de-root task has to update it deliberately rather than silently degrading the daemon's own gate.
 
 The I2C check deliberately stops at "is the bus enabled," not "does the PiJuice respond" — that deeper check already happens in `run_startup_sequence`'s real battery read, with its own halt/critical-LED handling, when a PiJuice is actually configured as the battery source. Preflight answers "can this environment work at all," not "is today's hardware reading good."
 
