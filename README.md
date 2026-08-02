@@ -53,7 +53,15 @@ The hook's own suite is [`scripts/hooks/tests/test-pre-commit.sh`](scripts/hooks
 
 ## Continuous integration
 
-[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs the four subsystem test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) on every pull request targeting `main` and every push to `main`; the pre-commit hook's own suite runs separately in [`.github/workflows/hooks.yml`](.github/workflows/hooks.yml) (see [Architecture doc](#architecture-doc) above).
+Every pull request targeting `main`, and every push to `main`, is gated by the workflows below.
+They are split by what each needs to run, so a red check points at one thing:
+
+- [`tests.yml`](.github/workflows/tests.yml) - the subsystem test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) plus the pgTAP database contract. Needs Docker and a live local Supabase instance, so it is the slowest gate.
+- [`lint.yml`](.github/workflows/lint.yml) - ruff, mypy, and eslint. Needs neither Docker nor Supabase, so it fails fast and independently of the suites above; see [Lint, format, and type-check](#lint-format-and-type-check).
+- [`hooks.yml`](.github/workflows/hooks.yml) - the pre-commit architecture-sync guard's own suite, plus a re-check that the committed `source-sha256` manifest still matches every spec on disk (drift landed via `--no-verify` is invisible to the hook itself); see [Architecture doc](#architecture-doc) above.
+
+[`nightly-reel.yml`](.github/workflows/nightly-reel.yml) is not a gate - it is the scheduled pipeline run.
+
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
