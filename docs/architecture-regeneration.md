@@ -34,6 +34,11 @@ A spec with no manifest line is a spec nothing guards, so the hook rejects one b
 added to `docs/superpowers/specs/` without a matching line - the earlier single-spec
 version of this check silently covered one spec out of three.
 
+Retiring a spec is the same contract in reverse: delete the spec and drop its manifest
+line in the same commit.
+Deleting the spec while the manifest still lists it is reported as drift, because the
+page would keep claiming to render a file that no longer exists.
+
 ## Why this isn't fully automatic
 
 Regenerating the page requires judgment (what changed, how to phrase it, which
