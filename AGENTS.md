@@ -2,11 +2,13 @@
 
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
-- Add durable project-specific notes here as they are discovered through real work.
+- **Wire the pre-commit hook before committing:** `git config core.hooksPath scripts/hooks`. It is local git config, so a fresh clone silently skips the guard that keeps `docs/ARCHITECTURE.html` in sync with the specs it renders. Worktrees share the clone's setting. Contract and regeneration steps: [`docs/architecture-regeneration.md`](docs/architecture-regeneration.md); hook tests: `scripts/hooks/tests/test-pre-commit.sh`.
+- **Edit the specs, never `docs/ARCHITECTURE.html` directly.** The page is a rendering of every spec under `docs/superpowers/specs/` and carries one `source-sha256` manifest line per spec.
+- Per-subsystem setup lives in [`README.md`](README.md); the integration suite's rationale lives in [`integration/README.md`](integration/README.md).
 
 ## Gates
 
-Two workflows gate PRs: `.github/workflows/tests.yml` (pytest, jest, tsc, web-bundle smoke) and `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint).
+Three workflows gate PRs: `.github/workflows/tests.yml` (pytest, jest, tsc, web-bundle smoke), `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint), and `.github/workflows/hooks.yml` (the pre-commit hook's own suite plus a re-verification of the `docs/ARCHITECTURE.html` manifest).
 README's "Lint, format, and type-check" section has the exact local commands.
 Run them before proposing a change is done; `uv run --locked` means a dependency edit must be followed by `uv lock` in that package.
 

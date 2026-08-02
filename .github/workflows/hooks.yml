@@ -1,0 +1,44 @@
+name: hooks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hooks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pre-commit-hook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run pre-commit hook tests
+        # Pure git + coreutils; each case builds a throwaway repo in a temp dir
+        # and drives real `git commit` calls through scripts/hooks/pre-commit.
+        run: scripts/hooks/tests/test-pre-commit.sh
+
+      - name: Verify docs/ARCHITECTURE.html manifest matches every spec
+        # The committed state must be in sync, not just future commits: the hook
+        # only fires on commits that touch a spec, so a manifest that drifted via
+        # --no-verify would otherwise stay invisible.
+        run: |
+          sed -n 's|^<!-- source-sha256: \(.*\) -->$|\1|p' docs/ARCHITECTURE.html | sha256sum -c -
+
+      - name: Verify every spec has a manifest line
+        # Guards the coverage gap directly: a spec present on disk but absent
+        # from the manifest is a spec nothing checks.
+        run: |
+          missing=0
+          for spec in docs/superpowers/specs/*.md; do
+            if ! grep -qF "  $spec -->" docs/ARCHITECTURE.html; then
+              echo "::error file=$spec::no <!-- source-sha256: ... --> manifest line in docs/ARCHITECTURE.html"
+              missing=1
+            fi
+          done
+          exit "$missing"

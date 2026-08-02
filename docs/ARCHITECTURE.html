@@ -24,8 +24,13 @@
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
-<!-- source-sha256: e35b9750f2c45e05deaf8dcb07c54d16a78369e9e86594cba864ec4be0ff0771 -->
-<!-- source-file: docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- One manifest line per spec this page renders; each payload is verbatim
+     `sha256sum` output, so the whole set can be verified in one pipe into
+     `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
+     scripts/hooks/pre-commit. -->
+<!-- source-sha256: e35b9750f2c45e05deaf8dcb07c54d16a78369e9e86594cba864ec4be0ff0771  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
+<!-- source-sha256: d5f68258ffaa14aa554bb172ea1ee40648eb3bebe48b06a76076effb2ad57f9c  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-07-23 (spec-sync, main divergence merge) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
@@ -56,9 +61,13 @@
     <div class="flex flex-col gap-2">
       <h1 class="text-3xl font-bold leading-snug pb-1">Visio Pendant — System Architecture</h1>
       <p class="text-base-content/70 max-w-3xl">
-        A living rendering of
-        <a class="link link-primary" href="superpowers/specs/2026-07-04-visio-pendant-design.md">the design spec</a>
-        (source of truth — edit that file, then regenerate this page).
+        A living rendering of every spec under <span class="font-mono">docs/superpowers/specs/</span> - the
+        <a class="link link-primary" href="superpowers/specs/2026-07-04-visio-pendant-design.md">pendant design spec</a>
+        plus the
+        <a class="link link-primary" href="superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md">WiFi re-onboarding QR</a>
+        and
+        <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">device provisioning &amp; preflight</a>
+        specs (source of truth - edit those files, then regenerate this page).
         A wearable pendant that records passively all day and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
       </p>
     </div>
@@ -312,8 +321,8 @@ score = base_score * 1.5  (if manually flagged)
   </section>
 
   <footer class="border-t border-base-content/10 pt-6 pb-12 text-xs text-base-content/50 space-y-1">
-    <p>Source of truth: <span class="font-mono">docs/superpowers/specs/2026-07-04-visio-pendant-design.md</span>. Regenerate this page after editing that file — see <span class="font-mono">docs/architecture-regeneration.md</span>.</p>
-    <p>A pre-commit hook blocks commits that change the spec without updating this page's embedded source hash.</p>
+    <p>Source of truth: every spec under <span class="font-mono">docs/superpowers/specs/</span> - the pendant design spec plus the WiFi re-onboarding QR and device provisioning &amp; preflight specs. Regenerate this page after editing any of them - see <span class="font-mono">docs/architecture-regeneration.md</span>.</p>
+    <p>A pre-commit hook blocks commits that change any of those specs without updating that spec's line in this page's embedded <span class="font-mono">source-sha256</span> manifest.</p>
   </footer>
 
 </main>
