@@ -47,11 +47,14 @@ while read -r embedded_hash source_file; do
 
   tracked_specs="${tracked_specs}${source_file}"$'\n'
   spec_dir=$(dirname -- "$source_file")
-  printf '%s\n' "$spec_dirs" | grep -qxF -- "$spec_dir" ||
-    spec_dirs="${spec_dirs}${spec_dir}"$'\n'
+  grep -qxF -- "$spec_dir" <<DIRS || spec_dirs="${spec_dirs}${spec_dir}"$'\n'
+$spec_dirs
+DIRS
 
   # Only enforce for the specs this commit actually touches.
-  printf '%s\n' "$staged_files" | grep -qxF -- "$source_file" || continue
+  grep -qxF -- "$source_file" <<HAYSTACK || continue
+$staged_files
+HAYSTACK
 
   if ! git cat-file -e ":$source_file" 2>/dev/null; then
     drift_report="${drift_report}  - ${source_file}"$'\n'
@@ -85,8 +88,12 @@ while read -r candidate; do
   # still lists it is caught above as drift.
   git cat-file -e ":$candidate" 2>/dev/null || continue
   candidate_dir=$(dirname -- "$candidate")
-  printf '%s\n' "$spec_dirs" | grep -qxF -- "$candidate_dir" || continue
-  printf '%s\n' "$tracked_specs" | grep -qxF -- "$candidate" && continue
+  grep -qxF -- "$candidate_dir" <<DIRS || continue
+$spec_dirs
+DIRS
+  grep -qxF -- "$candidate" <<SPECS && continue
+$tracked_specs
+SPECS
   untracked_report="${untracked_report}  - ${candidate}"$'\n'
 done <<EOF
 $staged_files

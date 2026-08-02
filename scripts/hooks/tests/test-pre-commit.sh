@@ -228,6 +228,25 @@ git add docs/ARCHITECTURE.html
 commit_staged "retire spec B"
 assert_status 0
 
+it "blocks a drifted spec in a commit whose staged file list exceeds the pipe buffer"
+new_repo
+mkdir -p filler
+i=0
+while [ "$i" -lt 2000 ]; do
+  # Long names in a directory sorting after docs/, so the staged-name list runs
+  # well past 64KB while the drifted spec is still near the front of it.
+  printf 'pad\n' >"filler/pad-$i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt"
+  i=$((i + 1))
+done
+printf 'spec A changed\n' >"$SPEC_A"
+git add -A
+staged_bytes=$(git diff --cached --name-only | wc -c)
+[ "$staged_bytes" -gt 65536 ] ||
+  fail "fixture too small: staged name list is $staged_bytes bytes, need > 65536"
+commit_staged "drift A behind a huge staged list"
+assert_status 1
+assert_contains "$SPEC_A"
+
 it "ignores a non-spec markdown file elsewhere in docs/"
 new_repo
 printf 'a plan\n' >docs/superpowers/plans-note.md
