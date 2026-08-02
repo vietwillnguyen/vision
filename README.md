@@ -52,6 +52,10 @@ git config core.hooksPath scripts/hooks
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
+The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the nine suites in [`supabase/tests/database/`](supabase/tests/database).
+It is a step inside that job rather than a job of its own because the suites finish in about a second, so a dedicated job would spend a third `supabase start` to save nothing, and because a new job would have to be added as a required status check in branch protection before it actually gated anything, whereas a step inherits the existing job's protection immediately.
+The step runs before the pytest step: each suite wraps itself in `begin`/`rollback`, so it leaves the freshly migrated database untouched for the tests that follow.
+The Supabase CLI is pinned through the workflow-level `SUPABASE_CLI_VERSION` env var rather than `version: latest`, so CI cannot change underneath a commit; Dependabot bumps action refs but not action inputs, so that pin is a manual bump.
 
 ## Supabase foundation (Epic 0)
 
@@ -72,6 +76,9 @@ supabase start      # start the local stack
 supabase db reset   # recreate the database from migrations
 supabase test db    # run the pgTAP test suites
 ```
+
+The stack `supabase start` boots is trimmed: Studio, analytics, the edge runtime, and vector storage are disabled in [`supabase/config.toml`](supabase/config.toml), each with an inline comment recording why it is unused here.
+Flip `[studio]` back on locally if you want the table editor.
 
 ## Firmware (Epic 1)
 
