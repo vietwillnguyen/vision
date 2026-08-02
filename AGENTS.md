@@ -8,7 +8,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Gates
 
-Two workflows gate PRs: `.github/workflows/tests.yml` (pytest, jest, tsc, web-bundle smoke) and `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint).
+Three workflows gate PRs: `.github/workflows/tests.yml` (pytest, jest, tsc, web-bundle smoke), `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint), and `.github/workflows/hooks.yml` (the pre-commit hook's own suite plus a re-verification of the `docs/ARCHITECTURE.html` manifest).
 README's "Lint, format, and type-check" section has the exact local commands.
 Run them before proposing a change is done; `uv run --locked` means a dependency edit must be followed by `uv lock` in that package.
 
