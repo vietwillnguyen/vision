@@ -35,9 +35,11 @@ def compute_frame_diffs_from_raw(raw: bytes, frame_size: int) -> list[float]:
     for i in range(1, frame_count):
         prev = raw[(i - 1) * frame_size : i * frame_size]
         curr = raw[i * frame_size : (i + 1) * frame_size]
-        # strict=True: both slices are exactly `frame_size` long for every i in
-        # range, so an unequal pair means the raw stream was truncated
-        # mid-frame - fail loudly rather than silently scoring a short frame.
+        # Both slices are always exactly `frame_size` long: frame_count floor-
+        # divides, so a trailing partial frame is dropped before the loop runs
+        # and the strict check can never fire today. strict=True satisfies B905
+        # and pins that invariant, so a future change to the slicing fails
+        # loudly instead of silently scoring a short frame.
         total = sum(abs(a - b) for a, b in zip(prev, curr, strict=True))
         diffs.append(total / frame_size)
     return diffs
