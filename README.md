@@ -114,7 +114,7 @@ The manual flag marker (`FLAG_YYYYMMDD_HHMMSS.marker`, `flag_button.py`) is wire
 Every hardware or network boundary (PiJuice, GPIO, WS2812B LEDs, `ffmpeg`/`rpicam-vid`, Supabase) is a small `Protocol` with a fake used in tests; `daemon.py` is the only module that wires real implementations together.
 On boot it runs the battery/LED startup sequence, scans a QR code to onboard WiFi (writing a NetworkManager keyfile) and Supabase auth on first boot, activates the NetworkManager connection (`nmcli connection reload` + `up`, retried best-effort on restart boots), registers the device, flushes any queued uploads left over from a previous run, then starts the per-segment `rpicam-vid` capture loop with the flag-button listener and a background upload worker with real disk-usage stats.
 Configuration is read from environment variables via the systemd unit's `EnvironmentFile=/etc/visio-recorder.env`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR`, `VISIO_SEGMENT_DURATION_MS`, `VISIO_FRAMERATE`.
-Device prerequisites beyond this project's `uv.lock`: `apt install zbar-tools` for QR decoding, plus the `pijuice` and `rpi_ws281x` system packages for the battery and LED drivers on the Pi.
+Device prerequisites beyond this project's `uv.lock`: `apt install zbar-tools` for QR decoding, plus the `pijuice`, `rpi_ws281x`, and `gpiozero` system packages for the battery, LED, and flag-button drivers on the Pi.
 
 ### Local development
 
@@ -170,7 +170,8 @@ The React Native (Expo, TypeScript) app: a bottom tab navigator (`@react-navigat
 cd app
 npm install           # install dependencies
 npm test              # run the Jest test suites
-npx tsc --noEmit      # type-check
 npx expo start        # launch the Expo dev server
 npx expo start --web  # preview in a browser (layout/styling only - no native video playback)
 ```
+
+Lint and type-check commands are in [Lint, format, and type-check](#lint-format-and-type-check).
