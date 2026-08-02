@@ -30,7 +30,7 @@
     "eslint": "^9.39.5",
     "eslint-config-expo": "~57.0.1",
     "jest-expo": "^57.0.1",
-    "node-fetch": "^2.7.0",
+    "node-fetch": "^3.3.2",
     "react-dom": "19.2.3",
     "react-native-web": "^0.21.2",
     "react-test-renderer": "19.2.3",
