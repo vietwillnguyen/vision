@@ -77,6 +77,9 @@ supabase db reset   # recreate the database from migrations
 supabase test db    # run the pgTAP test suites
 ```
 
+The stack `supabase start` boots is trimmed: Studio, analytics, the edge runtime, and vector storage are disabled in [`supabase/config.toml`](supabase/config.toml), each with an inline comment recording why it is unused here.
+Flip `[studio]` back on locally if you want the table editor.
+
 ## Firmware (Epic 1)
 
 **Plan:** [`docs/superpowers/plans/2026-07-04-visio-firmware.md`](docs/superpowers/plans/2026-07-04-visio-firmware.md)
