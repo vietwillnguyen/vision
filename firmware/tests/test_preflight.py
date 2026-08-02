@@ -1,0 +1,242 @@
+"""Unit tests for visio_recorder.preflight's individual check functions.
+
+Every check takes an injectable seam (a callable or a Path) defaulting to
+the real implementation, so these run without touching real hardware -
+the same fake-injection convention used throughout firmware/.
+"""
+
+import subprocess
+
+from visio_recorder.preflight import (
+    BLOCK,
+    WARN,
+    CheckResult,
+    check_binary_on_path,
+    check_camera_detected,
+    check_data_dir_writable,
+    check_i2c_enabled,
+    check_importable,
+    check_networkmanager_running,
+    check_pijuice_importable,
+    format_report,
+    has_blocking_failure,
+    run_checks,
+)
+
+
+def test_check_binary_on_path_ok_when_found():
+    result = check_binary_on_path("ffmpeg", which=lambda name: "/usr/bin/ffmpeg")
+
+    assert result.name == "ffmpeg"
+    assert result.severity == BLOCK
+    assert result.ok is True
+
+
+def test_check_binary_on_path_fails_when_missing():
+    result = check_binary_on_path("ffmpeg", which=lambda name: None)
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "ffmpeg" in result.detail
+
+
+def test_check_importable_ok_when_found():
+    result = check_importable("supabase", find_spec=lambda mod: object())
+
+    assert result.ok is True
+    assert result.severity == BLOCK
+
+
+def test_check_importable_fails_when_missing():
+    result = check_importable("supabase", find_spec=lambda mod: None)
+
+    assert result.ok is False
+
+
+def test_check_pijuice_importable_is_warn_severity():
+    result = check_pijuice_importable(find_spec=lambda mod: None)
+
+    assert result.severity == WARN
+    assert result.ok is False
+
+
+def _completed(returncode: int, stdout: str = "") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+
+
+def test_check_camera_detected_ok_when_camera_listed():
+    result = check_camera_detected(
+        run=lambda args: _completed(
+            0, "Available cameras\n-----------------\n0 : imx708_wide [4608x2592]\n"
+        )
+    )
+
+    assert result.ok is True
+    assert result.severity == BLOCK
+
+
+def test_check_camera_detected_fails_when_none_listed():
+    result = check_camera_detected(
+        run=lambda args: _completed(0, "Available cameras\n-----------------\n")
+    )
+
+    assert result.ok is False
+
+
+def test_check_camera_detected_fails_when_command_errors():
+    result = check_camera_detected(run=lambda args: _completed(1, ""))
+
+    assert result.ok is False
+
+
+def test_check_networkmanager_running_ok_on_zero_exit():
+    result = check_networkmanager_running(run=lambda args: _completed(0, "connected"))
+
+    assert result.ok is True
+    assert result.severity == BLOCK
+
+
+def test_check_networkmanager_running_fails_on_nonzero_exit():
+    result = check_networkmanager_running(run=lambda args: _completed(1, ""))
+
+    assert result.ok is False
+
+
+def test_check_data_dir_writable_ok_for_existing_writable_dir(tmp_path):
+    result = check_data_dir_writable(path=tmp_path)
+
+    assert result.ok is True
+    assert result.severity == BLOCK
+
+
+def test_check_data_dir_writable_fails_when_missing(tmp_path):
+    result = check_data_dir_writable(path=tmp_path / "does-not-exist")
+
+    assert result.ok is False
+
+
+def test_check_i2c_enabled_ok_when_device_exists(tmp_path):
+    fake_i2c = tmp_path / "i2c-1"
+    fake_i2c.touch()
+
+    result = check_i2c_enabled(path=fake_i2c)
+
+    assert result.ok is True
+    assert result.severity == WARN
+
+
+def test_check_i2c_enabled_fails_when_device_missing(tmp_path):
+    result = check_i2c_enabled(path=tmp_path / "i2c-1")
+
+    assert result.ok is False
+    assert result.severity == WARN
+
+
+def _raise(exc):
+    raise exc
+
+
+def test_check_camera_detected_fails_when_binary_missing():
+    result = check_camera_detected(
+        run=lambda args: _raise(FileNotFoundError("rpicam-hello not found"))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "rpicam-hello" in result.detail
+    assert "unavailable" in result.detail
+
+
+def test_check_camera_detected_fails_when_command_times_out():
+    result = check_camera_detected(
+        run=lambda args: _raise(subprocess.TimeoutExpired(cmd=args, timeout=5))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "timeout" in result.detail
+
+
+def test_check_camera_detected_fails_when_permission_denied():
+    result = check_camera_detected(
+        run=lambda args: _raise(PermissionError("permission denied"))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "unavailable" in result.detail
+
+
+def test_check_networkmanager_running_fails_when_binary_missing():
+    result = check_networkmanager_running(
+        run=lambda args: _raise(FileNotFoundError("nmcli not found"))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "nmcli" in result.detail
+    assert "unavailable" in result.detail
+
+
+def test_check_networkmanager_running_fails_when_command_times_out():
+    result = check_networkmanager_running(
+        run=lambda args: _raise(subprocess.TimeoutExpired(cmd=args, timeout=5))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "timeout" in result.detail
+
+
+def test_check_networkmanager_running_fails_when_permission_denied():
+    result = check_networkmanager_running(
+        run=lambda args: _raise(PermissionError("permission denied"))
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+    assert "unavailable" in result.detail
+
+
+def test_run_checks_includes_pijuice_and_i2c_when_battery_source_is_pijuice():
+    names = {r.name for r in run_checks("pijuice")}
+
+    assert "pijuice" in names
+    assert "i2c" in names
+
+
+def test_run_checks_excludes_pijuice_and_i2c_when_battery_source_is_none():
+    names = {r.name for r in run_checks("none")}
+
+    assert "pijuice" not in names
+    assert "i2c" not in names
+
+
+def test_has_blocking_failure_true_when_a_block_check_fails():
+    results = [
+        CheckResult(name="a", severity=BLOCK, ok=False, detail="x"),
+        CheckResult(name="b", severity=WARN, ok=True, detail="y"),
+    ]
+
+    assert has_blocking_failure(results) is True
+
+
+def test_has_blocking_failure_false_when_only_warn_checks_fail():
+    results = [
+        CheckResult(name="a", severity=BLOCK, ok=True, detail="x"),
+        CheckResult(name="b", severity=WARN, ok=False, detail="y"),
+    ]
+
+    assert has_blocking_failure(results) is False
+
+
+def test_format_report_marks_failures_with_severity_and_passes_as_ok():
+    results = [
+        CheckResult(name="a", severity=BLOCK, ok=True, detail="fine"),
+        CheckResult(name="b", severity=WARN, ok=False, detail="missing"),
+    ]
+
+    report = format_report(results)
+
+    assert "[OK] a: fine" in report
+    assert "[WARN] b: missing" in report
