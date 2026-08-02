@@ -20,10 +20,13 @@ Rather than restate the shell logic, each test extracts the real functions out
 of the script and runs them, so drift between script and test is impossible.
 """
 
+import hashlib
 import os
 import re
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -867,6 +870,33 @@ def test_uv_installer_is_version_pinned_and_checksum_verified():
     assert "astral.sh/uv/install.sh" not in text, "the unpinned installer URL must not be piped to sh"
 
 
+def test_the_pinned_digest_matches_what_astral_actually_serves():
+    # A digest that is merely well-formed proves nothing: a typo, a bad
+    # copy-paste, or a version bump that moved UV_VERSION without moving
+    # UV_INSTALLER_SHA256 all leave the pin syntactically perfect and make
+    # every device's step 4 abort at the checksum. Fetch the real artifact and
+    # compare. A mismatch here is also the signal that upstream re-published
+    # that URL's contents, which is exactly what pinning exists to catch.
+    version = re.search(r'^UV_VERSION="([^"]+)"$', _script_text(), re.MULTILINE).group(1)
+    expected = re.search(r'^UV_INSTALLER_SHA256="([^"]+)"$', _script_text(), re.MULTILINE).group(1)
+    url = f"https://astral.sh/uv/{version}/install.sh"
+    # astral.sh answers urllib's default User-Agent with 403, so send the one
+    # the script's own curl invocation would - otherwise this test looks like a
+    # network outage and skips itself on every run.
+    request = urllib.request.Request(url, headers={"User-Agent": "curl/8"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        pytest.skip(f"cannot reach {url} ({exc}) - the pin was not verified against upstream")
+
+    assert hashlib.sha256(payload).hexdigest() == expected, (
+        f"{url} no longer hashes to the digest pinned in setup-device.sh. Either the "
+        f"pin is wrong and every device will abort at step 4, or upstream changed the "
+        f"artifact - re-record it deliberately, do not paste the new value in blind."
+    )
+
+
 def test_uv_installs_to_a_directory_later_runs_can_actually_see():
     # The installer's default is ${HOME}/.local/bin, which is root's home after
     # the re-exec and is on no later run's PATH, because sudo hands the script
@@ -918,3 +948,90 @@ def test_uv_step_reuses_an_existing_install_instead_of_downloading_again(tmp_pat
     assert "CURL_WAS_CALLED" not in result.stderr, "an installed uv must not be downloaded again"
     assert "reusing it, nothing downloaded" in result.stdout
     assert "uv 0.0.0-stub" in result.stdout, "the reused uv has to end up on PATH"
+
+
+# --------------------------------------------------------------------------
+# Step 1's swap sizing. `set -euo pipefail` is on from line 2, so every value
+# CONF_SWAPSIZE can legitimately hold has to survive an arithmetic comparison:
+# "auto", "1024M", a trailing comment, or the key being absent entirely. Any of
+# those aborting takes the whole provision down at the first step, before a
+# single package is installed - and dphys-swapfile itself accepts them.
+# --------------------------------------------------------------------------
+
+
+def _run_swap_step(tmp_path: Path, conf_text: str | None) -> subprocess.CompletedProcess:
+    """Run the real step 1, with only its three path constants redirected."""
+    conf = tmp_path / "dphys-swapfile"
+    if conf_text is not None:
+        conf.write_text(conf_text)
+    block = _step_block(1)
+    for name, value in (
+        ("SWAP_CONF", str(conf)),
+        # Absent on purpose: the dphys-swapfile branch is the one under test,
+        # and it is checked first, so these must not exist.
+        ("RPI_SWAP_CONF", str(tmp_path / "no-rpi-swap.conf")),
+        ("RPI_SWAP_DROPIN", str(tmp_path / "no-rpi-swap.conf.d" / "10-visio.conf")),
+    ):
+        block, count = re.subn(rf'^{name}="[^"]*"$', f'{name}="{value}"', block, flags=re.MULTILINE)
+        assert count == 1, f"{name} is no longer a single quoted assignment in step 1"
+
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    systemctl = stubs / "systemctl"
+    systemctl.write_text('#!/bin/sh\necho "SYSTEMCTL $*"\n')
+    systemctl.chmod(0o755)
+
+    snippet = "\n".join([_extract_function("log"), "reboot_needed=false", block])
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "auto",  # dphys-swapfile's own "size it from RAM" setting
+        "1024M",  # a unit suffix, which the file's own comments use
+        "512 # bumped by hand during bring-up",
+        '"1024"',  # quoted, the way the env file's keys are
+        "",  # CONF_SWAPSIZE= with nothing after it
+    ],
+)
+def test_a_non_numeric_swap_size_does_not_abort_the_run(tmp_path, value):
+    result = _run_swap_step(tmp_path, f"CONF_SWAPSIZE={value}\n")
+
+    assert result.returncode == 0, f"step 1 aborted on CONF_SWAPSIZE={value!r}: {result.stderr}"
+    assert "not a plain integer" in result.stdout
+    # Treated as 0, so the script goes on to write the size it guarantees.
+    assert (tmp_path / "dphys-swapfile").read_text() == "CONF_SWAPSIZE=1024\n"
+
+
+def test_a_missing_swap_size_key_does_not_abort_the_run(tmp_path):
+    # grep matches nothing, and pipefail makes that a failure without the
+    # script's `|| true`; the empty string then reaches the comparison.
+    result = _run_swap_step(tmp_path, "# CONF_SWAPSIZE is commented out\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "missing or not a plain integer" in result.stdout
+
+
+def test_a_swap_size_below_the_floor_is_raised_without_complaint(tmp_path):
+    result = _run_swap_step(tmp_path, "CONF_SWAPSIZE=100\nCONF_SWAPFILE=/var/swap\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "not a plain integer" not in result.stdout, "100 is a plain integer"
+    assert "increased to 1024MB" in result.stdout
+    assert (tmp_path / "dphys-swapfile").read_text() == "CONF_SWAPSIZE=1024\nCONF_SWAPFILE=/var/swap\n"
+
+
+def test_a_sufficient_swap_size_is_left_alone(tmp_path):
+    result = _run_swap_step(tmp_path, "CONF_SWAPSIZE=2048\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "no change needed" in result.stdout
+    assert "SYSTEMCTL" not in result.stdout, "nothing to restart when nothing changed"
+    assert (tmp_path / "dphys-swapfile").read_text() == "CONF_SWAPSIZE=2048\n"

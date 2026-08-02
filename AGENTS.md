@@ -6,7 +6,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Python projects: `[build-system]` is not optional
 
-The repo has four independent uv projects (`firmware/`, `pipeline/`, `integration/`, plus the app's JS toolchain).
+The repo has three independent uv projects (`firmware/`, `pipeline/`, `integration/`), so check each one separately.
 A `pyproject.toml` with no `[build-system]` table makes uv classify the project as **virtual**: it installs the dependencies and never installs the project's own package.
 `uv.lock` records this as `source = { virtual = "." }` (versus `editable = "."`), which is the fastest way to check.
 The package then imports only via the implicit current-directory entry `python -m` puts on `sys.path[0]`, so anything invoked from another directory - a console script, a systemd unit without a matching `WorkingDirectory=`, an operator over SSH - fails with `ModuleNotFoundError`.

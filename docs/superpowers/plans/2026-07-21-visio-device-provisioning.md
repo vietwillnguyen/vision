@@ -1009,6 +1009,9 @@ curl -fsSL https://raw.githubusercontent.com/vietwillnguyen/vision/main/firmware
 sudo bash setup-device.sh
 ```
 
+A script fetched by `curl` is not in a git checkout, so step 5/10 prints a loud WARNING that it is falling back to the moving `main` - expected here, and also why this form cannot verify a pre-merge branch.
+To provision an exact revision, clone the repo on the Pi and run `firmware/scripts/setup-device.sh` from that clone (it defaults to the clone's own commit), or set `VISIO_GIT_REF=<branch|tag|sha>` in the root environment the script runs in.
+
 Expected first run (env file doesn't exist yet): script exits 0 after writing `/etc/visio-recorder.env`, printing "fill in SUPABASE_URL and SUPABASE_ANON_KEY, then re-run this script".
 
 - [ ] **Step 2: Fill in secrets and re-run**
@@ -1018,7 +1021,7 @@ sudo nano /etc/visio-recorder.env   # fill in SUPABASE_URL, SUPABASE_ANON_KEY; l
 sudo bash setup-device.sh
 ```
 
-Expected: completes through all 8 steps; summary reports `VISIO_BATTERY_SOURCE=none` with the bring-up reminder, and states whether a reboot is required.
+Expected: completes through all 10 steps; summary reports the provisioned commit SHA and `VISIO_BATTERY_SOURCE=none` with the bring-up reminder, and states whether a reboot is required.
 
 - [ ] **Step 3: Reboot if the summary said to**
 
@@ -1031,11 +1034,12 @@ Wait ~30s, then reconnect: `ssh <user>@visio-pendant.local`
 - [ ] **Step 4: Run preflight standalone and confirm no battery warnings**
 
 ```bash
-cd /opt/visio-recorder/firmware
-sudo /opt/visio-recorder/.venv/bin/python3 -m visio_recorder.preflight; echo "exit: $?"
+visio-preflight; echo "exit: $?"
 ```
 
-Expected: every line `[OK]`, no `pijuice`/`i2c` lines at all (skipped under `VISIO_BATTERY_SOURCE=none`), `exit: 0`. If anything shows `[BLOCK]`, stop here and fix it before proceeding - that's exactly the failure this task exists to catch before it becomes an opaque daemon crash.
+No `cd`, no venv path and no `sudo`: the setup script symlinks the console script into `/usr/local/bin` (see the README's firmware section).
+
+Expected: an opening `[INFO] install:` line naming `/opt/visio-recorder/firmware/visio_recorder`, then every check `[OK]`, no `pijuice`/`i2c` lines at all (skipped under `VISIO_BATTERY_SOURCE=none`), `exit: 0`. If anything shows `[BLOCK]`, stop here and fix it before proceeding - that's exactly the failure this task exists to catch before it becomes an opaque daemon crash.
 
 - [ ] **Step 5: Start the daemon and confirm it runs as root with no permission errors**
 

@@ -45,6 +45,9 @@ firmware/
   systemd/
     visio-recorder.service  # modified: root instead of User=pi, ExecStartPre= added,
                              # ExecStart/ExecStartPre point at the venv's python
+  pyproject.toml            # modified: [build-system], without which uv treats the
+                             # project as virtual and never installs visio_recorder;
+                             # plus the visio-preflight [project.scripts] entry point
 ```
 
 ### `firmware/scripts/setup-device.sh`
@@ -118,12 +121,12 @@ Wired in three places:
 
 Given the device's threat model (offline pendant, no other users, no exposed network services), full-root for a single-purpose daemon is a reasonable trade against maintaining two separate narrow-privilege mechanisms.
 
-This also surfaces and fixes a latent bug: the current unit's `ExecStart=/usr/bin/python3 -m visio_recorder.daemon` assumes a system-wide install, but `uv sync` (step 4 of the setup script) creates a project-local `.venv` under `/opt/visio-recorder`. Both `ExecStart` and the new `ExecStartPre` need to point at `/opt/visio-recorder/.venv/bin/python3` instead.
+This also surfaces and fixes a latent bug: the current unit's `ExecStart=/usr/bin/python3 -m visio_recorder.daemon` assumes a system-wide install, but `uv sync` (step 5 of the setup script) creates a project-local `.venv` at the uv project root, which is `firmware/` - not the repo root. Both `ExecStart` and the new `ExecStartPre` need to point at `/opt/visio-recorder/firmware/.venv/bin/python3` instead.
 
 ## Testing
 
 - **Unit tests** (no hardware): `preflight.py`'s individual check functions, following the existing fake-injection pattern — same treatment as every other hardware boundary in this codebase.
-- **`setup-device.sh`**: the OS-provisioning steps (apt, raspi-config, systemd) have no meaningful unit test and are validated by the physical integration testing below, run twice to confirm the idempotency claim. Two parts are testable off-device and are covered in `firmware/tests/test_setup_device.py`, which extracts the real shell functions out of the script and runs them: the `~/.bashrc` managed block (a second run must be byte-identical, never an append) and the `VISIO_DEV_SHELL` gate. `shellcheck` runs on the script in CI (`.github/workflows/lint.yml`).
+- **`setup-device.sh`**: the OS-provisioning steps (apt, raspi-config, systemd) have no meaningful unit test and are validated by the physical integration testing below, run twice to confirm the idempotency claim. The pure-bash parts are testable off-device and are covered in `firmware/tests/test_setup_device.py`, which extracts the real shell functions out of the script and runs them: the `~/.bashrc` managed block (a second run must be byte-identical, never an append; a block whose end marker was hand-deleted is refused rather than truncating the file), the `VISIO_DEV_SHELL` gate and the `EnvironmentFile` parsing it reads through, the step ordering that gate depends on, the pinned-and-checksum-verified `uv` install, and revision resolution and convergence exercised against a real local git repo. `shellcheck` runs on the script in CI (`.github/workflows/lint.yml`).
 - **Physical Pi Zero 2W integration testing** (now available, running on a USB power bank per the battery-hardware deferral above): run `setup-device.sh` on the real device end to end, confirm `preflight.py` passes cleanly afterward with `VISIO_BATTERY_SOURCE=none` and no battery-related warnings printed, then exercise the risk list from the earlier assessment - camera detection, LED driver under root, QR onboarding round-trip, NM keyfile write + `nmcli` activation, flag-button debounce, a full capture/mux/upload cycle, restart/crash recovery, and power-loss resilience. The PiJuice-specific checks (I2C read, low-battery/critical LED thresholds) are deferred until real battery hardware is sourced.
 
 ## Open Questions / Future Work
