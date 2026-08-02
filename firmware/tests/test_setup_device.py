@@ -10,10 +10,17 @@ wrong, so they are pinned here:
 * the ``VISIO_DEV_SHELL`` gate that lets an appliance image opt out, including
   the step ordering that makes it reachable at all.
 
+A third class is pinned here too: the failure signalling of the steps that can
+report success while having done nothing. Provisioning that resolves a stale
+revision, a gate that reads a quoted value as its opposite, and a strip that
+truncates the operator's file are all silent, so each has a test that asserts
+the loud outcome rather than the happy path.
+
 Rather than restate the shell logic, each test extracts the real functions out
 of the script and runs them, so drift between script and test is impossible.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -45,6 +52,26 @@ def _extract_constants() -> str:
     )
 
 
+def _extract_assignment(name: str) -> str:
+    match = re.search(rf"^{re.escape(name)}=.*$", _script_text(), re.MULTILINE)
+    assert match, f"{name}= not found in {_SCRIPT} - did it get renamed?"
+    return match.group(0)
+
+
+def _marker(name: str) -> str:
+    """The literal begin/end line the script writes, as the script defines it."""
+    match = re.search(rf'^BASHRC_{name}="(.*)"$', _script_text(), re.MULTILINE)
+    assert match, f"BASHRC_{name} not found in {_SCRIPT}"
+    return match.group(1)
+
+
+def _step_block(step: int) -> str:
+    """Everything the script does between step ``step`` and the step after it."""
+    text = _script_text()
+    start = text.index(f'log "Step {step}/10: ')
+    return text[start : text.index(f'log "Step {step + 1}/10: ', start)]
+
+
 def _extract_bashrc_body() -> str:
     match = re.search(
         r"dev_shell_body=.*?<<'BASHRC_BODY'\n(.*?)\nBASHRC_BODY\n", _script_text(), re.DOTALL
@@ -56,7 +83,14 @@ def _extract_bashrc_body() -> str:
 def _shell_lib(tmp_path: Path, *functions: str) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     lib = tmp_path / "extracted.sh"
-    lib.write_text(_extract_constants() + "\n" + "\n".join(_extract_function(f) for f in functions) + "\n")
+    # log() comes along unconditionally: the error paths under test call it, and
+    # a missing log would abort them at 127 before they could report anything.
+    lib.write_text(
+        _extract_constants()
+        + "\n"
+        + "\n".join(_extract_function(f) for f in ("log", *functions))
+        + "\n"
+    )
     return lib
 
 
@@ -191,6 +225,81 @@ def test_removing_and_rewriting_the_block_round_trips_to_the_same_bytes(tmp_path
     assert cycled.read_bytes() == once.read_bytes()
 
 
+# --------------------------------------------------------------------------
+# A begin marker with no end marker. "Skip to EOF" would delete every personal
+# setting below it, permanently and silently, on the next run - so both paths
+# must refuse the file instead of rewriting it.
+# --------------------------------------------------------------------------
+
+_UNTERMINATED_BASHRC = f"""\
+# ~/.bashrc
+{_marker("BEGIN")}
+alias ll='ls -la'
+export OPERATOR_SETTING=1
+"""
+
+
+def test_writing_refuses_a_managed_block_with_no_end_marker(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_UNTERMINATED_BASHRC)
+    lib = _shell_lib(
+        tmp_path / "lib", "strip_managed_block", "warn_unterminated_block", "write_managed_block"
+    )
+    body = tmp_path / "body.txt"
+    body.write_text(_extract_bashrc_body())
+    snippet = "\n".join(
+        [
+            f'body="$(cat "{body}")"',
+            f'if write_managed_block "{rc}" "$body" "$(id -un):$(id -gn)"; then',
+            "  echo WROTE",
+            "else",
+            "  echo REFUSED",
+            "fi",
+        ]
+    )
+
+    result = _run(lib, snippet)
+
+    assert result.returncode == 0, result.stderr
+    assert "REFUSED" in result.stdout
+    assert "no matching end marker" in result.stdout
+    assert rc.read_text() == _UNTERMINATED_BASHRC, "the operator's settings must survive"
+    assert not (tmp_path / ".bashrc.visio-setup.tmp").exists()
+
+
+def test_removing_refuses_a_managed_block_with_no_end_marker(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_UNTERMINATED_BASHRC)
+    lib = _shell_lib(
+        tmp_path / "lib", "strip_managed_block", "warn_unterminated_block", "remove_managed_block"
+    )
+    snippet = "\n".join(
+        [
+            f'if remove_managed_block "{rc}" "$(id -un):$(id -gn)"; then',
+            "  echo REMOVED",
+            "else",
+            "  echo REFUSED",
+            "fi",
+        ]
+    )
+
+    result = _run(lib, snippet)
+
+    assert result.returncode == 0, result.stderr
+    assert "REFUSED" in result.stdout
+    assert rc.read_text() == _UNTERMINATED_BASHRC
+    assert not (tmp_path / ".bashrc.visio-setup.tmp").exists()
+
+
+def test_a_refused_bashrc_rewrite_does_not_abort_the_run():
+    # Same rule as the unresolvable-user guard: an optional convenience must
+    # never cost the data dir and the summary that follow it.
+    step = _dev_shell_step()
+
+    assert "if write_managed_block" in step
+    assert "if remove_managed_block" in step
+
+
 def test_generated_bashrc_is_valid_bash_and_defines_the_conveniences(tmp_path):
     rc = tmp_path / ".bashrc"
     rc.write_text(_EXISTING_BASHRC)
@@ -214,33 +323,69 @@ def test_generated_bashrc_is_valid_bash_and_defines_the_conveniences(tmp_path):
     assert "function" in sourced.stdout
 
 
-@pytest.mark.parametrize("value", ["0", "no", "off", "false", "FALSE", "Off"])
+# The env file is a systemd EnvironmentFile, where quoting the value is both
+# valid and idiomatic - and unavoidable once SUPABASE_ANON_KEY is a real JWT.
+# A gate that reads VISIO_DEV_SHELL="0" as anything but 0 ships a pendant with
+# a dev toolchain on it, silently, which is the outcome the gate exists to
+# prevent. So the quoted and space-padded spellings are pinned on both sides.
+_GATE = ("env_file_value", "dev_shell_enabled")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0", "no", "off", "false", "FALSE", "Off", "NO", '"0"', "'0'", '"off"', "0 ", " 0", " false "],
+)
 def test_dev_shell_gate_is_disabled_for_falsey_values(tmp_path, value):
     env_file = tmp_path / "visio-recorder.env"
     env_file.write_text(f"SUPABASE_URL=x\nVISIO_DEV_SHELL={value}\n")
 
-    result = _run(_shell_lib(tmp_path, "dev_shell_enabled"), "dev_shell_enabled", env_file)
+    result = _run(_shell_lib(tmp_path, *_GATE), "dev_shell_enabled", env_file)
 
     assert result.returncode == 1
 
 
-@pytest.mark.parametrize("value", ["1", "yes", "true", ""])
+@pytest.mark.parametrize(
+    "value", ["1", "yes", "true", "", '"1"', "'yes'", '"true"', "1 ", '""', "TRUE"]
+)
 def test_dev_shell_gate_is_enabled_for_truthy_values(tmp_path, value):
     env_file = tmp_path / "visio-recorder.env"
     env_file.write_text(f"VISIO_DEV_SHELL={value}\n")
 
-    result = _run(_shell_lib(tmp_path, "dev_shell_enabled"), "dev_shell_enabled", env_file)
+    result = _run(_shell_lib(tmp_path, *_GATE), "dev_shell_enabled", env_file)
 
     assert result.returncode == 0
 
 
 def test_dev_shell_gate_defaults_to_enabled_when_key_or_file_is_absent(tmp_path):
-    lib = _shell_lib(tmp_path, "dev_shell_enabled")
+    lib = _shell_lib(tmp_path, *_GATE)
     without_key = tmp_path / "visio-recorder.env"
     without_key.write_text("SUPABASE_URL=x\n")
 
     assert _run(lib, "dev_shell_enabled", without_key).returncode == 0
     assert _run(lib, "dev_shell_enabled", tmp_path / "missing.env").returncode == 0
+
+
+def test_quoted_but_empty_supabase_values_are_reported_as_missing(tmp_path):
+    # Same parser, same class of bug: SUPABASE_ANON_KEY="" is empty as far as
+    # the daemon is concerned, so the env-file check must not let it through on
+    # the strength of the two quote characters.
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text('SUPABASE_URL="https://x.supabase.co"\nSUPABASE_ANON_KEY=""\n')
+
+    result = _run(_shell_lib(tmp_path, "env_file_value"), _step_block(7), env_file)
+
+    assert result.returncode == 1
+    assert "missing values for: SUPABASE_ANON_KEY" in result.stdout
+
+
+def test_quoted_supabase_values_satisfy_the_env_file_check(tmp_path):
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text('SUPABASE_URL="https://x.supabase.co"\nSUPABASE_ANON_KEY="ey.a.jwt"\n')
+
+    result = _run(_shell_lib(tmp_path, "env_file_value"), _step_block(7), env_file)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "already configured" in result.stdout
 
 
 def test_env_file_template_documents_the_dev_shell_switch():
@@ -471,6 +616,80 @@ def test_checkout_revision_fails_on_an_unresolvable_ref(tmp_path, origin):
 
     assert result.returncode != 0
     assert result.stdout.strip() == ""
+    # The two failures need different operator advice - push your branch versus
+    # fix your network - so they must not report each other.
+    assert "fetching" not in result.stderr
+
+
+@pytest_git
+def test_checkout_revision_fails_loudly_when_the_fetch_fails(tmp_path, origin):
+    # The case that otherwise reports success on stale firmware. The install dir
+    # already carries a remote-tracking origin/main from an earlier run, so an
+    # unchecked fetch failure falls straight through to rev-parse, resolves that
+    # OLD commit, prints it and returns 0 - and the script logs "Provisioned
+    # revision <old sha>" over a device that never received the new firmware.
+    repo, _, second = origin
+    install = tmp_path / "opt"
+    _checkout(tmp_path, install, repo, "main")
+    assert _git(install, "rev-parse", "refs/remotes/origin/main") == second
+    (repo / "firmware.txt").write_text("v3\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "v3")
+    third = _git(repo, "rev-parse", "HEAD")
+
+    result = _checkout(tmp_path / "second", install, tmp_path / "unreachable-origin", "main")
+
+    assert result.returncode != 0
+    assert result.stdout.strip() == "", "a SHA on stdout is read by the caller as a good provision"
+    assert second not in result.stdout and third not in result.stdout
+    assert "fetching" in result.stderr
+    assert (install / "firmware.txt").read_text() == "v2\n", "the checkout is left where it was"
+
+
+@pytest_git
+def test_checkout_revision_fails_loudly_when_the_clone_fails(tmp_path):
+    install = tmp_path / "opt"
+
+    result = _checkout(tmp_path, install, tmp_path / "unreachable-origin", "main")
+
+    assert result.returncode != 0
+    assert result.stdout.strip() == ""
+    assert "cloning" in result.stderr
+
+
+@pytest_git
+def test_checkout_revision_fails_loudly_when_the_install_dir_is_not_a_healthy_repo(tmp_path, origin):
+    # A .git that is not a repository takes the update path rather than the
+    # clone path, so the first git command to run is `remote set-url`.
+    repo, _, _ = origin
+    install = tmp_path / "opt"
+    (install / ".git").mkdir(parents=True)
+
+    result = _checkout(tmp_path, install, repo, "main")
+
+    assert result.returncode != 0
+    assert result.stdout.strip() == ""
+    assert "origin remote" in result.stderr
+
+
+@pytest_git
+@pytest.mark.skipif(os.geteuid() == 0, reason="a read-only directory does not stop root")
+def test_checkout_revision_fails_loudly_when_the_working_tree_cannot_be_written(tmp_path, origin):
+    # Stands in for the disk-full checkout: fetch succeeds and the ref resolves,
+    # so an unchecked `git checkout` leaves the tree on the old revision while
+    # the function prints the new SHA - and uv sync then installs from it.
+    repo, first, second = origin
+    install = tmp_path / "opt"
+    _checkout(tmp_path, install, repo, first)
+    install.chmod(0o555)
+    try:
+        result = _checkout(tmp_path / "second", install, repo, "main")
+    finally:
+        install.chmod(0o755)
+
+    assert result.returncode != 0
+    assert second not in result.stdout
+    assert (install / "firmware.txt").read_text() == "v1\n"
 
 
 @pytest_git
@@ -490,3 +709,56 @@ def test_uv_installer_is_version_pinned_and_checksum_verified():
     assert re.search(r'^UV_INSTALLER_SHA256="[0-9a-f]{64}"$', text, re.MULTILINE)
     assert "sha256sum --check --status" in text
     assert "astral.sh/uv/install.sh" not in text, "the unpinned installer URL must not be piped to sh"
+
+
+def test_uv_installs_to_a_directory_later_runs_can_actually_see():
+    # The installer's default is ${HOME}/.local/bin, which is root's home after
+    # the re-exec and is on no later run's PATH, because sudo hands the script
+    # `secure_path`. Installing there makes every re-run download again.
+    text = _script_text()
+
+    assert 'UV_INSTALL_DIR="${BIN_DIR}"' in text
+    assert 'BIN_DIR="/usr/local/bin"' in text, "the install dir has to be on sudo's secure_path"
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    assert "${HOME}/.local/bin" not in code
+
+
+def test_uv_step_reuses_an_existing_install_instead_of_downloading_again(tmp_path):
+    # An operator re-runs this on a device with no working internet to repair
+    # drift - the one scenario the rest of the script tolerates, since the git
+    # checkout converges from cache. A curl that is never called is the point.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    installed = bin_dir / "uv"
+    installed.write_text("#!/bin/sh\necho 'uv 0.0.0-stub'\n")
+    installed.chmod(0o755)
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    curl = stubs / "curl"
+    curl.write_text("#!/bin/sh\necho CURL_WAS_CALLED >&2\nexit 1\n")
+    curl.chmod(0o755)
+
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            _extract_assignment("UV_VERSION"),
+            _extract_assignment("UV_INSTALLER_SHA256"),
+            f'BIN_DIR="{bin_dir}"',
+            # PATH deliberately excludes ${BIN_DIR}, the way sudo's secure_path
+            # excludes wherever the installer's default would have put it.
+            _step_block(4),
+            "uv --version",
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin", "HOME": str(tmp_path / "home")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "CURL_WAS_CALLED" not in result.stderr, "an installed uv must not be downloaded again"
+    assert "reusing it, nothing downloaded" in result.stdout
+    assert "uv 0.0.0-stub" in result.stdout, "the reused uv has to end up on PATH"

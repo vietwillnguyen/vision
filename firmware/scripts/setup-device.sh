@@ -190,7 +190,20 @@ else
 fi
 
 log "Step 4/10: uv"
-if ! command -v uv >/dev/null 2>&1; then
+# The installer's own default is ${HOME}/.local/bin, which is root's home after
+# the re-exec above and is on no later run's PATH: sudo hands this script
+# `secure_path`, so `command -v uv` would miss it and re-download, re-verify and
+# re-run the installer on every pass - and hard-fail at curl on a device with no
+# network, which is exactly when an operator re-runs this to repair drift.
+# ${BIN_DIR} is on secure_path and on a login shell's PATH, so the install is
+# found again by this script, by the operator, and by anything else on the box.
+export UV_INSTALL_DIR="${BIN_DIR}"
+if command -v uv >/dev/null 2>&1; then
+  log "uv already installed at $(command -v uv) ($(uv --version 2>/dev/null || echo 'version unknown')) - reusing it, nothing downloaded"
+elif [[ -x "${UV_INSTALL_DIR}/uv" ]]; then
+  export PATH="${UV_INSTALL_DIR}:${PATH}"
+  log "uv already installed at ${UV_INSTALL_DIR}/uv ($(uv --version 2>/dev/null || echo 'version unknown')) - reusing it, nothing downloaded"
+else
   uv_installer="$(mktemp)"
   curl --proto '=https' --tlsv1.2 -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" -o "${uv_installer}"
   if ! printf '%s  %s\n' "${UV_INSTALLER_SHA256}" "${uv_installer}" | sha256sum --check --status; then
@@ -203,10 +216,8 @@ if ! command -v uv >/dev/null 2>&1; then
   # No PATH edits in root's shell rc files; this script sets PATH itself below.
   INSTALLER_NO_MODIFY_PATH=1 sh "${uv_installer}"
   rm -f "${uv_installer}"
-  export PATH="${HOME}/.local/bin:${PATH}"
-  log "uv ${UV_VERSION} installed (checksum verified)"
-else
-  log "uv already installed ($(uv --version 2>/dev/null || echo 'version unknown'))"
+  export PATH="${UV_INSTALL_DIR}:${PATH}"
+  log "uv ${UV_VERSION} installed to ${UV_INSTALL_DIR} (checksum verified)"
 fi
 
 # Bring an install dir to the exact commit a ref names, cloning it first if
@@ -220,16 +231,32 @@ fi
 # non-zero with the checkout left at whatever revision it already had - on a
 # fresh device, that means the clone exists at origin's default branch. Nothing
 # is installed from it either way, and the next run converges.
+#
+# Every git command is checked by hand rather than left to `set -e`: the caller
+# below tests this function's exit status, which suppresses errexit for its
+# whole body. Unchecked, a failed fetch would fall through to rev-parse, resolve
+# the STALE remote-tracking ref left by the last successful fetch, print that
+# SHA and return 0 - reporting a successful provision of firmware the device
+# does not have. Diagnostics go to stderr; stdout carries only the SHA.
 checkout_revision() {
   local install_dir="$1" repo_url="$2" ref="$3" sha="" candidate
   if [[ -d "${install_dir}/.git" ]]; then
-    git -C "${install_dir}" remote set-url origin "${repo_url}"
-  else
-    git clone "${repo_url}" "${install_dir}"
+    if ! git -C "${install_dir}" remote set-url origin "${repo_url}"; then
+      log "ERROR: cannot point ${install_dir}'s origin remote at ${repo_url}. Is ${install_dir} a healthy git checkout?" >&2
+      return 1
+    fi
+  elif ! git clone "${repo_url}" "${install_dir}"; then
+    log "ERROR: cloning ${repo_url} into ${install_dir} failed. Check network access, DNS and credentials, then re-run - nothing was installed." >&2
+    return 1
   fi
   # Fetch every branch and tag explicitly rather than trusting the clone's
   # configured refspec, so a tag or SHA passed via VISIO_GIT_REF resolves too.
-  git -C "${install_dir}" fetch --prune --tags --force origin '+refs/heads/*:refs/remotes/origin/*'
+  if ! git -C "${install_dir}" fetch --prune --tags --force origin '+refs/heads/*:refs/remotes/origin/*'; then
+    log "ERROR: fetching from ${repo_url} failed, so this run cannot know what '${ref}' points at now." >&2
+    log "  ${install_dir} has been left on its current revision rather than provisioned from a stale copy of '${ref}'." >&2
+    log "  This is a network, DNS or credentials problem, not a bad ref. Fix connectivity and re-run." >&2
+    return 1
+  fi
   # origin/<ref> first: a stale local branch of the same name must never win.
   for candidate in "refs/remotes/origin/${ref}" "${ref}"; do
     if sha="$(git -C "${install_dir}" rev-parse --verify --quiet "${candidate}^{commit}")"; then
@@ -237,8 +264,14 @@ checkout_revision() {
     fi
   done
   [[ -n "${sha}" ]] || return 1
-  git -C "${install_dir}" checkout --force --detach "${sha}"
-  git -C "${install_dir}" reset --hard --quiet "${sha}"
+  if ! git -C "${install_dir}" checkout --force --detach "${sha}"; then
+    log "ERROR: checking out ${sha} in ${install_dir} failed - the checkout is NOT at the requested revision. Check free disk space and file permissions." >&2
+    return 1
+  fi
+  if ! git -C "${install_dir}" reset --hard --quiet "${sha}"; then
+    log "ERROR: resetting ${install_dir} to ${sha} failed - tracked files may still carry local edits. Check free disk space and file permissions." >&2
+    return 1
+  fi
   printf '%s\n' "${sha}"
 }
 
@@ -275,6 +308,27 @@ cp "${INSTALL_DIR}/${SYSTEMD_UNIT_SRC}" "${SYSTEMD_UNIT_DST}"
 systemctl daemon-reload
 systemctl enable visio-recorder
 
+# Read one key out of ${ENV_FILE} the way systemd reads it as an
+# EnvironmentFile: the last assignment wins, and surrounding whitespace plus one
+# layer of matching quotes are not part of the value. Quoting is idiomatic there
+# and will be unavoidable once SUPABASE_ANON_KEY is a real JWT, so every reader
+# below goes through this - otherwise this script and the daemon can disagree
+# about what a key is set to, and the disagreement is silent.
+env_file_value() {
+  local key="$1" value=""
+  if [[ -f "${ENV_FILE}" ]]; then
+    value="$(grep -E "^${key}=" "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+  fi
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ "${#value}" -ge 2 ]]; then
+    case "${value}" in
+      \"*\" | \'*\') value="${value:1:${#value}-2}" ;;
+    esac
+  fi
+  printf '%s\n' "${value}"
+}
+
 log "Step 7/10: env file"
 if [[ ! -f "${ENV_FILE}" ]]; then
   cat > "${ENV_FILE}" <<'EOF'
@@ -304,8 +358,7 @@ EOF
 else
   missing=()
   for key in SUPABASE_URL SUPABASE_ANON_KEY; do
-    value="$(grep -E "^${key}=" "${ENV_FILE}" | cut -d= -f2- || true)"
-    if [[ -z "${value}" ]]; then
+    if [[ -z "$(env_file_value "${key}")" ]]; then
       missing+=("${key}")
     fi
   done
@@ -323,12 +376,14 @@ log "Step 8/10: developer shell"
 # it, so nothing is installed before the operator has had the chance to see
 # and flip it. Defaults to enabled when the file or the key is absent.
 dev_shell_enabled() {
-  local value=""
-  if [[ -f "${ENV_FILE}" ]]; then
-    value="$(grep -E '^VISIO_DEV_SHELL=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
-  fi
-  case "${value:-1}" in
-    0 | no | No | NO | off | Off | OFF | false | False | FALSE) return 1 ;;
+  local value
+  # Read through env_file_value and case-fold, so VISIO_DEV_SHELL="0" - valid,
+  # and 0 as far as the daemon is concerned - cannot silently leave the dev
+  # shell enabled on a device meant to ship without one.
+  value="$(env_file_value VISIO_DEV_SHELL)"
+  case "${value,,}" in
+    "") return 0 ;;
+    0 | no | off | false) return 1 ;;
     *) return 0 ;;
   esac
 }
@@ -337,6 +392,12 @@ dev_shell_enabled() {
 # reproduced byte-for-byte. A file with no block, or no file at all, yields
 # the file's own contents unchanged. Shared by the write and remove paths so
 # both agree on exactly what "the block" is.
+#
+# A begin marker with no matching end marker - a hand-edit that deleted or
+# mangled the terminator - is refused rather than treated as "skip to EOF",
+# which would silently delete every personal setting below it. Refusing to
+# touch a file we cannot parse is the right failure mode when the alternative
+# is unrecoverable data loss in someone's ~/.bashrc.
 strip_managed_block() {
   local file="$1"
   [[ -f "${file}" ]] || return 0
@@ -344,7 +405,15 @@ strip_managed_block() {
     $0 == begin { skip = 1 }
     skip != 1   { print }
     $0 == end   { skip = 0 }
+    END         { if (skip == 1) exit 3 }
   ' "${file}"
+}
+
+# Shared refusal message for the two callers below.
+warn_unterminated_block() {
+  local file="$1"
+  log "ERROR: ${file} contains '${BASHRC_BEGIN}' with no matching end marker, so this script cannot tell where the managed block stops."
+  log "  Leaving ${file} untouched. Repair the block by re-adding '${BASHRC_END}' after it, or delete the block by hand, then re-run."
 }
 
 # Replace this script's managed block in $1 with $2, leaving every other line
@@ -355,7 +424,10 @@ write_managed_block() {
   tmp="${file}.visio-setup.tmp"
   # Command substitution strips every trailing newline; exactly one blank
   # separator line is then re-added, so the result is a fixed point.
-  stripped="$(strip_managed_block "${file}")"
+  if ! stripped="$(strip_managed_block "${file}")"; then
+    warn_unterminated_block "${file}"
+    return 1
+  fi
   {
     if [[ -n "${stripped}" ]]; then
       printf '%s\n\n' "${stripped}"
@@ -377,7 +449,10 @@ remove_managed_block() {
   [[ -f "${file}" ]] || return 0
   grep -qxF "${BASHRC_BEGIN}" "${file}" || return 0
   tmp="${file}.visio-setup.tmp"
-  stripped="$(strip_managed_block "${file}")"
+  if ! stripped="$(strip_managed_block "${file}")"; then
+    warn_unterminated_block "${file}"
+    return 1
+  fi
   if [[ -n "${stripped}" ]]; then
     printf '%s\n' "${stripped}" > "${tmp}"
   else
@@ -404,8 +479,15 @@ elif ! dev_shell_enabled; then
   # from under an operator mid-bring-up is worse than leaving it - which is why
   # ${ENV_FILE} documents pre-seeding the key as the way to get a device that
   # never has the dev toolchain at all.
-  remove_managed_block "${dev_home}/.bashrc" "${dev_user}:${dev_group}"
-  log "VISIO_DEV_SHELL is disabled in ${ENV_FILE} - skipped the editor install and removed any managed block from ${dev_home}/.bashrc. Packages installed by an earlier run are left in place."
+  #
+  # A refusal to touch a malformed ~/.bashrc is reported by the function itself
+  # and must not abort the run: the data dir and summary below matter more than
+  # an optional convenience, exactly as for the unresolvable-user guard above.
+  if remove_managed_block "${dev_home}/.bashrc" "${dev_user}:${dev_group}"; then
+    log "VISIO_DEV_SHELL is disabled in ${ENV_FILE} - skipped the editor install and removed any managed block from ${dev_home}/.bashrc. Packages installed by an earlier run are left in place."
+  else
+    log "VISIO_DEV_SHELL is disabled in ${ENV_FILE} - skipped the editor install. Packages installed by an earlier run are left in place."
+  fi
 else
   # tmux earns its place here specifically: bring-up over SSH on a 512MB board
   # has already produced apparent hangs and dropped sessions, and a detached
@@ -538,15 +620,16 @@ PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\[\033[01;33m
 BASHRC_BODY
 )"
 
-  write_managed_block "${dev_home}/.bashrc" "${dev_shell_body}" "${dev_user}:${dev_group}"
-  log "Managed dev-shell block written to ${dev_home}/.bashrc (owner ${dev_user}:${dev_group})"
+  if write_managed_block "${dev_home}/.bashrc" "${dev_shell_body}" "${dev_user}:${dev_group}"; then
+    log "Managed dev-shell block written to ${dev_home}/.bashrc (owner ${dev_user}:${dev_group})"
+  fi
 fi
 
 log "Step 9/10: data dir"
 mkdir -p "${DATA_DIR}"
 
 log "Step 10/10: summary"
-battery_source="$(grep -E '^VISIO_BATTERY_SOURCE=' "${ENV_FILE}" | cut -d= -f2- || true)"
+battery_source="$(env_file_value VISIO_BATTERY_SOURCE)"
 battery_source="${battery_source:-pijuice}"
 log "Provisioned revision: ${target_sha}"
 log "VISIO_BATTERY_SOURCE=${battery_source}"
