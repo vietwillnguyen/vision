@@ -21,6 +21,7 @@ of the script and runs them, so drift between script and test is impossible.
 """
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -1035,3 +1036,323 @@ def test_a_sufficient_swap_size_is_left_alone(tmp_path):
     assert "no change needed" in result.stdout
     assert "SYSTEMCTL" not in result.stdout, "nothing to restart when nothing changed"
     assert (tmp_path / "dphys-swapfile").read_text() == "CONF_SWAPSIZE=2048\n"
+
+
+# --------------------------------------------------------------------------
+# Step 5's venv. ${PREFLIGHT_BIN} and the systemd unit's ExecStart/ExecStartPre
+# all run firmware/.venv/bin/python3, and the daemon's real drivers import
+# gpiozero, pijuice and rpi_ws281x - none of which are in
+# firmware/pyproject.toml, because they do not build off a Pi. `uv sync` alone
+# builds a venv that can import none of them: it is isolated from the system
+# site-packages, and uv resolves an interpreter it downloaded for itself rather
+# than /usr/bin/python3, whose dist-packages are where apt puts them. The
+# result is a fully provisioned device on which preflight can never exit 0, so
+# ExecStartPre never lets the daemon start.
+# --------------------------------------------------------------------------
+
+
+def _system_python() -> str:
+    match = re.search(r'^SYSTEM_PYTHON="([^"]+)"$', _script_text(), re.MULTILINE)
+    assert match, "SYSTEM_PYTHON= not found in setup-device.sh - did it get renamed?"
+    return match.group(1)
+
+
+_VENV_FUNCTIONS = ("venv_sees_system_packages", "ensure_system_site_venv")
+
+pytest_uv = pytest.mark.skipif(
+    shutil.which("uv") is None or not Path(_system_python()).exists(),
+    reason=f"needs uv and {_system_python()} to build a real venv",
+)
+
+
+def _venv_lib(tmp_path: Path) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    lib = tmp_path / "venv.sh"
+    lib.write_text(
+        "\n".join(
+            [
+                _extract_function("log"),
+                _extract_assignment("SYSTEM_PYTHON"),
+                *(_extract_function(f) for f in _VENV_FUNCTIONS),
+            ]
+        )
+        + "\n"
+    )
+    return lib
+
+
+def _run_venv(lib: Path, snippet: str, home: Path, path: str = "") -> subprocess.CompletedProcess:
+    uv_dir = os.path.dirname(shutil.which("uv") or "/nonexistent")
+    home.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\nsource "{lib}"\n{snippet}'],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={"PATH": f"{path}{uv_dir}:/usr/bin:/bin", "HOME": str(home)},
+    )
+
+
+def _sys_path(python: Path | str) -> list[str]:
+    result = subprocess.run(
+        [str(python), "-c", "import json, sys; print(json.dumps(sys.path))"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest_uv
+def test_the_provisioned_venv_can_import_the_apt_installed_hardware_libraries(tmp_path):
+    venv = tmp_path / "firmware" / ".venv"
+
+    result = _run_venv(_venv_lib(tmp_path / "lib"), f'ensure_system_site_venv "{venv}"', tmp_path / "home")
+
+    assert result.returncode == 0, result.stderr
+    cfg = (venv / "pyvenv.cfg").read_text()
+    assert "include-system-site-packages = true" in cfg, cfg
+    system_sites = subprocess.run(
+        [_system_python(), "-c", "import json, site; print(json.dumps(site.getsitepackages()))"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert system_sites.returncode == 0, system_sites.stderr
+    shared = set(json.loads(system_sites.stdout)) & set(_sys_path(venv / "bin" / "python3"))
+    assert shared, (
+        "the provisioned venv cannot see a single system site-packages directory, so "
+        "gpiozero and pijuice - apt packages on the device - are unimportable from it "
+        f"and preflight blocks on them. venv sys.path: {_sys_path(venv / 'bin' / 'python3')}"
+    )
+
+
+@pytest_uv
+def test_a_healthy_venv_is_reused_rather_than_rebuilt_on_a_re_run(tmp_path):
+    # Rebuilding on every pass would throw away the compiled rpi_ws281x below
+    # it and recompile it, which is minutes on a Pi Zero 2W.
+    venv = tmp_path / ".venv"
+    lib, home = _venv_lib(tmp_path / "lib"), tmp_path / "home"
+    assert _run_venv(lib, f'ensure_system_site_venv "{venv}"', home).returncode == 0
+    marker = venv / "installed-by-a-previous-run"
+    marker.write_text("x")
+
+    result = _run_venv(lib, f'ensure_system_site_venv "{venv}"', home)
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists(), "a venv that already sees the system packages must be left alone"
+    assert "recreating it" not in result.stdout
+
+
+def test_a_venv_uv_built_on_its_own_is_recreated_from_the_system_interpreter(tmp_path):
+    # Exactly what `uv sync` leaves behind with no venv present: isolated, and
+    # built from an interpreter uv downloaded for itself, whose site-packages
+    # hold nothing apt ever installed. Flipping the flag in pyvenv.cfg would
+    # not help - the base interpreter is fixed at creation - so it is rebuilt.
+    venv = tmp_path / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text(
+        "home = /root/.local/share/uv/python/cpython-3.13.1-linux-aarch64-gnu/bin\n"
+        "implementation = CPython\n"
+        "version_info = 3.13.1\n"
+        "include-system-site-packages = false\n"
+    )
+    stale = venv / "left-by-the-isolated-venv"
+    stale.write_text("x")
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    uv = stubs / "uv"
+    uv.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" > "{tmp_path}/uv-argv"\n')
+    uv.chmod(0o755)
+
+    result = _run_venv(
+        _venv_lib(tmp_path / "lib"),
+        f'ensure_system_site_venv "{venv}"',
+        tmp_path / "home",
+        path=f"{stubs}:",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "cannot see the system site-packages" in result.stdout
+    assert not stale.exists(), "the isolated venv has to be replaced, not added to"
+    argv = (tmp_path / "uv-argv").read_text()
+    assert "--system-site-packages" in argv, argv
+    assert f"--python {_system_python()}" in argv, argv
+
+
+def test_step_5_builds_the_venv_before_syncing_and_rechecks_it_afterwards():
+    step = _step_block(5)
+
+    assert step.index('ensure_system_site_venv "${VENV_DIR}"') < step.index("uv sync --locked")
+    # A venv that lost system-site-packages during the sync is the exact
+    # failure this step exists to prevent, and it is invisible until the daemon
+    # will not start, so the run refuses to report success on one.
+    assert "if ! venv_sees_system_packages" in step
+    # The compiled hardware wheel is not in uv.lock, so an exact sync deletes
+    # it on every re-run and rebuilds it from source.
+    assert "uv sync --locked --inexact" in step
+
+
+def test_the_hardware_libraries_preflight_blocks_on_are_actually_provisioned():
+    # preflight blocks on all three (see visio_recorder/preflight.py's
+    # run_checks), so provisioning has to supply all three or no device it
+    # produces can pass its own preflight.
+    text = _script_text()
+
+    assert "python3-gpiozero" in _step_block(2), "gpiozero is an apt package on the target"
+    assert "pijuice-base" in _step_block(2)
+    assert re.search(r'^RPI_WS281X_SPEC="rpi-ws281x==\d+\.\d+\.\d+"$', text, re.MULTILINE), (
+        "no archive ships rpi_ws281x, so it is built into the venv - pinned, like the uv installer"
+    )
+    assert 'uv pip install --python "${VENV_DIR}/bin/python3" "${RPI_WS281X_SPEC}"' in _step_block(5)
+
+
+def _ws281x_block() -> str:
+    step = _step_block(5)
+    start = step.index("if \"${VENV_DIR}/bin/python3\" -c 'import rpi_ws281x'")
+    return step[start : step.index("# Put preflight on PATH", start)]
+
+
+def test_a_failed_rpi_ws281x_build_does_not_abort_provisioning(tmp_path):
+    # A device with no compiler or no network still needs its systemd unit, its
+    # env file and its data dir; preflight reports the missing module itself.
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    for name, body in (
+        # No candidate for anything, so the build-dependency install is skipped.
+        ("apt-cache", "#!/bin/sh\nexit 0\n"),
+        ("apt-get", '#!/bin/sh\necho "APT_GET_WAS_CALLED $*" >&2\nexit 100\n'),
+        ("uv", "#!/bin/sh\necho 'error: failed to build rpi-ws281x' >&2\nexit 1\n"),
+    ):
+        stub = stubs / name
+        stub.write_text(body)
+        stub.chmod(0o755)
+    lib = tmp_path / "lib.sh"
+    lib.write_text(
+        "\n".join(
+            _extract_function(f) for f in ("log", "apt_candidate", "apt_has_candidate")
+        )
+        + "\n"
+    )
+    snippet = "\n".join(
+        [
+            _extract_assignment("PREFLIGHT_BIN"),
+            _extract_assignment("RPI_WS281X_SPEC"),
+            f'VENV_DIR="{tmp_path}/no-such-venv"',
+            _ws281x_block().rstrip(),
+            "echo REACHED_THE_NEXT_STEP",
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\nsource "{lib}"\n{snippet}'],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "APT_GET_WAS_CALLED" not in result.stderr, "nothing to install when there is no candidate"
+    assert "could not install rpi-ws281x" in result.stdout
+    assert "blocking failure" in result.stdout
+    assert "REACHED_THE_NEXT_STEP" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# Step 8's remaining unguarded writes. The step promises twice in its own
+# comments that optional convenience work is skippable - an account with no
+# passwd entry, a ~/.bashrc it refuses to parse - and honours that for both via
+# `if remove_managed_block` / `if write_managed_block`. Under `set -e` the
+# neovim config write and the dev-package install had no such guard, so a home
+# on a full or read-only filesystem, a regular file where ~/.config should be,
+# or a transient apt mirror error took the whole run down at step 8 - before
+# step 9 creates the data dir, which preflight then blocks on.
+# --------------------------------------------------------------------------
+
+
+def _nvim_block() -> str:
+    step = _dev_shell_step()
+    start = step.index('  nvim_starter_config="$(cat ')
+    return step[start : step.index("  # Quoted heredoc:", start)]
+
+
+def _run_nvim_block(tmp_path: Path, home: Path) -> subprocess.CompletedProcess:
+    lib = _shell_lib(tmp_path / "lib", *_BLOCK_HELPERS)
+    snippet = "\n".join(
+        [
+            f'dev_home="{home}"',
+            'dev_user="$(id -un)"',
+            'dev_group="$(id -gn)"',
+            _nvim_block().rstrip(),
+            "echo REACHED_THE_NEXT_STEP",
+        ]
+    )
+    return _run(lib, snippet)
+
+
+def test_a_failed_nvim_config_write_does_not_abort_the_run(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    # A regular file where the directory belongs: mkdir -p fails with EEXIST.
+    (home / ".config").write_text("not a directory\n")
+
+    result = _run_nvim_block(tmp_path, home)
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping the starter neovim config" in result.stdout
+    assert "REACHED_THE_NEXT_STEP" in result.stdout
+
+
+def test_the_starter_nvim_config_is_written_once_and_then_left_alone(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    first = _run_nvim_block(tmp_path / "first", home)
+
+    init = home / ".config" / "nvim" / "init.lua"
+    assert first.returncode == 0, first.stderr
+    assert "Wrote starter" in first.stdout
+    assert init.read_text().startswith("-- Starting point written once by setup-device.sh.")
+    assert init.read_text().endswith("\n")
+    assert not (home / ".config" / "nvim" / "init.lua.visio-setup.tmp").exists()
+
+    init.write_text("-- edited by the operator\n")
+    second = _run_nvim_block(tmp_path / "second", home)
+
+    assert second.returncode == 0, second.stderr
+    assert "left untouched" in second.stdout
+    assert init.read_text() == "-- edited by the operator\n"
+
+
+def test_a_failed_dev_package_install_does_not_abort_the_run(tmp_path):
+    step = _dev_shell_step()
+    block = step[step.index("  dev_packages=(") : step.index("  # System-wide default")]
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    for name, body in (
+        ("apt-cache", '#!/bin/sh\necho "  Candidate: 1.0"\n'),
+        ("apt-get", "#!/bin/sh\nexit 100\n"),
+    ):
+        stub = stubs / name
+        stub.write_text(body)
+        stub.chmod(0o755)
+    lib = tmp_path / "lib.sh"
+    lib.write_text(
+        "\n".join(
+            _extract_function(f) for f in ("log", "apt_candidate", "apt_has_candidate")
+        )
+        + "\n"
+    )
+    snippet = "\n".join([block.rstrip(), "echo REACHED_THE_NEXT_STEP"])
+    result = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\nsource "{lib}"\n{snippet}'],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "continuing without them" in result.stdout
+    assert "REACHED_THE_NEXT_STEP" in result.stdout

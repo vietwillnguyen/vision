@@ -3,12 +3,28 @@ set -euo pipefail
 
 REPO_URL="https://github.com/vietwillnguyen/vision.git"
 INSTALL_DIR="/opt/visio-recorder"
+FIRMWARE_DIR="${INSTALL_DIR}/firmware"
+VENV_DIR="${FIRMWARE_DIR}/.venv"
 ENV_FILE="/etc/visio-recorder.env"
 DATA_DIR="/var/lib/visio-recorder"
 SYSTEMD_UNIT_SRC="firmware/systemd/visio-recorder.service"
 SYSTEMD_UNIT_DST="/etc/systemd/system/visio-recorder.service"
 BIN_DIR="/usr/local/bin"
 PREFLIGHT_BIN="visio-preflight"
+
+# ${VENV_DIR}/bin/python3 is the interpreter behind both ${PREFLIGHT_BIN} and
+# the systemd unit's ExecStart/ExecStartPre, and the hardware libraries they
+# import - gpiozero, pijuice, rpi_ws281x - live outside this project (see
+# visio_recorder/drivers.py). Two of the three are apt packages, so the venv
+# has to be built from the system interpreter rather than one uv downloads for
+# itself, whose site-packages hold nothing apt has ever installed.
+SYSTEM_PYTHON="/usr/bin/python3"
+
+# The exception: no Debian or Raspberry Pi archive ships rpi_ws281x at all, and
+# upstream publishes a source distribution only, so it is compiled into the
+# venv rather than apt-installed. Pinned for the same reason the uv installer
+# is - two devices provisioned a week apart must get the same firmware.
+RPI_WS281X_SPEC="rpi-ws281x==5.0.0"
 
 # Fallback revision, used only when neither VISIO_GIT_REF nor the script's own
 # checkout can supply one (see resolve_requested_ref). A branch name is a
@@ -139,7 +155,11 @@ export NEEDRESTART_MODE=a
 # rather than letting apt-get fail confusingly on a half-configured package.
 dpkg --configure -a
 apt-get update -y
-apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git
+# python3-gpiozero is in the required list, not probed like pijuice-base below:
+# the flag-button driver imports gpiozero and preflight blocks on it, so a
+# release that cannot supply it should fail here rather than hand back a device
+# whose daemon never starts. Both Debian and the Raspberry Pi archive ship it.
+apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git python3-gpiozero
 
 # Whether this release's index offers a package at all. Probing beats
 # swallowing an install's exit code: a genuine failure (dependency conflict, no
@@ -280,6 +300,36 @@ checkout_revision() {
   printf '%s\n' "${sha}"
 }
 
+# Whether $1 is a venv that can import what apt installed system-wide. Two
+# conditions, because a venv uv creates on its own satisfies neither: it is
+# isolated from the system site-packages, and uv resolves an interpreter it
+# downloaded for itself in preference to /usr/bin/python3, whose dist-packages
+# are the only place gpiozero and pijuice exist on the device.
+venv_sees_system_packages() {
+  local cfg="$1/pyvenv.cfg"
+  [[ -f "${cfg}" ]] || return 1
+  grep -qE '^[[:space:]]*include-system-site-packages[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${cfg}" &&
+    grep -qE "^[[:space:]]*home[[:space:]]*=[[:space:]]*$(dirname "${SYSTEM_PYTHON}")/?[[:space:]]*\$" "${cfg}"
+}
+
+# Recreated rather than repaired in place: the interpreter a venv is built from
+# is fixed at creation, so a venv pointing at a downloaded CPython cannot be
+# fixed by flipping the flag in pyvenv.cfg - its base site-packages would still
+# be the downloaded interpreter's. `uv sync` repopulates whatever this leaves
+# behind, and this only fires when the venv does not already satisfy both
+# conditions, so a healthy device does not rebuild its venv on every run.
+ensure_system_site_venv() {
+  local venv_dir="$1"
+  if venv_sees_system_packages "${venv_dir}"; then
+    return 0
+  fi
+  if [[ -n "${venv_dir}" && -e "${venv_dir}" ]]; then
+    log "${venv_dir} cannot see the system site-packages - recreating it from ${SYSTEM_PYTHON}"
+    rm -rf "${venv_dir}"
+  fi
+  uv venv --python "${SYSTEM_PYTHON}" --system-site-packages "${venv_dir}"
+}
+
 log "Step 5/10: code"
 requested_ref="$(resolve_requested_ref)"
 if [[ "${requested_ref}" == "${DEFAULT_GIT_REF}" && -z "${VISIO_GIT_REF:-}" ]]; then
@@ -297,13 +347,50 @@ if [[ "${checkout_status}" -ne 0 ]]; then
 fi
 log "Provisioned revision ${target_sha} (requested '${requested_ref}')"
 
-(cd "${INSTALL_DIR}/firmware" && uv sync --locked)
+ensure_system_site_venv "${VENV_DIR}"
+# --inexact: rpi_ws281x is installed into this venv below but is deliberately
+# absent from uv.lock, and an exact sync would delete it on every re-run and
+# recompile it, which is minutes of build time on a Pi Zero 2W.
+(cd "${FIRMWARE_DIR}" && uv sync --locked --inexact)
+if ! venv_sees_system_packages "${VENV_DIR}"; then
+  log "ERROR: ${VENV_DIR} does not have access to the system site-packages after uv sync."
+  log "  gpiozero and pijuice are apt packages, so the daemon and ${PREFLIGHT_BIN} could not import them from this venv."
+  log "  Delete ${VENV_DIR} and re-run; if it recurs, check that ${SYSTEM_PYTHON} exists and satisfies firmware/pyproject.toml's requires-python."
+  exit 1
+fi
+
+# rpi_ws281x is the one hardware library with no apt package anywhere, so it is
+# built from source here. Non-fatal on purpose: the systemd unit, the env file
+# and the data dir below are still worth provisioning on a device with no
+# compiler or no network, and ${PREFLIGHT_BIN} reports the missing module
+# itself rather than this script guessing on its behalf.
+if "${VENV_DIR}/bin/python3" -c 'import rpi_ws281x' >/dev/null 2>&1; then
+  log "rpi_ws281x already importable from ${VENV_DIR} - nothing to build"
+else
+  ws281x_build_deps=()
+  for pkg in build-essential python3-dev; do
+    if apt_has_candidate "${pkg}"; then
+      ws281x_build_deps+=("${pkg}")
+    fi
+  done
+  if [[ "${#ws281x_build_deps[@]}" -gt 0 ]]; then
+    if ! apt-get install -y "${ws281x_build_deps[@]}"; then
+      log "WARNING: installing ${ws281x_build_deps[*]} failed - the ${RPI_WS281X_SPEC} build below needs them and will probably fail too"
+    fi
+  fi
+  if uv pip install --python "${VENV_DIR}/bin/python3" "${RPI_WS281X_SPEC}"; then
+    log "${RPI_WS281X_SPEC} built and installed into ${VENV_DIR}"
+  else
+    log "WARNING: could not install ${RPI_WS281X_SPEC} into ${VENV_DIR}. It ships as a source distribution, so the build needs a C compiler, Python headers and network access."
+    log "  ${PREFLIGHT_BIN} will report rpi_ws281x as a blocking failure, and the daemon will not start, until this succeeds. Fix the build prerequisites and re-run."
+  fi
+fi
 
 # Put preflight on PATH for a plain SSH user. /usr/local/bin is on the default
 # PATH for login shells and in sudo's secure_path on Raspberry Pi OS, so this
 # works with and without sudo. `ln -sfn` makes it idempotent and lets it
 # re-point if the venv is rebuilt.
-preflight_src="${INSTALL_DIR}/firmware/.venv/bin/${PREFLIGHT_BIN}"
+preflight_src="${VENV_DIR}/bin/${PREFLIGHT_BIN}"
 if [[ ! -x "${preflight_src}" ]]; then
   log "ERROR: ${preflight_src} is missing after uv sync."
   log "  firmware/pyproject.toml must declare both [build-system] and [project.scripts]; without the former uv treats the project as virtual and never installs it."
@@ -539,9 +626,17 @@ else
       dev_skipped+=("${pkg}")
     fi
   done
+  # Every command in this branch is checked rather than left to `set -e`. The
+  # step's own guards above promise that an account with no passwd entry, or a
+  # ~/.bashrc this script refuses to parse, still reaches the data dir and the
+  # summary; a transient apt mirror error on `tmux` has to be no different, or
+  # optional convenience work silently produces an unprovisioned device.
   if [[ "${#dev_install[@]}" -gt 0 ]]; then
-    apt-get install -y "${dev_install[@]}"
-    log "Installed: ${dev_install[*]}"
+    if apt-get install -y "${dev_install[@]}"; then
+      log "Installed: ${dev_install[*]}"
+    else
+      log "ERROR: installing ${dev_install[*]} failed - continuing without them. This is optional convenience tooling; re-run once apt is healthy."
+    fi
   fi
   if [[ "${#dev_skipped[@]}" -gt 0 ]]; then
     log "Not in this release's package index, skipped: ${dev_skipped[*]}"
@@ -550,16 +645,22 @@ else
   # System-wide default for anything that consults `editor` (visudo, git's
   # fallback, crontab) rather than $EDITOR.
   if update-alternatives --list editor 2>/dev/null | grep -qx /usr/bin/nvim; then
-    update-alternatives --set editor /usr/bin/nvim >/dev/null
-    log "Default 'editor' alternative set to nvim"
+    if update-alternatives --set editor /usr/bin/nvim >/dev/null; then
+      log "Default 'editor' alternative set to nvim"
+    else
+      log "Could not set the 'editor' alternative to nvim - continuing"
+    fi
   fi
 
   # Written once, then left alone: an operator who edits it keeps their edits
   # across re-runs. Unlike the ~/.bashrc block, this file is not managed.
-  nvim_dir="${dev_home}/.config/nvim"
-  if [[ ! -e "${nvim_dir}/init.lua" && ! -e "${nvim_dir}/init.vim" ]]; then
-    mkdir -p "${nvim_dir}"
-    cat > "${nvim_dir}/init.lua" <<'NVIMRC'
+  #
+  # Every write is guarded for the same reason as the apt install above: a home
+  # on a full or read-only filesystem, or a regular file sitting where
+  # ~/.config should be, makes mkdir fail, and this step must skip rather than
+  # abort. The file itself goes through replace_file_via_tmp so a half-written
+  # init.lua is never left behind either.
+  nvim_starter_config="$(cat <<'NVIMRC'
 -- Starting point written once by setup-device.sh. Edit freely: the script
 -- will not overwrite this file on a re-run.
 vim.opt.number = true
@@ -577,10 +678,17 @@ vim.opt.scrolloff = 4
 vim.opt.list = true
 vim.opt.listchars = { tab = '> ', trail = '.' }
 NVIMRC
-    chown "${dev_user}:${dev_group}" "${dev_home}/.config" "${nvim_dir}" "${nvim_dir}/init.lua"
-    log "Wrote starter ${nvim_dir}/init.lua"
-  else
+)"
+  nvim_dir="${dev_home}/.config/nvim"
+  if [[ -e "${nvim_dir}/init.lua" || -e "${nvim_dir}/init.vim" ]]; then
     log "${nvim_dir} already has a config - left untouched"
+  elif ! mkdir -p "${nvim_dir}"; then
+    log "Cannot create ${nvim_dir} - skipping the starter neovim config"
+  elif ! chown "${dev_user}:${dev_group}" "${dev_home}/.config" "${nvim_dir}"; then
+    log "Cannot give ${nvim_dir} to ${dev_user}:${dev_group} - skipping the starter neovim config"
+  elif replace_file_via_tmp "${nvim_dir}/init.lua" "${nvim_dir}/init.lua.visio-setup.tmp" \
+    "${dev_user}:${dev_group}" "${nvim_starter_config}"$'\n'; then
+    log "Wrote starter ${nvim_dir}/init.lua"
   fi
 
   # Quoted heredoc: every expansion below is evaluated by the operator's shell
