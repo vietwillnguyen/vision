@@ -15,6 +15,7 @@ firmware/            -- Epic 1: visio-recorder Python systemd daemon
   visio_recorder/    -- battery, LED, muxer, upload queue, uploader, wifi/device onboarding, recording loop
   tests/             -- pytest suite (fakes for every hardware/network Protocol)
   systemd/           -- installable systemd unit
+  scripts/           -- `setup-device.sh`, the operator entry point for device bring-up
 pipeline/            -- Epic 2: nightly cloud AI pipeline (Python package)
   pipeline/          -- ingestion, scoring, selection, assembly, delivery stages,
                         nightly orchestrator + `python -m pipeline` entrypoint
