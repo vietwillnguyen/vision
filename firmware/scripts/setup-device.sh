@@ -47,6 +47,7 @@ BASHRC_END="# <<< visio-recorder dev shell (managed by setup-device.sh) <<<"
 
 reboot_needed=false
 ws281x_missing=false
+data_dir_failed=false
 
 log() {
   echo "[setup-device] $*"
@@ -459,9 +460,15 @@ VISIO_BATTERY_SOURCE=none
 # that never installs the dev shell at all: this file is written before the
 # developer-shell step runs, so nothing has been installed yet.
 VISIO_DEV_SHELL=1
-# Where recordings are written. setup-device.sh creates this directory and
-# visio-preflight checks it, both reading the value from here, so neither can
-# disagree with the daemon about which directory matters.
+# Where recordings are written; must be an absolute path. setup-device.sh
+# creates whatever is set here, and the daemon reads it from this file through
+# the unit's EnvironmentFile=, so those two always agree.
+#
+# visio-preflight reads it too, but only when it can: this file is mode 600
+# root-owned, so a plain SSH user cannot see it. An unprivileged run therefore
+# checks the default below and says so on its data_dir line instead of
+# claiming the configured path was verified. Run it under sudo to check the
+# configured one.
 # VISIO_DATA_DIR=/var/lib/visio-recorder
 EOF
   chmod 600 "${ENV_FILE}"
@@ -788,13 +795,29 @@ fi
 
 log "Step 9/10: data dir"
 # The daemon records into ${ENV_FILE}'s VISIO_DATA_DIR (daemon.py's
-# load_config) and preflight now checks that same directory, so provision the
-# one that is actually configured rather than the default it usually is -
+# load_config) and preflight checks that same directory, so provision the one
+# that is actually configured rather than the default it usually is -
 # otherwise preflight blocks on a directory nothing ever created and advises a
 # re-run that would not create it either.
+#
+# The argument is operator input now rather than a constant this script owns,
+# so both ways it can be wrong are checked rather than left to `set -e`: a
+# relative path resolves against this script's invocation cwd but against the
+# unit's WorkingDirectory= for the daemon, and mkdir fails outright on a
+# read-only mount or a regular file sitting at the path. Neither aborts the
+# run, because step 10 is where the operator learns what happened - including
+# this - and dying here would take that report with it.
 data_dir="$(env_file_value VISIO_DATA_DIR)"
 data_dir="${data_dir:-${DATA_DIR}}"
-mkdir -p "${data_dir}"
+if [[ "${data_dir}" != /* ]]; then
+  data_dir_failed=true
+  log "ERROR: VISIO_DATA_DIR in ${ENV_FILE} is '${data_dir}', which is not an absolute path."
+  log "  A relative path means this script and the daemon would resolve it against different directories, so nothing was created. Set an absolute path and re-run."
+elif ! mkdir -p "${data_dir}"; then
+  data_dir_failed=true
+  log "ERROR: cannot create ${data_dir}, the data dir named by VISIO_DATA_DIR in ${ENV_FILE}."
+  log "  Check that the path is on a writable, mounted filesystem and that nothing else already occupies it, then re-run."
+fi
 
 log "Step 10/10: summary"
 battery_source="$(env_file_value VISIO_BATTERY_SOURCE)"
@@ -804,6 +827,9 @@ log "VISIO_BATTERY_SOURCE=${battery_source}"
 log "Data dir: ${data_dir}"
 if [[ "${battery_source}" == "none" ]]; then
   log "Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now."
+fi
+if [[ "${data_dir_failed}" == "true" ]]; then
+  log "INCOMPLETE: ${data_dir} was NOT created (see the step 9 error above), so the daemon has nowhere to record and '${PREFLIGHT_BIN}' will report data_dir as a blocking failure."
 fi
 if [[ "${ws281x_missing}" == "true" ]]; then
   log "INCOMPLETE: ${RPI_WS281X_SPEC} could not be installed (see the step 5 warning above), so the daemon will not start until it is - '${PREFLIGHT_BIN}' will report rpi_ws281x as a blocking failure."

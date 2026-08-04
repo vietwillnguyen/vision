@@ -39,7 +39,6 @@ from visio_recorder.recording_loop import (
 from visio_recorder.supabase_clients import build_supabase_clients
 from visio_recorder.uploader import StorageClient
 
-_DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
 _DEFAULT_SEGMENT_DURATION_MS = "300000"
 _DEFAULT_FRAMERATE = "30"
 _ONBOARDING_MAX_ATTEMPTS = 60
@@ -83,7 +82,7 @@ def load_config(env: Mapping[str, str]) -> DaemonConfig:
     return DaemonConfig(
         supabase_url=env["SUPABASE_URL"],
         supabase_anon_key=env["SUPABASE_ANON_KEY"],
-        data_dir=Path(env.get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR)),
+        data_dir=preflight.resolve_data_dir(env),
         segment_duration_ms=int(
             env.get("VISIO_SEGMENT_DURATION_MS", _DEFAULT_SEGMENT_DURATION_MS)
         ),

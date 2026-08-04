@@ -1370,7 +1370,7 @@ def test_a_failed_dev_package_install_does_not_abort_the_run(tmp_path):
 
 
 def _run_final_steps(
-    tmp_path: Path, env_text: str, ws281x_missing: str
+    tmp_path: Path, env_text: str, ws281x_missing: str = "false"
 ) -> subprocess.CompletedProcess:
     """Run steps 9 and 10 for real, with only DATA_DIR redirected."""
     env_file = tmp_path / "visio-recorder.env"
@@ -1385,6 +1385,7 @@ def _run_final_steps(
             f'DATA_DIR="{tmp_path}/default-data-dir"',
             'target_sha="deadbee"',
             "reboot_needed=false",
+            "data_dir_failed=false",
             f"ws281x_missing={ws281x_missing}",
             block,
         ]
@@ -1451,3 +1452,60 @@ def test_a_quoted_data_dir_is_unquoted_the_way_systemd_reads_it(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert configured.is_dir()
+
+
+# --------------------------------------------------------------------------
+# Step 9's argument is operator input now, not a constant the script owns.
+# `mkdir -p /var/lib/visio-recorder` as root is effectively infallible; an
+# env-file value is not, and dying here would take step 10 with it - the very
+# report that tells the operator what went wrong.
+# --------------------------------------------------------------------------
+
+
+def test_an_uncreatable_data_dir_is_reported_in_the_summary_instead_of_aborting(tmp_path):
+    blocked = tmp_path / "occupied"
+    blocked.write_text("a regular file where the data dir should be\n")
+
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={blocked}/visio\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "cannot create" in result.stdout
+    assert "VISIO_DATA_DIR" in result.stdout
+    assert "INCOMPLETE" in result.stdout
+    assert "was NOT created" in result.stdout
+    # The report the abort would have swallowed.
+    assert "Provisioned revision: deadbee" in result.stdout
+    assert "Setup complete." in result.stdout
+
+
+def test_a_relative_data_dir_is_rejected_rather_than_silently_diverging(tmp_path):
+    # It would resolve against this script's cwd here but against the unit's
+    # WorkingDirectory= for the daemon, so the two would record to different
+    # places without either one reporting a problem.
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV + "VISIO_DATA_DIR=recordings\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "not an absolute path" in result.stdout
+    assert "INCOMPLETE" in result.stdout
+    assert not (tmp_path / "recordings").exists()
+    assert not (tmp_path / "default-data-dir").exists(), "a bad value must not fall back silently"
+    assert "Setup complete." in result.stdout
+
+
+def test_a_created_data_dir_says_nothing_about_being_incomplete(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "default-data-dir").is_dir()
+    assert "INCOMPLETE" not in result.stdout
+
+
+def test_the_env_template_does_not_promise_preflight_can_read_it(tmp_path):
+    # The file is chmod 600 root-owned, so the unprivileged read fails; the
+    # template must not document that path as working.
+    template = _script_text().split("""cat > "${ENV_FILE}" <<'EOF'""")[1].split("\nEOF\n")[0]
+
+    assert "VISIO_DATA_DIR" in template
+    assert template.count("VISIO_DATA_DIR=") == 1, "the key must not be duplicated"
+    assert "600" in template or "root-owned" in template
+    assert "sudo" in template

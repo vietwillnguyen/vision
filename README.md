@@ -91,7 +91,8 @@ The project venv is built from the system `python3` with `--system-site-packages
 
 Preflight runs automatically before every start (`ExecStartPre=`) and standalone as **`visio-preflight`** for manual diagnostics - a console script symlinked into `/usr/local/bin`, so it works from any directory as a plain SSH user with no venv path and no `sudo`.
 Its first line reports which install the checks ran from, since a device typically carries both `/opt/visio-recorder` and your own clone.
-It checks the data dir the daemon will actually use - `VISIO_DATA_DIR` when the env file sets it - so the gate and the daemon cannot disagree about which directory matters, and a failed import names the step that installs that module rather than always blaming `uv sync`.
+It checks the data dir the daemon will actually use, reading `VISIO_DATA_DIR` from the environment first and then from `/etc/visio-recorder.env`, and a failed import names the step that installs that module rather than always blaming `uv sync`.
+That env file stays mode 600 root-owned, so an unprivileged run cannot read it: when that happens preflight checks the default and says on its `data_dir` line that it could not confirm the configured value, rather than reporting a guess as a fact - run it under `sudo` to check a non-default `VISIO_DATA_DIR`.
 Missing PiJuice hardware only warns (`VISIO_BATTERY_SOURCE=none` is the current bring-up default - see [`2026-07-21-visio-device-provisioning-design.md`](docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md)), everything else blocks startup with a clear reason in `journalctl`.
 
 The script provisions an explicit revision rather than pulling: it defaults to the exact commit of the clone you run it from, so two devices set up from the same checkout get identical firmware, and `VISIO_GIT_REF=<tag|branch|sha>` overrides it.

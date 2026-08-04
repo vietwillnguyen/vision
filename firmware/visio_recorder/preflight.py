@@ -32,12 +32,17 @@ from pathlib import Path
 BLOCK = "block"
 WARN = "warn"
 
-# Must stay equal to daemon.py's ``_DEFAULT_DATA_DIR``; a test pins the two
-# together. Importing it from there instead would be circular - daemon.py
-# imports this module for its own startup gate.
+# The one definition of where recordings go. ``daemon.load_config`` resolves
+# its own data dir through ``resolve_data_dir`` below rather than carrying a
+# second default, so the gate and the daemon cannot drift apart.
 _DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
 _DATA_DIR = Path(_DEFAULT_DATA_DIR)
 _I2C_DEVICE = Path("/dev/i2c-1")
+
+# The systemd unit's EnvironmentFile=. Written mode 600 root-owned by
+# setup-device.sh, which is why reading it is a best effort here.
+_ENV_FILE = Path("/etc/visio-recorder.env")
+_ENV_LINE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 # The uid the systemd unit starts the daemon as (User= is unset, so root).
 # Only that caller is gated on the data dir being writable.
@@ -176,6 +181,7 @@ def check_data_dir_writable(
     path: Path = _DATA_DIR,
     getuid: Callable[[], int] = os.getuid,
     can_write: Callable[[Path], bool] = lambda path: os.access(path, os.W_OK),
+    caveat: str = "",
 ) -> CheckResult:
     """Existence and writability answer different questions, so they differ.
 
@@ -193,17 +199,26 @@ def check_data_dir_writable(
     on purpose because it holds recorded video, so reporting BLOCK made a
     healthy device look mis-provisioned and advised a re-run of
     setup-device.sh that would change nothing.
+
+    ``caveat`` is appended to whichever detail is reported, for the caller that
+    could not confirm which directory is configured (see
+    ``resolve_reported_data_dir``). It never changes a severity: which
+    directory was checked and how certain that choice is are separate facts
+    from whether the directory that *was* checked is usable.
     """
+    suffix = f" [{caveat}]" if caveat else ""
     exists = path.is_dir()
     if exists and can_write(path):
-        return CheckResult(name="data_dir", severity=BLOCK, ok=True, detail=f"{path} writable")
+        return CheckResult(
+            name="data_dir", severity=BLOCK, ok=True, detail=f"{path} writable{suffix}"
+        )
     uid = getuid()
     if not exists or uid == _DAEMON_UID:
         return CheckResult(
             name="data_dir",
             severity=BLOCK,
             ok=False,
-            detail=f"{path} missing or not writable - run setup-device.sh",
+            detail=f"{path} missing or not writable - run setup-device.sh{suffix}",
         )
     return CheckResult(
         name="data_dir",
@@ -212,7 +227,7 @@ def check_data_dir_writable(
         detail=(
             f"{path} exists but is not writable by uid {uid} - expected for a "
             f"diagnostic run as a non-daemon user, not a fault; the daemon runs "
-            f"as uid {_DAEMON_UID}"
+            f"as uid {_DAEMON_UID}{suffix}"
         ),
     )
 
@@ -228,18 +243,107 @@ def check_i2c_enabled(path: Path = _I2C_DEVICE) -> CheckResult:
 
 
 def resolve_data_dir(env: Mapping[str, str] | None = None) -> Path:
-    """The directory the daemon will actually record into.
+    """The directory the daemon records into, given an environment.
 
-    Same key, same default and the same ``.get`` precedence as
-    ``daemon.load_config``, so the gate and the daemon cannot end up talking
-    about different directories: an operator who points ``VISIO_DATA_DIR`` at
-    a USB mount would otherwise get an ``[OK]`` for /var/lib/visio-recorder
-    while the daemon writes somewhere else entirely.
+    The single definition of that mapping: ``daemon.load_config`` calls this
+    too, so there is no second key, default or precedence to keep in step.
     """
     return Path((os.environ if env is None else env).get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR))
 
 
-def run_checks(battery_source: str, data_dir: Path = _DATA_DIR) -> list[CheckResult]:
+def read_env_file(path: Path = _ENV_FILE) -> Mapping[str, str] | None:
+    """Parse the unit's ``EnvironmentFile``, or ``None`` if it cannot be read.
+
+    The two outcomes are deliberately distinct. An absent file means nothing
+    is configured, so the defaults are the truth. A file that exists but
+    cannot be read means the truth is unknown - the normal case for an
+    operator over SSH, since setup-device.sh writes it mode 600 root-owned
+    and that is not relaxed for a diagnostic's benefit.
+
+    Parsing matches how systemd reads an EnvironmentFile, and how
+    setup-device.sh's own ``env_file_value`` reads it: comments skipped, last
+    assignment wins, surrounding whitespace and one layer of matching quotes
+    stripped.
+    """
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        return None
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        match = _ENV_LINE.match(line)
+        if match is None:
+            continue
+        value = match.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[match.group(1)] = value
+    return values
+
+
+@dataclass
+class DataDirResolution:
+    path: Path
+    caveat: str = ""
+
+
+def resolve_reported_data_dir(
+    env: Mapping[str, str] | None = None,
+    env_file: Path = _ENV_FILE,
+    read_file: Callable[[Path], Mapping[str, str] | None] | None = None,
+) -> DataDirResolution:
+    """Which data dir to check, and how sure we are that it is the right one.
+
+    ``ExecStartPre`` inherits ``VISIO_DATA_DIR`` from the unit's
+    ``EnvironmentFile=``, so an environment variable always wins. The
+    standalone ``visio-preflight`` gets no such environment - nothing sources
+    the env file into an operator's shell - so fall back to reading it.
+
+    When it exists but cannot be read, the default is still the only path
+    available to check, but reporting it as though it were the configured one
+    would be a guess dressed as a fact: a device with ``VISIO_DATA_DIR``
+    pointed elsewhere would show a blocking failure for a directory that is
+    correctly absent. The caveat says so instead.
+    """
+    environ = os.environ if env is None else env
+    if "VISIO_DATA_DIR" in environ:
+        return DataDirResolution(Path(environ["VISIO_DATA_DIR"]))
+    configured = (read_env_file if read_file is None else read_file)(env_file)
+    if configured is None:
+        return DataDirResolution(
+            Path(_DEFAULT_DATA_DIR),
+            caveat=(
+                f"checked the default: {env_file} is not readable by this caller, so a "
+                f"configured VISIO_DATA_DIR could not be confirmed - re-run under sudo "
+                f"to check the configured path"
+            ),
+        )
+    return DataDirResolution(resolve_data_dir(configured))
+
+
+def resolve_battery_source(
+    env: Mapping[str, str] | None = None,
+    env_file: Path = _ENV_FILE,
+    read_file: Callable[[Path], Mapping[str, str] | None] | None = None,
+) -> str:
+    """Same resolution order as the data dir, for the same reason.
+
+    Only the pijuice and I2C checks depend on this, and both are WARN, so an
+    unreadable env file costs at most two spurious warnings rather than a
+    wrong answer - no caveat is threaded through for it.
+    """
+    environ = os.environ if env is None else env
+    if "VISIO_BATTERY_SOURCE" in environ:
+        return environ["VISIO_BATTERY_SOURCE"]
+    configured = (read_env_file if read_file is None else read_file)(env_file)
+    return (configured or {}).get("VISIO_BATTERY_SOURCE", "pijuice")
+
+
+def run_checks(
+    battery_source: str, data_dir: Path = _DATA_DIR, data_dir_caveat: str = ""
+) -> list[CheckResult]:
     results = [
         check_binary_on_path("rpicam-vid"),
         check_binary_on_path("rpicam-still"),
@@ -251,7 +355,7 @@ def run_checks(battery_source: str, data_dir: Path = _DATA_DIR) -> list[CheckRes
         check_importable("supabase"),
         check_camera_detected(),
         check_networkmanager_running(),
-        check_data_dir_writable(path=data_dir),
+        check_data_dir_writable(path=data_dir, caveat=data_dir_caveat),
     ]
     if battery_source == "pijuice":
         results.append(check_pijuice_importable())
@@ -294,8 +398,8 @@ def main() -> int:
     logic beyond what run_checks/has_blocking_failure already own, so it's
     not unit tested itself.
     """
-    battery_source = os.environ.get("VISIO_BATTERY_SOURCE", "pijuice")
-    results = run_checks(battery_source, resolve_data_dir())
+    data_dir = resolve_reported_data_dir()
+    results = run_checks(resolve_battery_source(), data_dir.path, data_dir.caveat)
     print(format_report(results))
     return 1 if has_blocking_failure(results) else 0
 

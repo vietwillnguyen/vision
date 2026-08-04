@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from visio_recorder.daemon import _DEFAULT_DATA_DIR as _DAEMON_DEFAULT_DATA_DIR
+from visio_recorder import daemon
 from visio_recorder.daemon import load_config
 from visio_recorder.preflight import (
     BLOCK,
@@ -29,7 +29,10 @@ from visio_recorder.preflight import (
     format_report,
     has_blocking_failure,
     main,
+    read_env_file,
+    resolve_battery_source,
     resolve_data_dir,
+    resolve_reported_data_dir,
     run_checks,
 )
 
@@ -226,7 +229,7 @@ def test_non_daemon_caller_on_a_healthy_device_exits_zero(tmp_path, monkeypatch,
             path=tmp_path, getuid=lambda: _OPERATOR_UID, can_write=_unwritable
         ),
     ]
-    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir: healthy)
+    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir, caveat: healthy)
 
     exit_code = main()
 
@@ -241,7 +244,7 @@ def test_daemon_uid_on_the_same_device_still_blocks_startup(tmp_path, monkeypatc
     blocked = [
         check_data_dir_writable(path=tmp_path, getuid=lambda: _DAEMON_UID, can_write=_unwritable)
     ]
-    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir: blocked)
+    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir, caveat: blocked)
 
     assert has_blocking_failure(blocked) is True
     assert main() == 1
@@ -251,7 +254,7 @@ def test_a_missing_data_dir_blocks_startup_for_a_non_daemon_caller_too(tmp_path,
     # The regression this pins: an unprovisioned device must not report exit 0
     # just because the operator ran the diagnostic as themselves.
     unprovisioned = [check_data_dir_writable(path=tmp_path / "missing", getuid=lambda: _OPERATOR_UID)]
-    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir: unprovisioned)
+    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir, caveat: unprovisioned)
 
     assert has_blocking_failure(unprovisioned) is True
     assert main() == 1
@@ -437,9 +440,15 @@ def test_resolve_data_dir_matches_daemon_load_config_exactly():
 
 
 def test_preflight_and_daemon_share_one_default_data_dir():
-    # preflight cannot import daemon (daemon imports preflight), so the two
-    # constants are pinned to each other here instead.
-    assert _DEFAULT_DATA_DIR == _DAEMON_DEFAULT_DATA_DIR
+    # daemon.load_config resolves through preflight.resolve_data_dir rather
+    # than carrying its own constant, so there is nothing left to drift. A
+    # second default reappearing here is exactly how that would come back.
+    assert not hasattr(daemon, "_DEFAULT_DATA_DIR"), (
+        "daemon must not define a competing data-dir default; resolve_data_dir owns it"
+    )
+    assert load_config({"SUPABASE_URL": "u", "SUPABASE_ANON_KEY": "k"}).data_dir == Path(
+        _DEFAULT_DATA_DIR
+    )
 
 
 def test_run_checks_gates_on_the_data_dir_it_is_given(tmp_path):
@@ -460,7 +469,7 @@ def test_run_checks_falls_back_to_the_default_data_dir():
 def test_main_checks_the_configured_data_dir(monkeypatch, capsys):
     seen = []
 
-    def record(source, data_dir):
+    def record(source, data_dir, caveat):
         seen.append(data_dir)
         return []
 
@@ -507,3 +516,157 @@ def test_an_unrecognised_module_still_gets_the_uv_sync_default():
     result = check_importable("some-future-dependency", find_spec=lambda mod: None)
 
     assert "check the uv sync step" in result.detail
+
+
+# --------------------------------------------------------------------------
+# Which data dir gets checked is caller-relative too. ExecStartPre inherits
+# VISIO_DATA_DIR from the unit's EnvironmentFile=; the standalone
+# visio-preflight inherits nothing, so it reads /etc/visio-recorder.env
+# itself - and that file is mode 600 root-owned and stays that way, so an
+# unprivileged run genuinely cannot know the configured value. Reporting the
+# default as though it were the configured one shows a blocking failure for a
+# directory that is correctly absent on a device recording to a USB mount.
+# --------------------------------------------------------------------------
+
+
+def _env_file(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "visio-recorder.env"
+    path.write_text(text)
+    return path
+
+
+def test_read_env_file_parses_it_the_way_systemd_does(tmp_path):
+    env_file = _env_file(
+        tmp_path,
+        "# a comment\n"
+        "SUPABASE_URL=https://x.supabase.co\n"
+        'VISIO_DATA_DIR="/mnt/usb/visio"\n'
+        "VISIO_BATTERY_SOURCE= none \n"
+        "# VISIO_DATA_DIR=/commented/out\n"
+        "VISIO_DATA_DIR=/last/assignment/wins\n"
+        "not a key=value line\n",
+    )
+
+    values = read_env_file(env_file)
+
+    assert values["VISIO_DATA_DIR"] == "/last/assignment/wins"
+    assert values["VISIO_BATTERY_SOURCE"] == "none"
+    assert values["SUPABASE_URL"] == "https://x.supabase.co"
+
+
+def test_read_env_file_strips_one_layer_of_matching_quotes(tmp_path):
+    # Quoting is idiomatic in an EnvironmentFile, and a literal directory
+    # named '"/mnt/usb"' would be a silent mis-check.
+    values = read_env_file(_env_file(tmp_path, 'VISIO_DATA_DIR="/mnt/usb/visio"\n'))
+
+    assert values["VISIO_DATA_DIR"] == "/mnt/usb/visio"
+
+
+def test_read_env_file_reports_an_absent_file_as_nothing_configured(tmp_path):
+    assert read_env_file(tmp_path / "nothing-here.env") == {}
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root ignores the permission bits this asserts on")
+def test_read_env_file_returns_none_rather_than_raising_on_the_real_0600_file(tmp_path):
+    # The operator case, against real permission bits rather than a fake: the
+    # device's env file is mode 600 root-owned, and a raise here would abort
+    # visio-preflight instead of degrading to the documented caveat.
+    unreadable = _env_file(tmp_path, "VISIO_DATA_DIR=/mnt/usb/visio\n")
+    unreadable.chmod(0o000)
+
+    assert read_env_file(unreadable) is None
+
+
+def test_an_environment_variable_beats_the_env_file(tmp_path):
+    # ExecStartPre's path: systemd already applied EnvironmentFile=, so the
+    # process environment is authoritative and no file read should override it.
+    env_file = _env_file(tmp_path, "VISIO_DATA_DIR=/from/the/file\n")
+
+    resolution = resolve_reported_data_dir({"VISIO_DATA_DIR": "/from/the/environment"}, env_file)
+
+    assert resolution.path == Path("/from/the/environment")
+    assert resolution.caveat == ""
+
+
+def test_a_readable_env_file_supplies_the_configured_data_dir(tmp_path):
+    # The root operator's path: `sudo visio-preflight` can read the file, so
+    # it gets the same answer the daemon will.
+    env_file = _env_file(tmp_path, "VISIO_DATA_DIR=/mnt/usb/visio\n")
+
+    resolution = resolve_reported_data_dir({}, env_file)
+
+    assert resolution.path == Path("/mnt/usb/visio")
+    assert resolution.caveat == ""
+
+
+def test_an_absent_env_file_is_the_default_with_no_caveat(tmp_path):
+    resolution = resolve_reported_data_dir({}, tmp_path / "never-written.env")
+
+    assert resolution.path == Path(_DEFAULT_DATA_DIR)
+    assert resolution.caveat == "", "nothing configured means the default IS the truth"
+
+
+def test_an_unreadable_env_file_says_so_instead_of_guessing(tmp_path):
+    def denied(path):
+        return None
+
+    resolution = resolve_reported_data_dir({}, Path("/etc/visio-recorder.env"), denied)
+
+    assert resolution.path == Path(_DEFAULT_DATA_DIR)
+    assert "/etc/visio-recorder.env" in resolution.caveat
+    assert "could not be confirmed" in resolution.caveat
+    assert "sudo" in resolution.caveat
+
+
+def test_the_caveat_reaches_the_report_without_changing_any_severity(tmp_path):
+    caveat = "could not be confirmed"
+
+    writable = check_data_dir_writable(path=tmp_path, caveat=caveat)
+    missing = check_data_dir_writable(path=tmp_path / "gone", caveat=caveat)
+    unwritable = check_data_dir_writable(
+        path=tmp_path, getuid=lambda: _OPERATOR_UID, can_write=_unwritable, caveat=caveat
+    )
+
+    for result in (writable, missing, unwritable):
+        assert caveat in result.detail
+    assert writable.severity == BLOCK and writable.ok is True
+    assert missing.severity == BLOCK and missing.ok is False
+    assert unwritable.severity == WARN and unwritable.ok is False
+
+
+def test_the_caveat_is_absent_when_the_value_was_confirmed(tmp_path):
+    assert "[" not in check_data_dir_writable(path=tmp_path).detail
+
+
+def test_an_unprivileged_run_reports_the_caveat_end_to_end(tmp_path, monkeypatch, capsys):
+    """The operator sequence the caveat exists for.
+
+    A device recording to a USB mount, `visio-preflight` over SSH: the default
+    is genuinely missing, so this still blocks - but the report says why the
+    directory it checked may not be the configured one, instead of sending the
+    operator to re-run setup-device.sh, which would not create it either.
+    """
+    monkeypatch.delenv("VISIO_DATA_DIR", raising=False)
+    monkeypatch.setattr("visio_recorder.preflight.read_env_file", lambda path: None)
+    monkeypatch.setattr(
+        "visio_recorder.preflight.run_checks",
+        lambda source, data_dir, caveat: [check_data_dir_writable(path=data_dir, caveat=caveat)],
+    )
+
+    exit_code = main()
+
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert _DEFAULT_DATA_DIR in out
+    assert "could not be confirmed" in out
+
+
+def test_the_battery_source_is_resolved_the_same_way(tmp_path):
+    # Same blind spot, same fix - only WARN checks depend on it, so it carries
+    # no caveat, but a root run should still see what the daemon will.
+    env_file = _env_file(tmp_path, "VISIO_BATTERY_SOURCE=none\n")
+
+    assert resolve_battery_source({}, env_file) == "none"
+    assert resolve_battery_source({"VISIO_BATTERY_SOURCE": "pijuice"}, env_file) == "pijuice"
+    assert resolve_battery_source({}, tmp_path / "absent.env") == "pijuice"
+    assert resolve_battery_source({}, tmp_path / "x.env", lambda path: None) == "pijuice"
