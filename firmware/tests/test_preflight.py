@@ -11,11 +11,14 @@ from pathlib import Path
 
 import pytest
 
+from visio_recorder.daemon import _DEFAULT_DATA_DIR as _DAEMON_DEFAULT_DATA_DIR
+from visio_recorder.daemon import load_config
 from visio_recorder.preflight import (
     BLOCK,
     WARN,
     CheckResult,
     _DAEMON_UID,
+    _DEFAULT_DATA_DIR,
     check_binary_on_path,
     check_camera_detected,
     check_data_dir_writable,
@@ -26,6 +29,7 @@ from visio_recorder.preflight import (
     format_report,
     has_blocking_failure,
     main,
+    resolve_data_dir,
     run_checks,
 )
 
@@ -222,7 +226,7 @@ def test_non_daemon_caller_on_a_healthy_device_exits_zero(tmp_path, monkeypatch,
             path=tmp_path, getuid=lambda: _OPERATOR_UID, can_write=_unwritable
         ),
     ]
-    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source: healthy)
+    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir: healthy)
 
     exit_code = main()
 
@@ -237,7 +241,7 @@ def test_daemon_uid_on_the_same_device_still_blocks_startup(tmp_path, monkeypatc
     blocked = [
         check_data_dir_writable(path=tmp_path, getuid=lambda: _DAEMON_UID, can_write=_unwritable)
     ]
-    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source: blocked)
+    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir: blocked)
 
     assert has_blocking_failure(blocked) is True
     assert main() == 1
@@ -247,7 +251,7 @@ def test_a_missing_data_dir_blocks_startup_for_a_non_daemon_caller_too(tmp_path,
     # The regression this pins: an unprovisioned device must not report exit 0
     # just because the operator ran the diagnostic as themselves.
     unprovisioned = [check_data_dir_writable(path=tmp_path / "missing", getuid=lambda: _OPERATOR_UID)]
-    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source: unprovisioned)
+    monkeypatch.setattr("visio_recorder.preflight.run_checks", lambda source, data_dir: unprovisioned)
 
     assert has_blocking_failure(unprovisioned) is True
     assert main() == 1
@@ -400,3 +404,106 @@ def test_format_report_marks_failures_with_severity_and_passes_as_ok():
 
     assert "[OK] a: fine" in report
     assert "[WARN] b: missing" in report
+
+
+# --------------------------------------------------------------------------
+# The data dir preflight gates on has to be the one the daemon records into.
+# `VISIO_DATA_DIR` is documented configuration the unit's EnvironmentFile makes
+# reachable, so a hardcoded /var/lib/visio-recorder would report [OK] for a
+# directory the daemon never touches while it writes somewhere else.
+# --------------------------------------------------------------------------
+
+
+def test_resolve_data_dir_defaults_to_the_packaged_location():
+    assert resolve_data_dir({}) == Path(_DEFAULT_DATA_DIR)
+
+
+def test_resolve_data_dir_honours_the_configured_override():
+    assert resolve_data_dir({"VISIO_DATA_DIR": "/mnt/usb/visio"}) == Path("/mnt/usb/visio")
+
+
+def test_resolve_data_dir_matches_daemon_load_config_exactly():
+    """Same key, same default, same precedence - including the odd cases.
+
+    ``.get(key, default)`` and ``.get(key) or default`` differ on an empty
+    value, and an env file carrying ``VISIO_DATA_DIR=`` gives systemd exactly
+    that. Whatever the daemon does with it, the gate has to agree, or it is
+    green about a directory the daemon is not using.
+    """
+    for env in ({}, {"VISIO_DATA_DIR": "/mnt/usb/visio"}, {"VISIO_DATA_DIR": ""}):
+        expected = load_config({"SUPABASE_URL": "u", "SUPABASE_ANON_KEY": "k", **env}).data_dir
+
+        assert resolve_data_dir(env) == expected
+
+
+def test_preflight_and_daemon_share_one_default_data_dir():
+    # preflight cannot import daemon (daemon imports preflight), so the two
+    # constants are pinned to each other here instead.
+    assert _DEFAULT_DATA_DIR == _DAEMON_DEFAULT_DATA_DIR
+
+
+def test_run_checks_gates_on_the_data_dir_it_is_given(tmp_path):
+    configured = tmp_path / "usb-mount"
+    configured.mkdir()
+
+    detail = next(r.detail for r in run_checks("none", configured) if r.name == "data_dir")
+
+    assert str(configured) in detail
+
+
+def test_run_checks_falls_back_to_the_default_data_dir():
+    detail = next(r.detail for r in run_checks("none") if r.name == "data_dir")
+
+    assert _DEFAULT_DATA_DIR in detail
+
+
+def test_main_checks_the_configured_data_dir(monkeypatch, capsys):
+    seen = []
+
+    def record(source, data_dir):
+        seen.append(data_dir)
+        return []
+
+    monkeypatch.setenv("VISIO_DATA_DIR", "/mnt/usb/visio")
+    monkeypatch.setattr("visio_recorder.preflight.run_checks", record)
+
+    main()
+    capsys.readouterr()
+
+    assert seen == [Path("/mnt/usb/visio")]
+
+
+# --------------------------------------------------------------------------
+# Remediation advice. preflight is the operator's entry point, so pointing at
+# the wrong step costs real bring-up time: only supabase comes from uv sync,
+# gpiozero is apt's python3-gpiozero reaching the venv through
+# --system-site-packages, and rpi_ws281x is setup-device.sh's source build.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("module", "expected"),
+    [
+        ("rpi_ws281x", "builds it into the venv"),
+        ("gpiozero", "python3-gpiozero"),
+        ("supabase", "uv sync"),
+    ],
+)
+def test_a_failed_import_names_the_step_that_actually_installs_it(module, expected):
+    result = check_importable(module, find_spec=lambda mod: None)
+
+    assert expected in result.detail
+    assert result.severity == BLOCK
+
+
+def test_no_module_is_advised_to_check_a_step_that_does_not_install_it():
+    for module in ("rpi_ws281x", "gpiozero"):
+        detail = check_importable(module, find_spec=lambda mod: None).detail
+
+        assert "uv sync" not in detail, f"{module} does not come from uv sync"
+
+
+def test_an_unrecognised_module_still_gets_the_uv_sync_default():
+    result = check_importable("some-future-dependency", find_spec=lambda mod: None)
+
+    assert "check the uv sync step" in result.detail

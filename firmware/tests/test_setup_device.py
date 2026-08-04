@@ -1356,3 +1356,98 @@ def test_a_failed_dev_package_install_does_not_abort_the_run(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "continuing without them" in result.stdout
     assert "REACHED_THE_NEXT_STEP" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# Steps 9 and 10. A non-fatal step-5 failure that leaves the daemon unable to
+# start has to reach the summary: on a Pi Zero 2W thousands of lines of apt
+# output scroll between the two, so a mid-run warning is realistically gone by
+# the time the operator reads "Setup complete". And the directory step 9
+# creates must be the one preflight checks and the daemon records into, or
+# preflight blocks on a path nothing ever creates and advises a re-run that
+# would not create it either.
+# --------------------------------------------------------------------------
+
+
+def _run_final_steps(
+    tmp_path: Path, env_text: str, ws281x_missing: str
+) -> subprocess.CompletedProcess:
+    """Run steps 9 and 10 for real, with only DATA_DIR redirected."""
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text(env_text)
+    block = 'log "Step 9/10: data dir"' + _script_text().split('log "Step 9/10: data dir"')[1]
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            _extract_function("env_file_value"),
+            _extract_assignment("PREFLIGHT_BIN"),
+            _extract_assignment("RPI_WS281X_SPEC"),
+            f'DATA_DIR="{tmp_path}/default-data-dir"',
+            'target_sha="deadbee"',
+            "reboot_needed=false",
+            f"ws281x_missing={ws281x_missing}",
+            block,
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={"PATH": "/usr/bin:/bin", "ENV_FILE": str(env_file)},
+    )
+
+
+_CONFIGURED_ENV = "SUPABASE_URL=u\nSUPABASE_ANON_KEY=k\nVISIO_BATTERY_SOURCE=none\n"
+
+
+def test_a_failed_ws281x_build_is_repeated_in_the_summary(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, ws281x_missing="true")
+
+    assert result.returncode == 0, result.stderr
+    assert "INCOMPLETE" in result.stdout
+    assert "rpi_ws281x" in result.stdout
+    assert "daemon will not start" in result.stdout
+    # Still non-fatal: the data dir and the rest of the summary happen anyway.
+    assert (tmp_path / "default-data-dir").is_dir()
+    assert "Setup complete." in result.stdout
+
+
+def test_a_successful_run_says_nothing_about_ws281x(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, ws281x_missing="false")
+
+    assert result.returncode == 0, result.stderr
+    assert "INCOMPLETE" not in result.stdout
+    assert "Setup complete." in result.stdout
+
+
+def test_the_data_dir_step_provisions_the_configured_directory(tmp_path):
+    configured = tmp_path / "usb-mount" / "visio"
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={configured}\n", ws281x_missing="false"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert configured.is_dir(), "preflight checks this path, so provisioning has to create it"
+    assert not (tmp_path / "default-data-dir").exists()
+    assert str(configured) in result.stdout, "the summary has to name the directory it made"
+
+
+def test_the_data_dir_step_falls_back_to_the_default_when_unset(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, ws281x_missing="false")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "default-data-dir").is_dir()
+
+
+def test_a_quoted_data_dir_is_unquoted_the_way_systemd_reads_it(tmp_path):
+    # The env file is a systemd EnvironmentFile, where quoting is idiomatic;
+    # a literal directory named '"/mnt/usb"' would be a silent mis-provision.
+    configured = tmp_path / "quoted-mount"
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV + f'VISIO_DATA_DIR="{configured}"\n', ws281x_missing="false"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert configured.is_dir()

@@ -217,7 +217,9 @@ def main() -> int:
     Handoff section).
     """
     preflight_battery_source = os.environ.get("VISIO_BATTERY_SOURCE", "pijuice")
-    preflight_results = preflight.run_checks(preflight_battery_source)
+    preflight_results = preflight.run_checks(
+        preflight_battery_source, preflight.resolve_data_dir(os.environ)
+    )
     print(preflight.format_report(preflight_results))
     if preflight.has_blocking_failure(preflight_results):
         return 1

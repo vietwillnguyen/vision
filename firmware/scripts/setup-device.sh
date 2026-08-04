@@ -46,6 +46,7 @@ BASHRC_BEGIN="# >>> visio-recorder dev shell (managed by setup-device.sh) >>>"
 BASHRC_END="# <<< visio-recorder dev shell (managed by setup-device.sh) <<<"
 
 reboot_needed=false
+ws281x_missing=false
 
 log() {
   echo "[setup-device] $*"
@@ -360,10 +361,13 @@ if ! venv_sees_system_packages "${VENV_DIR}"; then
 fi
 
 # rpi_ws281x is the one hardware library with no apt package anywhere, so it is
-# built from source here. Non-fatal on purpose: the systemd unit, the env file
-# and the data dir below are still worth provisioning on a device with no
-# compiler or no network, and ${PREFLIGHT_BIN} reports the missing module
-# itself rather than this script guessing on its behalf.
+# built from source here, which is why a device that has to build it needs a C
+# compiler and the Python headers. Non-fatal on purpose: the systemd unit, the
+# env file and the data dir below are still worth provisioning on a device with
+# no compiler or no network, and ${PREFLIGHT_BIN} reports the missing module
+# itself rather than this script guessing on its behalf. A failure is carried to
+# the summary in ${ws281x_missing} the way ${reboot_needed} is - thousands of
+# lines of apt output scroll past between here and there.
 if "${VENV_DIR}/bin/python3" -c 'import rpi_ws281x' >/dev/null 2>&1; then
   log "rpi_ws281x already importable from ${VENV_DIR} - nothing to build"
 else
@@ -381,6 +385,7 @@ else
   if uv pip install --python "${VENV_DIR}/bin/python3" "${RPI_WS281X_SPEC}"; then
     log "${RPI_WS281X_SPEC} built and installed into ${VENV_DIR}"
   else
+    ws281x_missing=true
     log "WARNING: could not install ${RPI_WS281X_SPEC} into ${VENV_DIR}. It ships as a source distribution, so the build needs a C compiler, Python headers and network access."
     log "  ${PREFLIGHT_BIN} will report rpi_ws281x as a blocking failure, and the daemon will not start, until this succeeds. Fix the build prerequisites and re-run."
   fi
@@ -435,10 +440,17 @@ SUPABASE_ANON_KEY=
 # once real battery hardware is wired - see
 # docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md
 VISIO_BATTERY_SOURCE=none
-# Editor and shell conveniences (neovim, ls/git aliases, history settings, a
-# branch-aware prompt) installed by setup-device.sh for whoever runs it.
-# Useful during bring-up; set to 0 for a shipped appliance image so the
-# pendant carries no dev toolchain. The daemon ignores this key.
+# Editor and interactive shell conveniences (neovim as EDITOR/VISUAL, tmux,
+# ls/git aliases, history settings, a branch-aware prompt, and the managed
+# block in the invoking user's ~/.bashrc) installed by setup-device.sh for
+# whoever runs it. Useful during bring-up; set to 0 for a shipped appliance
+# image to skip them. The daemon ignores this key.
+#
+# Scope, so this is not mistaken for a wider switch: it covers those editor
+# and shell conveniences only. It does not control the LED driver's build
+# dependencies - rpi_ws281x currently has no apt package in any archive, so a
+# device that has to build it from source gets a C compiler and the Python
+# headers in step 5 regardless of this setting.
 #
 # Setting it to 0 later removes the managed block from that user's ~/.bashrc
 # on the next run, but deliberately does NOT uninstall the packages - purging
@@ -447,6 +459,10 @@ VISIO_BATTERY_SOURCE=none
 # that never installs the dev shell at all: this file is written before the
 # developer-shell step runs, so nothing has been installed yet.
 VISIO_DEV_SHELL=1
+# Where recordings are written. setup-device.sh creates this directory and
+# visio-preflight checks it, both reading the value from here, so neither can
+# disagree with the daemon about which directory matters.
+# VISIO_DATA_DIR=/var/lib/visio-recorder
 EOF
   chmod 600 "${ENV_FILE}"
   log "Wrote template ${ENV_FILE} - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script"
@@ -771,15 +787,26 @@ BASHRC_BODY
 fi
 
 log "Step 9/10: data dir"
-mkdir -p "${DATA_DIR}"
+# The daemon records into ${ENV_FILE}'s VISIO_DATA_DIR (daemon.py's
+# load_config) and preflight now checks that same directory, so provision the
+# one that is actually configured rather than the default it usually is -
+# otherwise preflight blocks on a directory nothing ever created and advises a
+# re-run that would not create it either.
+data_dir="$(env_file_value VISIO_DATA_DIR)"
+data_dir="${data_dir:-${DATA_DIR}}"
+mkdir -p "${data_dir}"
 
 log "Step 10/10: summary"
 battery_source="$(env_file_value VISIO_BATTERY_SOURCE)"
 battery_source="${battery_source:-pijuice}"
 log "Provisioned revision: ${target_sha}"
 log "VISIO_BATTERY_SOURCE=${battery_source}"
+log "Data dir: ${data_dir}"
 if [[ "${battery_source}" == "none" ]]; then
   log "Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now."
+fi
+if [[ "${ws281x_missing}" == "true" ]]; then
+  log "INCOMPLETE: ${RPI_WS281X_SPEC} could not be installed (see the step 5 warning above), so the daemon will not start until it is - '${PREFLIGHT_BIN}' will report rpi_ws281x as a blocking failure."
 fi
 log "Run '${PREFLIGHT_BIN}' from any directory to check the runtime environment."
 if [[ "${reboot_needed}" == "true" ]]; then

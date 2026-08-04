@@ -91,11 +91,13 @@ The project venv is built from the system `python3` with `--system-site-packages
 
 Preflight runs automatically before every start (`ExecStartPre=`) and standalone as **`visio-preflight`** for manual diagnostics - a console script symlinked into `/usr/local/bin`, so it works from any directory as a plain SSH user with no venv path and no `sudo`.
 Its first line reports which install the checks ran from, since a device typically carries both `/opt/visio-recorder` and your own clone.
+It checks the data dir the daemon will actually use - `VISIO_DATA_DIR` when the env file sets it - so the gate and the daemon cannot disagree about which directory matters, and a failed import names the step that installs that module rather than always blaming `uv sync`.
 Missing PiJuice hardware only warns (`VISIO_BATTERY_SOURCE=none` is the current bring-up default - see [`2026-07-21-visio-device-provisioning-design.md`](docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md)), everything else blocks startup with a clear reason in `journalctl`.
 
 The script provisions an explicit revision rather than pulling: it defaults to the exact commit of the clone you run it from, so two devices set up from the same checkout get identical firmware, and `VISIO_GIT_REF=<tag|branch|sha>` overrides it.
-It also installs editor and shell conveniences (neovim, `ls`/history aliases, a branch-aware prompt) into the invoking user's `~/.bashrc`; set `VISIO_DEV_SHELL=0` in `/etc/visio-recorder.env` to skip that for an appliance image.
-The env file is written before that step runs, so on a fresh device the script stops at the template with the switch already in it - setting it to `0` there gives a device that never installs the dev toolchain at all.
+It also installs editor and interactive shell conveniences (neovim as `EDITOR`/`VISUAL`, tmux, `ls`/history aliases, a branch-aware prompt) into the invoking user's `~/.bashrc`; set `VISIO_DEV_SHELL=0` in `/etc/visio-recorder.env` to skip that for an appliance image.
+The switch covers those conveniences only, not the LED driver's build dependencies: `rpi-ws281x` currently has no apt package in any archive, so a device that has to build it from source gets a C compiler and the Python headers regardless of this setting.
+The env file is written before the dev-shell step runs, so on a fresh device the script stops at the template with the switch already in it - setting it to `0` there gives a device that never installs those conveniences at all.
 Flipping it to `0` later removes the managed `~/.bashrc` block on the next run but deliberately leaves the installed packages alone, since silently purging an operator's editor mid-bring-up is worse than leaving it.
 
 ### Local development

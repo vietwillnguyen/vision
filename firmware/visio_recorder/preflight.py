@@ -25,14 +25,18 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 BLOCK = "block"
 WARN = "warn"
 
-_DATA_DIR = Path("/var/lib/visio-recorder")
+# Must stay equal to daemon.py's ``_DEFAULT_DATA_DIR``; a test pins the two
+# together. Importing it from there instead would be circular - daemon.py
+# imports this module for its own startup gate.
+_DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
+_DATA_DIR = Path(_DEFAULT_DATA_DIR)
 _I2C_DEVICE = Path("/dev/i2c-1")
 
 # The uid the systemd unit starts the daemon as (User= is unset, so root).
@@ -60,16 +64,37 @@ def check_binary_on_path(
     )
 
 
+# Where each blocking module actually comes from on a provisioned device, so
+# the report points at the step that failed rather than at whichever one is
+# most familiar. Only supabase is a uv.lock entry: gpiozero is an apt package
+# reached through the venv's --system-site-packages, and rpi_ws281x has no apt
+# package in any archive, so setup-device.sh compiles it into the venv.
+_IMPORT_REMEDY = {
+    "rpi_ws281x": (
+        "no archive packages it, so setup-device.sh builds it into the venv - "
+        "check that build, which needs a C compiler, Python headers and network access"
+    ),
+    "gpiozero": (
+        "installed by apt as python3-gpiozero and visible here only because the venv "
+        "is built with --system-site-packages - check the apt install step"
+    ),
+    "supabase": "check the uv sync step",
+}
+
+
 def check_importable(
     module: str,
     find_spec: Callable[[str], object | None] = importlib.util.find_spec,
+    remedy: str | None = None,
 ) -> CheckResult:
     found = find_spec(module) is not None
+    if remedy is None:
+        remedy = _IMPORT_REMEDY.get(module, "check the uv sync step")
     return CheckResult(
         name=module,
         severity=BLOCK,
         ok=found,
-        detail="importable" if found else f"{module} not importable - check the uv sync step",
+        detail="importable" if found else f"{module} not importable - {remedy}",
     )
 
 
@@ -202,7 +227,19 @@ def check_i2c_enabled(path: Path = _I2C_DEVICE) -> CheckResult:
     )
 
 
-def run_checks(battery_source: str) -> list[CheckResult]:
+def resolve_data_dir(env: Mapping[str, str] | None = None) -> Path:
+    """The directory the daemon will actually record into.
+
+    Same key, same default and the same ``.get`` precedence as
+    ``daemon.load_config``, so the gate and the daemon cannot end up talking
+    about different directories: an operator who points ``VISIO_DATA_DIR`` at
+    a USB mount would otherwise get an ``[OK]`` for /var/lib/visio-recorder
+    while the daemon writes somewhere else entirely.
+    """
+    return Path((os.environ if env is None else env).get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR))
+
+
+def run_checks(battery_source: str, data_dir: Path = _DATA_DIR) -> list[CheckResult]:
     results = [
         check_binary_on_path("rpicam-vid"),
         check_binary_on_path("rpicam-still"),
@@ -214,7 +251,7 @@ def run_checks(battery_source: str) -> list[CheckResult]:
         check_importable("supabase"),
         check_camera_detected(),
         check_networkmanager_running(),
-        check_data_dir_writable(),
+        check_data_dir_writable(path=data_dir),
     ]
     if battery_source == "pijuice":
         results.append(check_pijuice_importable())
@@ -258,7 +295,7 @@ def main() -> int:
     not unit tested itself.
     """
     battery_source = os.environ.get("VISIO_BATTERY_SOURCE", "pijuice")
-    results = run_checks(battery_source)
+    results = run_checks(battery_source, resolve_data_dir())
     print(format_report(results))
     return 1 if has_blocking_failure(results) else 0
 
