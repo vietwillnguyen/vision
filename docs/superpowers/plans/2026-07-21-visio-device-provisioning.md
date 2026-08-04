@@ -1021,7 +1021,8 @@ sudo nano /etc/visio-recorder.env   # fill in SUPABASE_URL, SUPABASE_ANON_KEY; l
 sudo bash setup-device.sh
 ```
 
-Expected: completes through all 10 steps; summary reports the provisioned commit SHA and `VISIO_BATTERY_SOURCE=none` with the bring-up reminder, and states whether a reboot is required.
+Expected: completes through all 10 steps; summary reports the provisioned commit SHA, the data dir and `VISIO_BATTERY_SOURCE=none` with the bring-up reminder, and states whether a reboot is required.
+The last line is `Setup complete.` and `echo $?` is 0; an `INCOMPLETE` line followed by `Setup incomplete` and exit 1 means the run finished but the device cannot record or start yet - fix what that line names and re-run.
 
 - [ ] **Step 3: Reboot if the summary said to**
 

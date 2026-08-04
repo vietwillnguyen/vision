@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from visio_recorder import preflight
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import record_segment
 from visio_recorder.device_identity import load_or_create_device_id, register_device
-from visio_recorder import preflight
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
     PiJuiceBatteryReader,
