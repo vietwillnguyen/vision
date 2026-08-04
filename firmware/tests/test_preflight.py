@@ -670,3 +670,45 @@ def test_the_battery_source_is_resolved_the_same_way(tmp_path):
     assert resolve_battery_source({"VISIO_BATTERY_SOURCE": "pijuice"}, env_file) == "pijuice"
     assert resolve_battery_source({}, tmp_path / "absent.env") == "pijuice"
     assert resolve_battery_source({}, tmp_path / "x.env", lambda path: None) == "pijuice"
+
+
+def test_read_env_file_accepts_an_indented_key_the_way_systemd_does(tmp_path):
+    # Pinned on both sides: setup-device.sh's env_file_value tolerates the
+    # same leading whitespace, so the script cannot provision one directory
+    # while systemd hands the daemon another.
+    values = read_env_file(_env_file(tmp_path, "  VISIO_DATA_DIR=/mnt/usb/visio\n"))
+
+    assert values["VISIO_DATA_DIR"] == "/mnt/usb/visio"
+
+
+def test_read_env_file_degrades_instead_of_raising_on_undecodable_bytes(tmp_path):
+    # systemd tolerates arbitrary bytes in an EnvironmentFile, so the daemon
+    # starts fine; a traceback out of the diagnostic that exists to explain
+    # such a device would be worse than any report it could print.
+    corrupt = tmp_path / "visio-recorder.env"
+    corrupt.write_bytes(b"VISIO_DATA_DIR=/mnt/\xff\xfe/visio\n")
+
+    assert read_env_file(corrupt) is None
+
+
+def test_an_undecodable_env_file_produces_a_caveat_not_a_traceback(tmp_path):
+    corrupt = tmp_path / "visio-recorder.env"
+    corrupt.write_bytes(b"VISIO_DATA_DIR=/mnt/\xff\xfe/visio\n")
+
+    resolution = resolve_reported_data_dir({}, corrupt)
+
+    assert resolution.path == Path(_DEFAULT_DATA_DIR)
+    assert "could not be read or parsed" in resolution.caveat
+
+
+def test_read_env_file_does_not_depend_on_the_ambient_locale(tmp_path, monkeypatch):
+    # Under systemd the unit inherits whatever locale it was given, routinely
+    # C/POSIX. Decoding a valid UTF-8 path as ASCII would fail on a file that
+    # is not corrupt at all.
+    monkeypatch.setenv("LC_ALL", "C")
+    monkeypatch.setenv("LANG", "C")
+    utf8_path = "/mnt/données/visio"
+
+    values = read_env_file(_env_file(tmp_path, f"VISIO_DATA_DIR={utf8_path}\n"))
+
+    assert values["VISIO_DATA_DIR"] == utf8_path

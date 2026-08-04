@@ -1406,13 +1406,15 @@ _CONFIGURED_ENV = "SUPABASE_URL=u\nSUPABASE_ANON_KEY=k\nVISIO_BATTERY_SOURCE=non
 def test_a_failed_ws281x_build_is_repeated_in_the_summary(tmp_path):
     result = _run_final_steps(tmp_path, _CONFIGURED_ENV, ws281x_missing="true")
 
-    assert result.returncode == 0, result.stderr
     assert "INCOMPLETE" in result.stdout
     assert "rpi_ws281x" in result.stdout
     assert "daemon will not start" in result.stdout
-    # Still non-fatal: the data dir and the rest of the summary happen anyway.
+    # Still non-fatal where it happened: the data dir and the rest of the
+    # summary happen anyway. Only the very end reports the outcome.
     assert (tmp_path / "default-data-dir").is_dir()
-    assert "Setup complete." in result.stdout
+    assert "Setup complete." not in result.stdout
+    assert "Setup incomplete" in result.stdout
+    assert result.returncode == 1, "a device whose daemon cannot start is not a successful run"
 
 
 def test_a_successful_run_says_nothing_about_ws281x(tmp_path):
@@ -1468,14 +1470,18 @@ def test_an_uncreatable_data_dir_is_reported_in_the_summary_instead_of_aborting(
 
     result = _run_final_steps(tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={blocked}/visio\n")
 
-    assert result.returncode == 0, result.stderr
     assert "cannot create" in result.stdout
     assert "VISIO_DATA_DIR" in result.stdout
     assert "INCOMPLETE" in result.stdout
     assert "was NOT created" in result.stdout
-    # The report the abort would have swallowed.
+    # What aborting at step 9 would have swallowed: the run still reaches the
+    # end and prints everything the operator needs.
     assert "Provisioned revision: deadbee" in result.stdout
-    assert "Setup complete." in result.stdout
+    assert "No reboot required" in result.stdout
+    # ...and only then reports the outcome honestly, in both channels.
+    assert "Setup complete." not in result.stdout
+    assert "Setup incomplete" in result.stdout
+    assert result.returncode == 1, "a device with nowhere to record is not a successful run"
 
 
 def test_a_relative_data_dir_is_rejected_rather_than_silently_diverging(tmp_path):
@@ -1484,12 +1490,13 @@ def test_a_relative_data_dir_is_rejected_rather_than_silently_diverging(tmp_path
     # places without either one reporting a problem.
     result = _run_final_steps(tmp_path, _CONFIGURED_ENV + "VISIO_DATA_DIR=recordings\n")
 
-    assert result.returncode == 0, result.stderr
     assert "not an absolute path" in result.stdout
     assert "INCOMPLETE" in result.stdout
     assert not (tmp_path / "recordings").exists()
     assert not (tmp_path / "default-data-dir").exists(), "a bad value must not fall back silently"
-    assert "Setup complete." in result.stdout
+    assert "Setup complete." not in result.stdout
+    assert "Setup incomplete" in result.stdout
+    assert result.returncode == 1
 
 
 def test_a_created_data_dir_says_nothing_about_being_incomplete(tmp_path):
@@ -1509,3 +1516,48 @@ def test_the_env_template_does_not_promise_preflight_can_read_it(tmp_path):
     assert template.count("VISIO_DATA_DIR=") == 1, "the key must not be duplicated"
     assert "600" in template or "root-owned" in template
     assert "sudo" in template
+
+
+def test_a_healthy_run_still_reports_success_in_both_channels(tmp_path):
+    # The other half of the contract: "finished but broken" must be
+    # distinguishable from "finished and fine", not merely louder.
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+
+    assert result.returncode == 0, result.stderr
+    assert "Setup complete." in result.stdout
+    assert "Setup incomplete" not in result.stdout
+
+
+def test_the_env_template_checkpoint_still_exits_zero():
+    # Writing the template and stopping is a deliberate re-run checkpoint, not
+    # a failure, so the non-zero outcome above must not have leaked into it.
+    step = _step_block(7)
+    template_branch = step.split("chmod 600")[1].split("else")[0]
+
+    assert "exit 0" in template_branch
+    assert "exit 1" not in template_branch
+
+
+def test_env_file_value_reads_an_indented_key_the_way_systemd_does(tmp_path):
+    # systemd's EnvironmentFile parser skips leading whitespace. A reader
+    # anchored at column 0 would miss the key here while the daemon and
+    # preflight both saw it, so this script would provision one data dir and
+    # the unit would then block on another.
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text("  VISIO_DATA_DIR=/mnt/usb/visio\n\tVISIO_BATTERY_SOURCE=none\n")
+    lib = _shell_lib(tmp_path / "lib", "env_file_value")
+
+    result = _run(lib, 'env_file_value VISIO_DATA_DIR\nenv_file_value VISIO_BATTERY_SOURCE', env_file)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["/mnt/usb/visio", "none"]
+
+
+def test_an_indented_data_dir_is_provisioned_rather_than_missed(tmp_path):
+    configured = tmp_path / "indented-mount"
+
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV + f"   VISIO_DATA_DIR={configured}\n")
+
+    assert result.returncode == 0, result.stderr
+    assert configured.is_dir(), "systemd would have given the daemon this path"
+    assert not (tmp_path / "default-data-dir").exists()

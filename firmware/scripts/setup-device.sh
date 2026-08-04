@@ -416,10 +416,15 @@ systemctl enable visio-recorder
 # and will be unavoidable once SUPABASE_ANON_KEY is a real JWT, so every reader
 # below goes through this - otherwise this script and the daemon can disagree
 # about what a key is set to, and the disagreement is silent.
+#
+# The key match tolerates leading whitespace because systemd does. Anchoring it
+# at column 0 would make an indented key invisible here while the daemon and
+# preflight both still saw it, so this script would provision one data dir and
+# the unit would then block on another - silently, and permanently.
 env_file_value() {
   local key="$1" value=""
   if [[ -f "${ENV_FILE}" ]]; then
-    value="$(grep -E "^${key}=" "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+    value="$(grep -E "^[[:space:]]*${key}=" "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
   fi
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
@@ -839,5 +844,14 @@ if [[ "${reboot_needed}" == "true" ]]; then
   log "REBOOT REQUIRED: interface changes need a reboot to take effect before the daemon will work."
 else
   log "No reboot required."
+fi
+# Two different outcomes, deliberately not conflated. The env-file step above
+# exits 0 because it is a re-run checkpoint - nothing is wrong, the operator
+# just has keys to fill in. Reaching here with an INCOMPLETE line means the
+# run finished and the device is not usable, which neither the last line an
+# operator reads nor an exit status a caller tests may report as success.
+if [[ "${data_dir_failed}" == "true" || "${ws281x_missing}" == "true" ]]; then
+  log "Setup incomplete - see the INCOMPLETE lines above. Fix what they name and re-run this script."
+  exit 1
 fi
 log "Setup complete."

@@ -262,14 +262,23 @@ def read_env_file(path: Path = _ENV_FILE) -> Mapping[str, str] | None:
 
     Parsing matches how systemd reads an EnvironmentFile, and how
     setup-device.sh's own ``env_file_value`` reads it: comments skipped, last
-    assignment wins, surrounding whitespace and one layer of matching quotes
-    stripped.
+    assignment wins, leading whitespace before a key tolerated, and
+    surrounding whitespace plus one layer of matching quotes stripped from
+    the value.
+
+    The encoding is pinned rather than taken from the locale, which under
+    systemd is whatever the unit inherited and is routinely C/POSIX; decoding
+    a UTF-8 path as ASCII would otherwise fail on a perfectly valid file. A
+    decode failure that survives that is still a can't-read case, and returns
+    ``None`` like any other - this function is a diagnostic's input, so
+    raising here would replace the whole report with a traceback in
+    journalctl.
     """
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
-    except OSError:
+    except (OSError, ValueError):
         return None
     values: dict[str, str] = {}
     for line in text.splitlines():
@@ -315,9 +324,10 @@ def resolve_reported_data_dir(
         return DataDirResolution(
             Path(_DEFAULT_DATA_DIR),
             caveat=(
-                f"checked the default: {env_file} is not readable by this caller, so a "
-                f"configured VISIO_DATA_DIR could not be confirmed - re-run under sudo "
-                f"to check the configured path"
+                f"checked the default: {env_file} could not be read or parsed, so a "
+                f"configured VISIO_DATA_DIR could not be confirmed - it is mode 600 "
+                f"root-owned, so re-run under sudo to check the configured path; if "
+                f"that fails too the file itself is unreadable or malformed"
             ),
         )
     return DataDirResolution(resolve_data_dir(configured))
