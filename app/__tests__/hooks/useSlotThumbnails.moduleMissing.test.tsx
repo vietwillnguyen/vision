@@ -1,6 +1,9 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { useSlotThumbnails } from '../../src/hooks/useSlotThumbnails';
+import type { TimelineSlot } from '../../src/logic/timeline';
+
 // Simulates the web platform, where Metro resolves videoThumbnails.web.ts
 // (isAvailable: false) instead of videoThumbnails.ts - distinct from a
 // single segment's extraction failing after the module resolved fine.
@@ -8,9 +11,6 @@ jest.mock('../../src/lib/videoThumbnails', () => ({
   isAvailable: false,
   getThumbnailAsync: jest.fn(() => Promise.reject(new Error('not supported'))),
 }));
-
-import { useSlotThumbnails } from '../../src/hooks/useSlotThumbnails';
-import type { TimelineSlot } from '../../src/logic/timeline';
 
 const SEGMENT = {
   id: 's1',

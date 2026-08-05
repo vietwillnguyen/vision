@@ -220,13 +220,11 @@ def test_segment_row_matches_required_migration_columns(tmp_path):
     row = store.persisted_segments[0]
 
     columns = _table_columns("*_create_segments.sql", "segments")
-    assert set(row.keys()) <= set(columns.keys()), (
-        f"pipeline writes unknown segment columns: {set(row.keys()) - set(columns.keys())}"
-    )
+    unknown = set(row.keys()) - set(columns.keys())
+    assert not unknown, f"pipeline writes unknown segment columns: {unknown}"
     required = _required_columns_without_default(columns) - {"id"}
-    assert required <= set(row.keys()), (
-        f"pipeline's segment row is missing required columns: {required - set(row.keys())}"
-    )
+    missing = required - set(row.keys())
+    assert not missing, f"pipeline's segment row is missing required columns: {missing}"
 
 
 def test_reel_row_matches_required_migration_columns_and_app_hook_fields(tmp_path):
@@ -247,12 +245,12 @@ def test_reel_row_matches_required_migration_columns_and_app_hook_fields(tmp_pat
     row = store.inserted_reels[0]
 
     columns = _table_columns("*_create_reels.sql", "reels")
-    assert set(row.keys()) <= set(columns.keys()), (
-        f"pipeline writes unknown reel columns: {set(row.keys()) - set(columns.keys())}"
-    )
+    unknown = set(row.keys()) - set(columns.keys())
+    assert not unknown, f"pipeline writes unknown reel columns: {unknown}"
     required = _required_columns_without_default(columns) - {"id", "created_at"}
-    assert required <= set(row.keys()), (
-        f"pipeline's reel row is missing required columns: {required - set(row.keys())}"
+    missing_required = required - set(row.keys())
+    assert not missing_required, (
+        f"pipeline's reel row is missing required columns: {missing_required}"
     )
 
     ts_source = USE_REEL_TS.read_text()
@@ -262,6 +260,5 @@ def test_reel_row_matches_required_migration_columns_and_app_hook_fields(tmp_pat
     # present on every real row Supabase returns, so the app can read them.
     db_generated = {"id", "created_at"}
     available_to_app = set(row.keys()) | db_generated
-    assert app_fields <= available_to_app, (
-        f"useReel.ts reads fields the reel row never has: {app_fields - available_to_app}"
-    )
+    missing = app_fields - available_to_app
+    assert not missing, f"useReel.ts reads fields the reel row never has: {missing}"

@@ -337,9 +337,7 @@ class TestDlq:
         }
         store, tables = make_store(
             tables={
-                "pipeline_dlq": FakeTable(
-                    rows=[escalated_row], pk=["device_id", "key"]
-                )
+                "pipeline_dlq": FakeTable(rows=[escalated_row], pk=["device_id", "key"])
             }
         )
 
@@ -361,9 +359,7 @@ class TestDlq:
         }
         store, tables = make_store(
             tables={
-                "pipeline_dlq": FakeTable(
-                    rows=[escalated_row], pk=["device_id", "key"]
-                )
+                "pipeline_dlq": FakeTable(rows=[escalated_row], pk=["device_id", "key"])
             }
         )
 
@@ -420,9 +416,7 @@ class TestClearPushToken:
 
 class TestReelsAndBlobs:
     def test_download_segment_writes_bytes_to_workdir(self, tmp_path):
-        store, _ = make_store(
-            buckets={"segments": FakeBucket(), "reels": FakeBucket()}
-        )
+        store, _ = make_store(buckets={"segments": FakeBucket(), "reels": FakeBucket()})
 
         local = store.download_segment("dev-1/20260714_090000.mp4", tmp_path)
 
@@ -464,10 +458,20 @@ class TestReelsAndBlobs:
         store, tables = make_store()
 
         store.insert_reel(
-            {"device_id": "dev-1", "date": "2026-07-14", "s3_key": "k", "duration_sec": 90}
+            {
+                "device_id": "dev-1",
+                "date": "2026-07-14",
+                "s3_key": "k",
+                "duration_sec": 90,
+            }
         )
         store.insert_reel(
-            {"device_id": "dev-1", "date": "2026-07-14", "s3_key": "k", "duration_sec": 60}
+            {
+                "device_id": "dev-1",
+                "date": "2026-07-14",
+                "s3_key": "k",
+                "duration_sec": 60,
+            }
         )
 
         assert len(tables["reels"].rows) == 1

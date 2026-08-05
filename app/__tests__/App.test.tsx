@@ -2,6 +2,8 @@ import { render, screen, waitFor } from '@testing-library/react-native';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 
+import { AppRoot } from '../App';
+
 jest.mock('expo-video', () => {
   const { View } = jest.requireActual('react-native');
   return {
@@ -23,8 +25,6 @@ jest.mock('expo-file-system', () => ({
 }));
 // App.tsx imports src/lib/supabase for the default export; keep env-independent.
 jest.mock('../src/lib/supabase', () => ({ supabase: {}, supabaseClientOptions: {} }));
-
-import { AppRoot } from '../App';
 
 const SESSION = { access_token: 'tok', user: { id: 'u1' } } as unknown as Session;
 

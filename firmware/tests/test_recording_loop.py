@@ -1,14 +1,5 @@
 from datetime import datetime
 
-from visio_recorder.led import LedPattern, LedState
-from visio_recorder.recording_loop import (
-    DiskStats,
-    ShutilDiskStatsReader,
-    flush_pending,
-    next_led_state,
-    on_segment_complete,
-)
-
 from tests.fakes import (
     FailingStorageClient,
     FakeBatteryReader,
@@ -18,6 +9,14 @@ from tests.fakes import (
     FakeStatusClient,
     FakeStorageClient,
     FakeStorageClientFailingOn,
+)
+from visio_recorder.led import LedPattern, LedState
+from visio_recorder.recording_loop import (
+    DiskStats,
+    ShutilDiskStatsReader,
+    flush_pending,
+    next_led_state,
+    on_segment_complete,
 )
 
 

@@ -28,7 +28,7 @@ export function TodayReelContainer({ client, deviceId, now = () => new Date() }:
   if (reelState.kind === 'loading') {
     return (
       <View style={styles.message}>
-        <Text style={styles.muted}>Loading today's reel...</Text>
+        <Text style={styles.muted}>Loading today&apos;s reel...</Text>
       </View>
     );
   }
@@ -44,7 +44,7 @@ export function TodayReelContainer({ client, deviceId, now = () => new Date() }:
   if (reelState.kind === 'none') {
     return (
       <View style={styles.message}>
-        <Text style={styles.muted}>Today's reel isn't ready yet.</Text>
+        <Text style={styles.muted}>Today&apos;s reel isn&apos;t ready yet.</Text>
       </View>
     );
   }

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { useCallback, useEffect, useState } from 'react';
 
 import type { Segment } from '../types';
+import { useResetOnInputChange } from './useResetOnInputChange';
 
 export type SegmentsState =
   | { kind: 'loading' }
@@ -20,9 +21,10 @@ export function useSegments(
 } {
   const [state, setState] = useState<SegmentsState>({ kind: 'loading' });
 
+  useResetOnInputChange([client, deviceId, dayStartIso], () => setState({ kind: 'loading' }));
+
   useEffect(() => {
     let isMounted = true;
-    setState({ kind: 'loading' });
     const dayEndIso = new Date(new Date(dayStartIso).getTime() + DAY_MS).toISOString();
 
     client

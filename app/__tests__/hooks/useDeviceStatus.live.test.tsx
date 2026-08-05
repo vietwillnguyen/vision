@@ -24,15 +24,15 @@
  */
 import { renderHook, waitFor } from '@testing-library/react-native';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import WebSocket from 'ws';
 import nodeFetch from 'node-fetch';
 
 import { useDeviceStatus } from '../../src/hooks/useDeviceStatus';
 
-// Node 20 (this test runner's target) has no native WebSocket global, which
-// @supabase/realtime-js requires at RealtimeClient construction time (thrown
-// synchronously from createClient, even for clients that never subscribe).
-(globalThis as { WebSocket?: unknown }).WebSocket ??= WebSocket;
+// @supabase/realtime-js requires a WebSocket global at RealtimeClient
+// construction time (thrown synchronously from createClient, even for clients
+// that never subscribe). Node 22 - this runner's target, and the version CI
+// pins - has one natively, and jest-expo's preset leaves it alone, so the `ws`
+// package this file used to shim it in is no longer a dependency.
 
 // jest-expo's preset replaces global.fetch with React Native's XHR-based
 // polyfill, which silently fails (returns a response with no status/body)
@@ -50,7 +50,6 @@ const hasLiveEnv = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_SERVICE
 const describeLive = hasLiveEnv ? describe : describe.skip;
 
 if (!hasLiveEnv) {
-  // eslint-disable-next-line no-console
   console.warn(
     'Skipping useDeviceStatus.live.test.tsx: SUPABASE_URL / SUPABASE_ANON_KEY / ' +
       'SUPABASE_SERVICE_ROLE_KEY not set - needs a running `supabase start` instance.',

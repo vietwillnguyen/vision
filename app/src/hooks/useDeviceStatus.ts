@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
 import type { DeviceStatus } from '../types';
+import { useResetOnInputChange } from './useResetOnInputChange';
 
 export type RealtimeHealth = 'connecting' | 'live' | 'stale';
 
@@ -21,10 +22,13 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'loading' });
   const [realtime, setRealtime] = useState<RealtimeHealth>('connecting');
 
-  useEffect(() => {
-    let isMounted = true;
+  useResetOnInputChange([client, deviceId], () => {
     setFetchState({ kind: 'loading' });
     setRealtime('connecting');
+  });
+
+  useEffect(() => {
+    let isMounted = true;
 
     client
       .from('device_status')

@@ -5,7 +5,7 @@ Expo answers HTTP 200 even when delivery fails, reporting per-ticket errors
 returned tickets instead of trusting the status code alone.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import httpx
 
@@ -52,6 +52,8 @@ class ExpoPushClient:
         self._post = post
 
     def send(self, to_token: str, title: str, body: str) -> None:
-        response_body = self._post(EXPO_PUSH_URL, build_expo_payload(to_token, title, body))
+        response_body = self._post(
+            EXPO_PUSH_URL, build_expo_payload(to_token, title, body)
+        )
         if response_body is not None:
             raise_for_ticket_errors(response_body)

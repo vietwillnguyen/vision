@@ -17,7 +17,7 @@ class FakeAuthResponse:
 class FakeAuth:
     def __init__(self, user_id: str) -> None:
         self._user_id = user_id
-        self.session_set_with = None
+        self.session_set_with: tuple[str, str] | None = None
 
     def set_session(self, access_token: str, refresh_token: str) -> FakeAuthResponse:
         self.session_set_with = (access_token, refresh_token)
@@ -79,15 +79,23 @@ def _write_session(tmp_path: Path) -> Path:
 
 def test_build_sets_the_session_before_any_client_use(tmp_path):
     fake = FakeSupabase()
-    build_supabase_clients("http://x", "anon", _write_session(tmp_path),
-                           client_factory=lambda url, key: fake)
+    build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
     assert fake.session_set_with == ("at", "rt")
 
 
 def test_storage_adapter_uploads_to_bucket_and_path(tmp_path):
     fake = FakeSupabase()
-    clients = build_supabase_clients("http://x", "anon", _write_session(tmp_path),
-                                     client_factory=lambda url, key: fake)
+    clients = build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
     local = tmp_path / "20260709_080000.mp4"
     local.write_bytes(b"vid")
 
@@ -98,8 +106,12 @@ def test_storage_adapter_uploads_to_bucket_and_path(tmp_path):
 
 def test_status_adapter_upserts_device_status_row(tmp_path):
     fake = FakeSupabase()
-    clients = build_supabase_clients("http://x", "anon", _write_session(tmp_path),
-                                     client_factory=lambda url, key: fake)
+    clients = build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
 
     status = {
         "device_id": "device-abc",
@@ -117,8 +129,12 @@ def test_status_adapter_upserts_device_status_row(tmp_path):
 
 def test_registration_adapter_upserts_device_row(tmp_path):
     fake = FakeSupabase(user_id="user-xyz")
-    clients = build_supabase_clients("http://x", "anon", _write_session(tmp_path),
-                                     client_factory=lambda url, key: fake)
+    clients = build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
 
     clients.registration.upsert_device("device-abc", "Visio Pendant")
 

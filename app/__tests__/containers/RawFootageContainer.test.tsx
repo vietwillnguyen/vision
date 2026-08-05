@@ -3,6 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 import { Alert } from 'react-native';
 
+import { RawFootageContainer } from '../../src/containers/RawFootageContainer';
+
 jest.mock('expo-video', () => {
   const { View } = jest.requireActual('react-native');
   return {
@@ -40,8 +42,6 @@ jest.mock('expo-file-system', () => {
     Paths: { cache: 'file:///cache/' },
   };
 });
-
-import { RawFootageContainer } from '../../src/containers/RawFootageContainer';
 
 const SEGMENT_ROW = {
   id: 's1',

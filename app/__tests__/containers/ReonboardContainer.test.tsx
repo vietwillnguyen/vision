@@ -2,12 +2,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 
-jest.mock('react-native-qrcode-svg', () => (props: { value: string }) => {
+import { ReonboardContainer } from '../../src/containers/ReonboardContainer';
+
+jest.mock('react-native-qrcode-svg', () => function MockQrCode(props: { value: string }) {
   const { Text } = jest.requireActual('react-native');
   return <Text testID="qr-code">{props.value}</Text>;
 });
-
-import { ReonboardContainer } from '../../src/containers/ReonboardContainer';
 
 const SESSION = {
   access_token: 'access-abc',

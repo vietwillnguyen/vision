@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
 import type { SignedUrlRequest } from '../logic/segmentExport';
+import { useResetOnInputChange } from './useResetOnInputChange';
 
 export function useSignedUrl(
   client: SupabaseClient,
@@ -12,8 +13,9 @@ export function useSignedUrl(
   const path = request?.path ?? null;
   const expiresInSec = request?.expiresInSec ?? null;
 
+  useResetOnInputChange([client, bucket, path, expiresInSec], () => setUrl(null));
+
   useEffect(() => {
-    setUrl(null);
     if (!bucket || !path || !expiresInSec) {
       return;
     }

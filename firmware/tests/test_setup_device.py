@@ -982,12 +982,16 @@ def test_the_pinned_digest_matches_what_astral_actually_serves():
     # every device's step 4 abort at the checksum. Fetch the real artifact and
     # compare. A mismatch here is also the signal that upstream re-published
     # that URL's contents, which is exactly what pinning exists to catch.
-    version = re.search(r'^UV_VERSION="([^"]+)"$', _script_text(), re.MULTILINE).group(
-        1
-    )
-    expected = re.search(
+    version_match = re.search(r'^UV_VERSION="([^"]+)"$', _script_text(), re.MULTILINE)
+    digest_match = re.search(
         r'^UV_INSTALLER_SHA256="([^"]+)"$', _script_text(), re.MULTILINE
-    ).group(1)
+    )
+    # Named rather than left to an AttributeError on None: a renamed or deleted
+    # constant should say which one went missing.
+    assert version_match is not None, "setup-device.sh has no UV_VERSION pin"
+    assert digest_match is not None, "setup-device.sh has no UV_INSTALLER_SHA256 pin"
+    version = version_match.group(1)
+    expected = digest_match.group(1)
     url = f"https://astral.sh/uv/{version}/install.sh"
     # astral.sh answers urllib's default User-Agent with 403, so send the one
     # the script's own curl invocation would - otherwise this test looks like a

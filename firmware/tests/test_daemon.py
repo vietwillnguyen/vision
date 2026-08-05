@@ -4,16 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from visio_recorder.daemon import (
-    LoopDeps,
-    load_config,
-    resolve_battery_reader_factory,
-    run_recording_loop,
-    run_startup_sequence,
-)
-from visio_recorder.drivers import PiJuiceBatteryReader, UnmeteredPowerReader
-from visio_recorder.led import LedPattern
-
 from tests.fakes import (
     FakeBatteryReader,
     FakeClock,
@@ -26,6 +16,15 @@ from tests.fakes import (
     ScriptedStorageClient,
     TriggerableBatteryReader,
 )
+from visio_recorder.daemon import (
+    LoopDeps,
+    load_config,
+    resolve_battery_reader_factory,
+    run_recording_loop,
+    run_startup_sequence,
+)
+from visio_recorder.drivers import PiJuiceBatteryReader, UnmeteredPowerReader
+from visio_recorder.led import LedPattern
 from visio_recorder.recording_loop import DiskStats
 
 CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)
@@ -157,9 +156,7 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
         status_client=status,
     )
 
-    run_recording_loop(
-        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
-    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
     assert runner.record_count == 3
     assert storage.uploaded == [
@@ -195,9 +192,7 @@ def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
         storage_client=storage,
     )
 
-    run_recording_loop(
-        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
-    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
     assert runner.record_count == 2
     # Both recorded-before-halt segments were drained by the worker.
@@ -289,9 +284,7 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
         storage_client=storage,
     )
 
-    run_recording_loop(
-        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
-    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
     # Recording continued past the first CRITICAL: all eight cycles ran.
     assert runner.record_count == 8
@@ -305,12 +298,15 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
     assert led.calls == (
         per_segment  # 1: fail (1 consecutive)
         + per_segment  # 2: fail (2)
-        + per_segment + [CRITICAL_LED]  # 3: fail (3 -> threshold)
-        + per_segment + [CRITICAL_LED]  # 4: fail (4 -> stays critical)
+        + per_segment
+        + [CRITICAL_LED]  # 3: fail (3 -> threshold)
+        + per_segment
+        + [CRITICAL_LED]  # 4: fail (4 -> stays critical)
         + per_segment  # 5: success (reset)
         + per_segment  # 6: fail (1)
         + per_segment  # 7: fail (2)
-        + per_segment + [CRITICAL_LED]  # 8: fail (3 -> threshold again)
+        + per_segment
+        + [CRITICAL_LED]  # 8: fail (3 -> threshold again)
     )
 
 
@@ -335,9 +331,7 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
         status_client=status,
     )
 
-    run_recording_loop(
-        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
-    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
     # All three cycles ran to completion: recording never stalled, and the
     # worker thread joined cleanly (run_recording_loop returning at all after
@@ -369,9 +363,7 @@ def test_setting_stop_exits_after_in_flight_cycle_and_joins_worker(tmp_path):
         storage_client=storage,
     )
 
-    run_recording_loop(
-        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
-    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
     # Stop was observed after the in-flight cycle; exactly two segments ran
     # and both were uploaded before the worker joined.

@@ -13,11 +13,15 @@ def build_rpicam_command(
 ) -> list[str]:
     return [
         "rpicam-vid",
-        "-t", str(duration_ms),
-        "--framerate", str(framerate),
-        "--codec", "h264",
+        "-t",
+        str(duration_ms),
+        "--framerate",
+        str(framerate),
+        "--codec",
+        "h264",
         "-n",
-        "-o", str(output_path),
+        "-o",
+        str(output_path),
     ]
 
 

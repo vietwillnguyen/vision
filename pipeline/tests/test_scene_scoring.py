@@ -15,7 +15,8 @@ def test_prompt_matches_spec_exactly():
         "Rate the visual interest of this moment on a scale of 1-10.\n"
         "Consider: Is this a new location? Are people present and engaged?\n"
         "Is there an interesting activity? Is this indoors or outdoors?\n"
-        'Reply with JSON: {"score": N, "location": "indoor|outdoor", "people": true|false}'
+        'Reply with JSON: {"score": N, "location": "indoor|outdoor", '
+        '"people": true|false}'
     )
 
 
