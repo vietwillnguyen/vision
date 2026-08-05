@@ -7,6 +7,7 @@ the same fake-injection convention used throughout firmware/.
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -757,14 +758,45 @@ def test_an_undecodable_env_file_produces_a_caveat_not_a_traceback(tmp_path):
     assert "could not be read or parsed" in resolution.caveat
 
 
-def test_read_env_file_does_not_depend_on_the_ambient_locale(tmp_path, monkeypatch):
+def test_read_env_file_does_not_depend_on_the_ambient_locale(tmp_path):
     # Under systemd the unit inherits whatever locale it was given, routinely
     # C/POSIX. Decoding a valid UTF-8 path as ASCII would fail on a file that
-    # is not corrupt at all.
-    monkeypatch.setenv("LC_ALL", "C")
-    monkeypatch.setenv("LANG", "C")
-    utf8_path = "/mnt/données/visio"
+    # is not corrupt at all, which is why read_env_file pins encoding="utf-8".
+    #
+    # This has to run in a subprocess. CPython calls setlocale(LC_CTYPE, "")
+    # once at interpreter startup, so setting LC_ALL from inside the test does
+    # not change what Path.read_text() decodes with - an in-process version of
+    # this test passes whether or not the pin is present, and so guards
+    # nothing. PYTHONCOERCECLOCALE and PYTHONUTF8 are disabled as well, or PEP
+    # 538/540 would quietly restore UTF-8 and hide the failure being guarded.
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_bytes("VISIO_DATA_DIR=/mnt/donn\xe9es/visio\n".encode())
 
-    values = read_env_file(_env_file(tmp_path, f"VISIO_DATA_DIR={utf8_path}\n"))
+    # The expected value is spelled as an ASCII escape inside the probe rather
+    # than passed as an argument: under LC_ALL=C with PYTHONUTF8=0, encoding a
+    # non-ASCII argv entry fails in the parent before the child even starts.
+    # The comparison happens in the child for the same reason - printing the
+    # path back would fail on an ASCII stdout and look like the bug under test.
+    probe = (
+        "import pathlib, sys;"
+        "from visio_recorder.preflight import read_env_file;"
+        "values = read_env_file(pathlib.Path(sys.argv[1]));"
+        "print('MATCH' if values is not None and"
+        " values.get('VISIO_DATA_DIR') == '/mnt/donn\\xe9es/visio'"
+        " else 'MISMATCH')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(env_file)],
+        env={
+            **os.environ,
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PYTHONCOERCECLOCALE": "0",
+            "PYTHONUTF8": "0",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
-    assert values["VISIO_DATA_DIR"] == utf8_path
+    assert result.stdout.strip() == "MATCH"
