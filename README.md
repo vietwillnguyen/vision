@@ -15,6 +15,7 @@ firmware/            -- Epic 1: visio-recorder Python systemd daemon
   visio_recorder/    -- battery, LED, muxer, upload queue, uploader, wifi/device onboarding, recording loop
   tests/             -- pytest suite (fakes for every hardware/network Protocol)
   systemd/           -- installable systemd unit
+  scripts/           -- `setup-device.sh`, the operator entry point for device bring-up
 pipeline/            -- Epic 2: nightly cloud AI pipeline (Python package)
   pipeline/          -- ingestion, scoring, selection, assembly, delivery stages,
                         nightly orchestrator + `python -m pipeline` entrypoint
@@ -51,6 +52,8 @@ git config core.hooksPath scripts/hooks
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs all three test suites on every pull request targeting `main` and every push to `main`.
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
+[`.github/workflows/lint.yml`](.github/workflows/lint.yml) runs `shellcheck` over the repo's shell scripts.
+Unlike `tests.yml` it is not filtered to `main`, so it also runs on pull requests stacked onto a feature branch.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
 
 ## Supabase foundation (Epic 0)
@@ -82,7 +85,21 @@ The manual flag marker (`FLAG_YYYYMMDD_HHMMSS.marker`, `flag_button.py`) is wire
 Every hardware or network boundary (PiJuice, GPIO, WS2812B LEDs, `ffmpeg`/`rpicam-vid`, Supabase) is a small `Protocol` with a fake used in tests; `daemon.py` is the only module that wires real implementations together.
 On boot it runs the battery/LED startup sequence, scans a QR code to onboard WiFi (writing a NetworkManager keyfile) and Supabase auth on first boot, activates the NetworkManager connection (`nmcli connection reload` + `up`, retried best-effort on restart boots), registers the device, flushes any queued uploads left over from a previous run, then starts the per-segment `rpicam-vid` capture loop with the flag-button listener and a background upload worker with real disk-usage stats.
 Configuration is read from environment variables via the systemd unit's `EnvironmentFile=/etc/visio-recorder.env`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR`, `VISIO_SEGMENT_DURATION_MS`, `VISIO_FRAMERATE`.
-Device setup: run `sudo firmware/scripts/setup-device.sh` on the target Pi (idempotent - safe to re-run after an SD re-flash or to repair drift). It installs `rpicam-apps`, `zbar-tools`, `ffmpeg`, `network-manager`, and `git` (plus `pijuice-base` opportunistically - the Raspberry Pi archive ships it for bookworm but not trixie, and its absence never fails setup), enables the I2C/camera interfaces, deploys the code via `uv sync --locked` into `/opt/visio-recorder`, and installs the systemd unit. `visio_recorder.preflight` runs automatically before every start (`ExecStartPre=`) and standalone via `python3 -m visio_recorder.preflight` for manual diagnostics; missing PiJuice hardware only warns (`VISIO_BATTERY_SOURCE=none` is the current bring-up default - see [`2026-07-21-visio-device-provisioning-design.md`](docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md)), everything else blocks startup with a clear reason in `journalctl`.
+Device setup: run `sudo firmware/scripts/setup-device.sh` on the target Pi (idempotent - safe to re-run after an SD re-flash or to repair drift).
+It installs `rpicam-apps`, `zbar-tools`, `ffmpeg`, `network-manager`, `git`, and `python3-gpiozero` (plus `pijuice-base` opportunistically - the Raspberry Pi archive ships it for bookworm but not trixie, and its absence never fails setup), enables the I2C/camera interfaces, deploys the code via `uv sync --locked` into `/opt/visio-recorder`, and installs the systemd unit.
+The project venv is built from the system `python3` with `--system-site-packages`, because `gpiozero` and `pijuice` are apt packages rather than `uv.lock` entries and preflight blocks on them; `rpi-ws281x`, which no archive packages at all, is pinned and compiled into that venv, and a failed build lets the remaining steps run rather than aborting mid-way - but the summary repeats it as an `INCOMPLETE` line and the script exits non-zero, so a device that cannot start is never reported as a clean setup.
+
+Preflight runs automatically before every start (`ExecStartPre=`) and standalone as **`visio-preflight`** for manual diagnostics - a console script symlinked into `/usr/local/bin`, so it works from any directory as a plain SSH user with no venv path and no `sudo`.
+Its first line reports which install the checks ran from, since a device typically carries both `/opt/visio-recorder` and your own clone.
+It checks the data dir the daemon will actually use, reading `VISIO_DATA_DIR` from the environment first and then from `/etc/visio-recorder.env`, and a failed import names the step that installs that module rather than always blaming `uv sync`.
+That env file stays mode 600 root-owned, so an unprivileged run cannot read it: when that happens preflight checks the default and says on its `data_dir` line that it could not confirm the configured value, rather than reporting a guess as a fact - run it under `sudo` to check a non-default `VISIO_DATA_DIR`.
+Missing PiJuice hardware only warns (`VISIO_BATTERY_SOURCE=none` is the current bring-up default - see [`2026-07-21-visio-device-provisioning-design.md`](docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md)), everything else blocks startup with a clear reason in `journalctl`.
+
+The script provisions an explicit revision rather than pulling: it defaults to the exact commit of the clone you run it from, so two devices set up from the same checkout get identical firmware, and `VISIO_GIT_REF=<tag|branch|sha>` overrides it.
+It also installs editor and interactive shell conveniences (neovim as `EDITOR`/`VISUAL`, tmux, `ls`/history aliases, a branch-aware prompt) into the invoking user's `~/.bashrc`; set `VISIO_DEV_SHELL=0` in `/etc/visio-recorder.env` to skip that for an appliance image.
+The switch covers those conveniences only, not the LED driver's build dependencies: `rpi-ws281x` currently has no apt package in any archive, so a device that has to build it from source gets a C compiler and the Python headers regardless of this setting.
+The env file is written before the dev-shell step runs, so on a fresh device the script stops at the template with the switch already in it - setting it to `0` there gives a device that never installs those conveniences at all.
+Flipping it to `0` later removes the managed `~/.bashrc` block on the next run but deliberately leaves the installed packages alone, since silently purging an operator's editor mid-bring-up is worse than leaving it.
 
 ### Local development
 

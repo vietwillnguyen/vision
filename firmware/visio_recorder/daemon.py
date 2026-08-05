@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from visio_recorder import preflight
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import record_segment
 from visio_recorder.device_identity import load_or_create_device_id, register_device
-from visio_recorder import preflight
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
     PiJuiceBatteryReader,
@@ -39,7 +39,6 @@ from visio_recorder.recording_loop import (
 from visio_recorder.supabase_clients import build_supabase_clients
 from visio_recorder.uploader import StorageClient
 
-_DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
 _DEFAULT_SEGMENT_DURATION_MS = "300000"
 _DEFAULT_FRAMERATE = "30"
 _ONBOARDING_MAX_ATTEMPTS = 60
@@ -83,7 +82,7 @@ def load_config(env: Mapping[str, str]) -> DaemonConfig:
     return DaemonConfig(
         supabase_url=env["SUPABASE_URL"],
         supabase_anon_key=env["SUPABASE_ANON_KEY"],
-        data_dir=Path(env.get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR)),
+        data_dir=preflight.resolve_data_dir(env),
         segment_duration_ms=int(
             env.get("VISIO_SEGMENT_DURATION_MS", _DEFAULT_SEGMENT_DURATION_MS)
         ),
@@ -217,7 +216,9 @@ def main() -> int:
     Handoff section).
     """
     preflight_battery_source = os.environ.get("VISIO_BATTERY_SOURCE", "pijuice")
-    preflight_results = preflight.run_checks(preflight_battery_source)
+    preflight_results = preflight.run_checks(
+        preflight_battery_source, preflight.resolve_data_dir(os.environ)
+    )
     print(preflight.format_report(preflight_results))
     if preflight.has_blocking_failure(preflight_results):
         return 1
