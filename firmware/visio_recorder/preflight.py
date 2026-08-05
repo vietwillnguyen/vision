@@ -65,7 +65,9 @@ def check_binary_on_path(
         name=name,
         severity=BLOCK,
         ok=found,
-        detail="found on PATH" if found else f"{name} not found on PATH - check the apt install step",
+        detail="found on PATH"
+        if found
+        else f"{name} not found on PATH - check the apt install step",
     )
 
 
@@ -118,8 +120,8 @@ def check_pijuice_importable(
 
 
 def check_camera_detected(
-    run: Callable[[list[str]], subprocess.CompletedProcess] = lambda args: subprocess.run(
-        args, capture_output=True, text=True, timeout=5
+    run: Callable[[list[str]], subprocess.CompletedProcess] = lambda args: (
+        subprocess.run(args, capture_output=True, text=True, timeout=5)
     ),
 ) -> CheckResult:
     try:
@@ -129,7 +131,10 @@ def check_camera_detected(
             name="camera",
             severity=BLOCK,
             ok=False,
-            detail=f"rpicam-hello unavailable - {type(exc).__name__}: check apt install step",
+            detail=(
+                f"rpicam-hello unavailable - {type(exc).__name__}: "
+                "check apt install step"
+            ),
         )
     except subprocess.TimeoutExpired:
         return CheckResult(
@@ -138,18 +143,23 @@ def check_camera_detected(
             ok=False,
             detail="rpicam-hello timeout - camera may be unresponsive",
         )
-    detected = result.returncode == 0 and re.search(r"^\d+\s*:", result.stdout, re.MULTILINE) is not None
+    detected = (
+        result.returncode == 0
+        and re.search(r"^\d+\s*:", result.stdout, re.MULTILINE) is not None
+    )
     return CheckResult(
         name="camera",
         severity=BLOCK,
         ok=detected,
-        detail="camera detected" if detected else "no camera detected - check ribbon cable connection",
+        detail="camera detected"
+        if detected
+        else "no camera detected - check ribbon cable connection",
     )
 
 
 def check_networkmanager_running(
-    run: Callable[[list[str]], subprocess.CompletedProcess] = lambda args: subprocess.run(
-        args, capture_output=True, text=True, timeout=5
+    run: Callable[[list[str]], subprocess.CompletedProcess] = lambda args: (
+        subprocess.run(args, capture_output=True, text=True, timeout=5)
     ),
 ) -> CheckResult:
     try:
@@ -173,7 +183,9 @@ def check_networkmanager_running(
         name="networkmanager",
         severity=BLOCK,
         ok=ok,
-        detail="running" if ok else "nmcli general status failed - is NetworkManager active?",
+        detail="running"
+        if ok
+        else "nmcli general status failed - is NetworkManager active?",
     )
 
 
@@ -238,7 +250,9 @@ def check_i2c_enabled(path: Path = _I2C_DEVICE) -> CheckResult:
         name="i2c",
         severity=WARN,
         ok=ok,
-        detail="I2C bus enabled" if ok else "I2C not enabled - run setup-device.sh, may need a reboot",
+        detail="I2C bus enabled"
+        if ok
+        else "I2C not enabled - run setup-device.sh, may need a reboot",
     )
 
 
@@ -248,7 +262,9 @@ def resolve_data_dir(env: Mapping[str, str] | None = None) -> Path:
     The single definition of that mapping: ``daemon.load_config`` calls this
     too, so there is no second key, default or precedence to keep in step.
     """
-    return Path((os.environ if env is None else env).get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR))
+    return Path(
+        (os.environ if env is None else env).get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR)
+    )
 
 
 def read_env_file(path: Path = _ENV_FILE) -> Mapping[str, str] | None:
@@ -392,7 +408,8 @@ def install_root(module_file: str = __file__) -> Path:
 def format_report(results: list[CheckResult], root: Path | None = None) -> str:
     lines = [f"[INFO] install: {root if root is not None else install_root()}"]
     lines += [
-        f"[{'OK' if r.ok else r.severity.upper()}] {r.name}: {r.detail}" for r in results
+        f"[{'OK' if r.ok else r.severity.upper()}] {r.name}: {r.detail}"
+        for r in results
     ]
     return "\n".join(lines)
 

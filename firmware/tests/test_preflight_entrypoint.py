@@ -2,7 +2,8 @@
 
 These encode the bring-up failure reported from the physical device:
 
-    viet@vision-pendant:~/git/vision/firmware/scripts $ python3 -m visio_recorder.preflight
+    viet@vision-pendant:~/git/vision/firmware/scripts
+    $ python3 -m visio_recorder.preflight
     /usr/bin/python3: Error while finding module specification for
     'visio_recorder.preflight' (ModuleNotFoundError: No module named 'visio_recorder')
 
@@ -82,7 +83,9 @@ def test_module_invocation_resolves_from_an_unrelated_directory(tmp_path):
 def test_console_script_is_installed_and_runs_from_an_unrelated_directory(tmp_path):
     script = Path(sys.executable).parent / _SCRIPT_NAME
     if not script.exists():
-        pytest.skip(f"{script} not present - environment was not built from pyproject.toml")
+        pytest.skip(
+            f"{script} not present - environment was not built from pyproject.toml"
+        )
 
     result = subprocess.run(
         [str(script)],
@@ -117,6 +120,11 @@ def test_install_root_resolves_the_module_file_it_is_given(tmp_path):
 def test_report_header_names_the_install_the_checks_ran_from():
     results = [CheckResult(name="a", severity=BLOCK, ok=True, detail="fine")]
 
-    report = format_report(results, root=Path("/opt/visio-recorder/firmware/visio_recorder"))
+    report = format_report(
+        results, root=Path("/opt/visio-recorder/firmware/visio_recorder")
+    )
 
-    assert report.splitlines()[0] == "[INFO] install: /opt/visio-recorder/firmware/visio_recorder"
+    assert (
+        report.splitlines()[0]
+        == "[INFO] install: /opt/visio-recorder/firmware/visio_recorder"
+    )

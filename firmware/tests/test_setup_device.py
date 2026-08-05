@@ -45,14 +45,20 @@ def _script_text() -> str:
 
 
 def _extract_function(name: str) -> str:
-    match = re.search(rf"^{re.escape(name)}\(\) \{{\n.*?^\}}$", _script_text(), re.MULTILINE | re.DOTALL)
+    match = re.search(
+        rf"^{re.escape(name)}\(\) \{{\n.*?^\}}$",
+        _script_text(),
+        re.MULTILINE | re.DOTALL,
+    )
     assert match, f"{name}() not found in {_SCRIPT} - did it get renamed?"
     return match.group(0)
 
 
 def _extract_constants() -> str:
     return "\n".join(
-        line for line in _script_text().splitlines() if re.match(r"^BASHRC_(BEGIN|END)=", line)
+        line
+        for line in _script_text().splitlines()
+        if re.match(r"^BASHRC_(BEGIN|END)=", line)
     )
 
 
@@ -78,7 +84,9 @@ def _step_block(step: int) -> str:
 
 def _extract_bashrc_body() -> str:
     match = re.search(
-        r"dev_shell_body=.*?<<'BASHRC_BODY'\n(.*?)\nBASHRC_BODY\n", _script_text(), re.DOTALL
+        r"dev_shell_body=.*?<<'BASHRC_BODY'\n(.*?)\nBASHRC_BODY\n",
+        _script_text(),
+        re.DOTALL,
     )
     assert match, "the managed ~/.bashrc body heredoc was not found in setup-device.sh"
     return match.group(1)
@@ -98,7 +106,9 @@ def _shell_lib(tmp_path: Path, *functions: str) -> Path:
     return lib
 
 
-def _run(lib: Path, snippet: str, env_file: Path | None = None) -> subprocess.CompletedProcess:
+def _run(
+    lib: Path, snippet: str, env_file: Path | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["bash", "-c", f'set -euo pipefail\nsource "{lib}"\n{snippet}'],
         capture_output=True,
@@ -109,12 +119,20 @@ def _run(lib: Path, snippet: str, env_file: Path | None = None) -> subprocess.Co
 
 
 def _dev_shell_step() -> str:
-    return _script_text().split('log "Step 8/10: developer shell"')[1].split('log "Step 9/10')[0]
+    return (
+        _script_text()
+        .split('log "Step 8/10: developer shell"')[1]
+        .split('log "Step 9/10')[0]
+    )
 
 
 # Both managed-block entry points reach the operator's file through
 # replace_file_via_tmp, so every lib that exercises one carries the whole chain.
-_BLOCK_HELPERS = ("strip_managed_block", "warn_unterminated_block", "replace_file_via_tmp")
+_BLOCK_HELPERS = (
+    "strip_managed_block",
+    "warn_unterminated_block",
+    "replace_file_via_tmp",
+)
 _WRITE_FUNCTIONS = (*_BLOCK_HELPERS, "write_managed_block")
 _REMOVE_FUNCTIONS = (*_BLOCK_HELPERS, "remove_managed_block")
 
@@ -124,7 +142,8 @@ def _write_block(tmp_path: Path, rc: Path, times: int) -> None:
     body = tmp_path / "body.txt"
     body.write_text(_extract_bashrc_body())
     snippet = "\n".join(
-        [f'body="$(cat "{body}")"'] + [f'write_managed_block "{rc}" "$body" "$(id -un):$(id -gn)"'] * times
+        [f'body="$(cat "{body}")"']
+        + [f'write_managed_block "{rc}" "$body" "$(id -un):$(id -gn)"'] * times
     )
     result = _run(lib, snippet)
     assert result.returncode == 0, result.stderr
@@ -272,7 +291,9 @@ def test_writing_refuses_a_managed_block_with_no_end_marker(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "REFUSED" in result.stdout
     assert "no matching end marker" in result.stdout
-    assert rc.read_text() == _UNTERMINATED_BASHRC, "the operator's settings must survive"
+    assert rc.read_text() == _UNTERMINATED_BASHRC, (
+        "the operator's settings must survive"
+    )
     assert not (tmp_path / ".bashrc.visio-setup.tmp").exists()
 
 
@@ -307,7 +328,9 @@ def test_removing_refuses_a_managed_block_with_no_end_marker(tmp_path):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="a read-only directory does not stop root")
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="a read-only directory does not stop root"
+)
 def test_writing_leaves_the_original_intact_when_the_temp_write_fails(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
@@ -336,10 +359,14 @@ def test_writing_leaves_the_original_intact_when_the_temp_write_fails(tmp_path):
     assert "FAILED" in result.stdout, "an unwritable temp path must not report success"
     assert "is unchanged" in result.stdout
     assert rc.read_bytes() == _EXISTING_BASHRC.encode()
-    assert not (home / ".bashrc.visio-setup.tmp").exists(), "no temp litter in the operator's home"
+    assert not (home / ".bashrc.visio-setup.tmp").exists(), (
+        "no temp litter in the operator's home"
+    )
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="a read-only directory does not stop root")
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="a read-only directory does not stop root"
+)
 def test_removing_leaves_the_original_intact_when_the_temp_write_fails(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
@@ -385,7 +412,8 @@ def test_a_partial_temp_file_is_never_moved_over_the_original(tmp_path):
             '  if [[ -p /dev/stdout ]]; then command printf "$@"',
             '  else command printf "%s" "${2:0:4}"; fi',
             "}",
-            f'if replace_file_via_tmp "{rc}" "{tmp_file}" "$(id -un):$(id -gn)" "a much longer body"; then',
+            f'if replace_file_via_tmp "{rc}" "{tmp_file}" "$(id -un):$(id -gn)" '
+            '"a much longer body"; then',
             "  echo REPLACED",
             "else",
             "  echo REFUSED",
@@ -416,15 +444,23 @@ def test_generated_bashrc_is_valid_bash_and_defines_the_conveniences(tmp_path):
     rc.write_text(_EXISTING_BASHRC)
     _write_block(tmp_path / "w", rc, times=1)
 
-    syntax = subprocess.run(["bash", "-n", str(rc)], capture_output=True, text=True, timeout=60)
+    syntax = subprocess.run(
+        ["bash", "-n", str(rc)], capture_output=True, text=True, timeout=60
+    )
     assert syntax.returncode == 0, syntax.stderr
 
     # An interactive shell: the fixture's `case $- in *i*)` guard - the one
     # Raspberry Pi OS ships - returns early otherwise, so a non-interactive
     # source would never reach the managed block at all.
     sourced = subprocess.run(
-        ["bash", "--norc", "-i", "-c",
-         f'source "{rc}"; alias ll; echo "HC=$HISTCONTROL"; type -t __visio_git_branch'],
+        [
+            "bash",
+            "--norc",
+            "-i",
+            "-c",
+            f'source "{rc}"; alias ll; echo "HC=$HISTCONTROL"; '
+            "type -t __visio_git_branch",
+        ],
         capture_output=True,
         text=True,
         timeout=60,
@@ -444,7 +480,21 @@ _GATE = ("env_file_value", "dev_shell_enabled")
 
 @pytest.mark.parametrize(
     "value",
-    ["0", "no", "off", "false", "FALSE", "Off", "NO", '"0"', "'0'", '"off"', "0 ", " 0", " false "],
+    [
+        "0",
+        "no",
+        "off",
+        "false",
+        "FALSE",
+        "Off",
+        "NO",
+        '"0"',
+        "'0'",
+        '"off"',
+        "0 ",
+        " 0",
+        " false ",
+    ],
 )
 def test_dev_shell_gate_is_disabled_for_falsey_values(tmp_path, value):
     env_file = tmp_path / "visio-recorder.env"
@@ -491,7 +541,9 @@ def test_quoted_but_empty_supabase_values_are_reported_as_missing(tmp_path):
 
 def test_quoted_supabase_values_satisfy_the_env_file_check(tmp_path):
     env_file = tmp_path / "visio-recorder.env"
-    env_file.write_text('SUPABASE_URL="https://x.supabase.co"\nSUPABASE_ANON_KEY="ey.a.jwt"\n')
+    env_file.write_text(
+        'SUPABASE_URL="https://x.supabase.co"\nSUPABASE_ANON_KEY="ey.a.jwt"\n'
+    )
 
     result = _run(_shell_lib(tmp_path, "env_file_value"), _step_block(7), env_file)
 
@@ -502,7 +554,9 @@ def test_quoted_supabase_values_satisfy_the_env_file_check(tmp_path):
 def test_env_file_template_documents_the_dev_shell_switch():
     text = _script_text()
 
-    assert "VISIO_DEV_SHELL=1" in text, "the env-file template must ship the key, defaulting to enabled"
+    assert "VISIO_DEV_SHELL=1" in text, (
+        "the env-file template must ship the key, defaulting to enabled"
+    )
     template = text.split("""cat > "${ENV_FILE}" <<'EOF'""")[1].split("\nEOF\n")[0]
     # The switch cannot uninstall packages, and pre-seeding is the only route
     # to a device that never carries the toolchain. Both are limitations an
@@ -521,7 +575,9 @@ def test_env_file_template_documents_the_dev_shell_switch():
 def test_the_env_file_step_runs_before_the_developer_shell_step():
     text = _script_text()
 
-    assert text.index('log "Step 7/10: env file"') < text.index('log "Step 8/10: developer shell"')
+    assert text.index('log "Step 7/10: env file"') < text.index(
+        'log "Step 8/10: developer shell"'
+    )
 
 
 def test_step_numbering_is_contiguous_and_matches_the_stated_total():
@@ -531,7 +587,11 @@ def test_step_numbering_is_contiguous_and_matches_the_stated_total():
 
 
 def test_the_disabled_branch_removes_the_block_rather_than_only_skipping():
-    disabled = _dev_shell_step().split("elif ! dev_shell_enabled; then")[1].split("\nelse\n")[0]
+    disabled = (
+        _dev_shell_step()
+        .split("elif ! dev_shell_enabled; then")[1]
+        .split("\nelse\n")[0]
+    )
 
     assert "remove_managed_block" in disabled
     assert "apt-get" not in disabled, "the disabled branch must not install anything"
@@ -543,7 +603,9 @@ def test_an_unresolvable_dev_user_skips_the_step_instead_of_aborting(tmp_path):
     # the data dir and summary over an optional convenience. The guard's own
     # message says "skipping", so it has to skip.
     step = _dev_shell_step()
-    lookup = step.split('dev_user="${SUDO_USER:-root}"')[1].split("elif ! dev_shell_enabled")[0]
+    lookup = step.split('dev_user="${SUDO_USER:-root}"')[1].split(
+        "elif ! dev_shell_enabled"
+    )[0]
     snippet = "\n".join(
         [
             'log() { echo "[log] $*"; }',
@@ -578,15 +640,21 @@ def test_dev_shell_targets_the_invoking_user_not_root():
         for line in step.replace(body, "").splitlines()
         if line.strip() and not line.lstrip().startswith(("#", "--"))
     )
-    assert "HOME" not in code, f"the dev-shell step must not write to root's home:\n{code}"
+    assert "HOME" not in code, (
+        f"the dev-shell step must not write to root's home:\n{code}"
+    )
     assert "~/" not in code, f"tilde would expand to root's home here:\n{code}"
 
 
 def test_provisioning_pins_an_explicit_revision_instead_of_pulling():
     text = _script_text()
 
-    code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
-    assert not re.search(r"\bgit\b.*\bpull\b", code), "a bare git pull makes provisioning non-reproducible"
+    code = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert not re.search(r"\bgit\b.*\bpull\b", code), (
+        "a bare git pull makes provisioning non-reproducible"
+    )
     assert 'checkout --force --detach "${sha}"' in text
     assert "VISIO_GIT_REF" in text
 
@@ -613,7 +681,12 @@ pytest_git = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 
 def _git(cwd: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60, env=_GIT_ENV
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=_GIT_ENV,
     )
     assert result.returncode == 0, f"git {' '.join(args)}: {result.stderr}"
     return result.stdout.strip()
@@ -637,12 +710,21 @@ def origin(tmp_path):
     return repo, first, second
 
 
-def _checkout(tmp_path: Path, install: Path, repo: Path, ref: str) -> subprocess.CompletedProcess:
+def _checkout(
+    tmp_path: Path, install: Path, repo: Path, ref: str
+) -> subprocess.CompletedProcess:
     lib = _shell_lib(tmp_path / "lib", "checkout_revision")
     return subprocess.run(
-        ["bash", "-c",
-         f'set -euo pipefail\nsource "{lib}"\ncheckout_revision "{install}" "{repo}" "{ref}"'],
-        capture_output=True, text=True, timeout=120, env=_GIT_ENV,
+        [
+            "bash",
+            "-c",
+            f'set -euo pipefail\nsource "{lib}"\n'
+            f'checkout_revision "{install}" "{repo}" "{ref}"',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=_GIT_ENV,
     )
 
 
@@ -670,7 +752,9 @@ def test_checkout_revision_pins_a_bare_sha(tmp_path, origin):
 
 
 @pytest_git
-def test_checkout_revision_prefers_the_remote_branch_over_a_stale_local_one(tmp_path, origin):
+def test_checkout_revision_prefers_the_remote_branch_over_a_stale_local_one(
+    tmp_path, origin
+):
     repo, first, second = origin
     install = tmp_path / "opt"
     _checkout(tmp_path, install, repo, "main")
@@ -684,7 +768,9 @@ def test_checkout_revision_prefers_the_remote_branch_over_a_stale_local_one(tmp_
 
 
 @pytest_git
-def test_checkout_revision_converges_from_a_diverged_branch_with_local_edits(tmp_path, origin):
+def test_checkout_revision_converges_from_a_diverged_branch_with_local_edits(
+    tmp_path, origin
+):
     repo, first, second = origin
     install = tmp_path / "opt"
     _checkout(tmp_path, install, repo, "main")
@@ -725,7 +811,9 @@ def test_checkout_revision_fails_on_an_unresolvable_ref(tmp_path, origin):
 
     result = _checkout(tmp_path, install, repo, "no-such-branch")
 
-    assert result.returncode == 1, "status 1 is what makes the caller print the ref advice"
+    assert result.returncode == 1, (
+        "status 1 is what makes the caller print the ref advice"
+    )
     assert result.stdout.strip() == ""
     # The two failures need different operator advice - push your branch versus
     # fix your network - so they must not report each other.
@@ -748,13 +836,21 @@ def test_checkout_revision_fails_loudly_when_the_fetch_fails(tmp_path, origin):
     _git(repo, "commit", "--quiet", "-m", "v3")
     third = _git(repo, "rev-parse", "HEAD")
 
-    result = _checkout(tmp_path / "second", install, tmp_path / "unreachable-origin", "main")
+    result = _checkout(
+        tmp_path / "second", install, tmp_path / "unreachable-origin", "main"
+    )
 
-    assert result.returncode == 2, "git failures report themselves and must not draw ref advice"
-    assert result.stdout.strip() == "", "a SHA on stdout is read by the caller as a good provision"
+    assert result.returncode == 2, (
+        "git failures report themselves and must not draw ref advice"
+    )
+    assert result.stdout.strip() == "", (
+        "a SHA on stdout is read by the caller as a good provision"
+    )
     assert second not in result.stdout and third not in result.stdout
     assert "fetching" in result.stderr
-    assert (install / "firmware.txt").read_text() == "v2\n", "the checkout is left where it was"
+    assert (install / "firmware.txt").read_text() == "v2\n", (
+        "the checkout is left where it was"
+    )
 
 
 @pytest_git
@@ -769,7 +865,9 @@ def test_checkout_revision_fails_loudly_when_the_clone_fails(tmp_path):
 
 
 @pytest_git
-def test_checkout_revision_fails_loudly_when_the_install_dir_is_not_a_healthy_repo(tmp_path, origin):
+def test_checkout_revision_fails_loudly_when_the_install_dir_is_not_a_healthy_repo(
+    tmp_path, origin
+):
     # A .git that is not a repository takes the update path rather than the
     # clone path, so the first git command to run is `remote set-url`.
     repo, _, _ = origin
@@ -784,8 +882,12 @@ def test_checkout_revision_fails_loudly_when_the_install_dir_is_not_a_healthy_re
 
 
 @pytest_git
-@pytest.mark.skipif(os.geteuid() == 0, reason="a read-only directory does not stop root")
-def test_checkout_revision_fails_loudly_when_the_working_tree_cannot_be_written(tmp_path, origin):
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="a read-only directory does not stop root"
+)
+def test_checkout_revision_fails_loudly_when_the_working_tree_cannot_be_written(
+    tmp_path, origin
+):
     # Stands in for the disk-full checkout: fetch succeeds and the ref resolves,
     # so an unchecked `git checkout` leaves the tree on the old revision while
     # the function prints the new SHA - and uv sync then installs from it.
@@ -868,7 +970,9 @@ def test_uv_installer_is_version_pinned_and_checksum_verified():
     assert re.search(r'^UV_VERSION="\d+\.\d+\.\d+"$', text, re.MULTILINE)
     assert re.search(r'^UV_INSTALLER_SHA256="[0-9a-f]{64}"$', text, re.MULTILINE)
     assert "sha256sum --check --status" in text
-    assert "astral.sh/uv/install.sh" not in text, "the unpinned installer URL must not be piped to sh"
+    assert "astral.sh/uv/install.sh" not in text, (
+        "the unpinned installer URL must not be piped to sh"
+    )
 
 
 def test_the_pinned_digest_matches_what_astral_actually_serves():
@@ -878,8 +982,12 @@ def test_the_pinned_digest_matches_what_astral_actually_serves():
     # every device's step 4 abort at the checksum. Fetch the real artifact and
     # compare. A mismatch here is also the signal that upstream re-published
     # that URL's contents, which is exactly what pinning exists to catch.
-    version = re.search(r'^UV_VERSION="([^"]+)"$', _script_text(), re.MULTILINE).group(1)
-    expected = re.search(r'^UV_INSTALLER_SHA256="([^"]+)"$', _script_text(), re.MULTILINE).group(1)
+    version = re.search(r'^UV_VERSION="([^"]+)"$', _script_text(), re.MULTILINE).group(
+        1
+    )
+    expected = re.search(
+        r'^UV_INSTALLER_SHA256="([^"]+)"$', _script_text(), re.MULTILINE
+    ).group(1)
     url = f"https://astral.sh/uv/{version}/install.sh"
     # astral.sh answers urllib's default User-Agent with 403, so send the one
     # the script's own curl invocation would - otherwise this test looks like a
@@ -889,7 +997,9 @@ def test_the_pinned_digest_matches_what_astral_actually_serves():
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = response.read()
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        pytest.skip(f"cannot reach {url} ({exc}) - the pin was not verified against upstream")
+        pytest.skip(
+            f"cannot reach {url} ({exc}) - the pin was not verified against upstream"
+        )
 
     assert hashlib.sha256(payload).hexdigest() == expected, (
         f"{url} no longer hashes to the digest pinned in setup-device.sh. Either the "
@@ -905,8 +1015,12 @@ def test_uv_installs_to_a_directory_later_runs_can_actually_see():
     text = _script_text()
 
     assert 'UV_INSTALL_DIR="${BIN_DIR}"' in text
-    assert 'BIN_DIR="/usr/local/bin"' in text, "the install dir has to be on sudo's secure_path"
-    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    assert 'BIN_DIR="/usr/local/bin"' in text, (
+        "the install dir has to be on sudo's secure_path"
+    )
+    code = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
     assert "${HOME}/.local/bin" not in code
 
 
@@ -946,7 +1060,9 @@ def test_uv_step_reuses_an_existing_install_instead_of_downloading_again(tmp_pat
     )
 
     assert result.returncode == 0, result.stderr
-    assert "CURL_WAS_CALLED" not in result.stderr, "an installed uv must not be downloaded again"
+    assert "CURL_WAS_CALLED" not in result.stderr, (
+        "an installed uv must not be downloaded again"
+    )
     assert "reusing it, nothing downloaded" in result.stdout
     assert "uv 0.0.0-stub" in result.stdout, "the reused uv has to end up on PATH"
 
@@ -960,7 +1076,9 @@ def test_uv_step_reuses_an_existing_install_instead_of_downloading_again(tmp_pat
 # --------------------------------------------------------------------------
 
 
-def _run_swap_step(tmp_path: Path, conf_text: str | None) -> subprocess.CompletedProcess:
+def _run_swap_step(
+    tmp_path: Path, conf_text: str | None
+) -> subprocess.CompletedProcess:
     """Run the real step 1, with only its three path constants redirected."""
     conf = tmp_path / "dphys-swapfile"
     if conf_text is not None:
@@ -973,7 +1091,9 @@ def _run_swap_step(tmp_path: Path, conf_text: str | None) -> subprocess.Complete
         ("RPI_SWAP_CONF", str(tmp_path / "no-rpi-swap.conf")),
         ("RPI_SWAP_DROPIN", str(tmp_path / "no-rpi-swap.conf.d" / "10-visio.conf")),
     ):
-        block, count = re.subn(rf'^{name}="[^"]*"$', f'{name}="{value}"', block, flags=re.MULTILINE)
+        block, count = re.subn(
+            rf'^{name}="[^"]*"$', f'{name}="{value}"', block, flags=re.MULTILINE
+        )
         assert count == 1, f"{name} is no longer a single quoted assignment in step 1"
 
     stubs = tmp_path / "stubs"
@@ -1005,7 +1125,9 @@ def _run_swap_step(tmp_path: Path, conf_text: str | None) -> subprocess.Complete
 def test_a_non_numeric_swap_size_does_not_abort_the_run(tmp_path, value):
     result = _run_swap_step(tmp_path, f"CONF_SWAPSIZE={value}\n")
 
-    assert result.returncode == 0, f"step 1 aborted on CONF_SWAPSIZE={value!r}: {result.stderr}"
+    assert result.returncode == 0, (
+        f"step 1 aborted on CONF_SWAPSIZE={value!r}: {result.stderr}"
+    )
     assert "not a plain integer" in result.stdout
     # Treated as 0, so the script goes on to write the size it guarantees.
     assert (tmp_path / "dphys-swapfile").read_text() == "CONF_SWAPSIZE=1024\n"
@@ -1026,7 +1148,9 @@ def test_a_swap_size_below_the_floor_is_raised_without_complaint(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "not a plain integer" not in result.stdout, "100 is a plain integer"
     assert "increased to 1024MB" in result.stdout
-    assert (tmp_path / "dphys-swapfile").read_text() == "CONF_SWAPSIZE=1024\nCONF_SWAPFILE=/var/swap\n"
+    assert (
+        tmp_path / "dphys-swapfile"
+    ).read_text() == "CONF_SWAPSIZE=1024\nCONF_SWAPFILE=/var/swap\n"
 
 
 def test_a_sufficient_swap_size_is_left_alone(tmp_path):
@@ -1081,7 +1205,9 @@ def _venv_lib(tmp_path: Path) -> Path:
     return lib
 
 
-def _run_venv(lib: Path, snippet: str, home: Path, path: str = "") -> subprocess.CompletedProcess:
+def _run_venv(
+    lib: Path, snippet: str, home: Path, path: str = ""
+) -> subprocess.CompletedProcess:
     uv_dir = os.path.dirname(shutil.which("uv") or "/nonexistent")
     home.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
@@ -1108,23 +1234,34 @@ def _sys_path(python: Path | str) -> list[str]:
 def test_the_provisioned_venv_can_import_the_apt_installed_hardware_libraries(tmp_path):
     venv = tmp_path / "firmware" / ".venv"
 
-    result = _run_venv(_venv_lib(tmp_path / "lib"), f'ensure_system_site_venv "{venv}"', tmp_path / "home")
+    result = _run_venv(
+        _venv_lib(tmp_path / "lib"),
+        f'ensure_system_site_venv "{venv}"',
+        tmp_path / "home",
+    )
 
     assert result.returncode == 0, result.stderr
     cfg = (venv / "pyvenv.cfg").read_text()
     assert "include-system-site-packages = true" in cfg, cfg
     system_sites = subprocess.run(
-        [_system_python(), "-c", "import json, site; print(json.dumps(site.getsitepackages()))"],
+        [
+            _system_python(),
+            "-c",
+            "import json, site; print(json.dumps(site.getsitepackages()))",
+        ],
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert system_sites.returncode == 0, system_sites.stderr
-    shared = set(json.loads(system_sites.stdout)) & set(_sys_path(venv / "bin" / "python3"))
+    shared = set(json.loads(system_sites.stdout)) & set(
+        _sys_path(venv / "bin" / "python3")
+    )
     assert shared, (
         "the provisioned venv cannot see a single system site-packages directory, so "
         "gpiozero and pijuice - apt packages on the device - are unimportable from it "
-        f"and preflight blocks on them. venv sys.path: {_sys_path(venv / 'bin' / 'python3')}"
+        "and preflight blocks on them. venv sys.path: "
+        f"{_sys_path(venv / 'bin' / 'python3')}"
     )
 
 
@@ -1141,7 +1278,9 @@ def test_a_healthy_venv_is_reused_rather_than_rebuilt_on_a_re_run(tmp_path):
     result = _run_venv(lib, f'ensure_system_site_venv "{venv}"', home)
 
     assert result.returncode == 0, result.stderr
-    assert marker.exists(), "a venv that already sees the system packages must be left alone"
+    assert marker.exists(), (
+        "a venv that already sees the system packages must be left alone"
+    )
     assert "recreating it" not in result.stdout
 
 
@@ -1184,7 +1323,9 @@ def test_a_venv_uv_built_on_its_own_is_recreated_from_the_system_interpreter(tmp
 def test_step_5_builds_the_venv_before_syncing_and_rechecks_it_afterwards():
     step = _step_block(5)
 
-    assert step.index('ensure_system_site_venv "${VENV_DIR}"') < step.index("uv sync --locked")
+    assert step.index('ensure_system_site_venv "${VENV_DIR}"') < step.index(
+        "uv sync --locked"
+    )
     # A venv that lost system-site-packages during the sync is the exact
     # failure this step exists to prevent, and it is invisible until the daemon
     # will not start, so the run refuses to report success on one.
@@ -1200,12 +1341,20 @@ def test_the_hardware_libraries_preflight_blocks_on_are_actually_provisioned():
     # produces can pass its own preflight.
     text = _script_text()
 
-    assert "python3-gpiozero" in _step_block(2), "gpiozero is an apt package on the target"
-    assert "pijuice-base" in _step_block(2)
-    assert re.search(r'^RPI_WS281X_SPEC="rpi-ws281x==\d+\.\d+\.\d+"$', text, re.MULTILINE), (
-        "no archive ships rpi_ws281x, so it is built into the venv - pinned, like the uv installer"
+    assert "python3-gpiozero" in _step_block(2), (
+        "gpiozero is an apt package on the target"
     )
-    assert 'uv pip install --python "${VENV_DIR}/bin/python3" "${RPI_WS281X_SPEC}"' in _step_block(5)
+    assert "pijuice-base" in _step_block(2)
+    assert re.search(
+        r'^RPI_WS281X_SPEC="rpi-ws281x==\d+\.\d+\.\d+"$', text, re.MULTILINE
+    ), (
+        "no archive ships rpi_ws281x, so it is built into the venv - pinned, "
+        "like the uv installer"
+    )
+    assert (
+        'uv pip install --python "${VENV_DIR}/bin/python3" "${RPI_WS281X_SPEC}"'
+        in _step_block(5)
+    )
 
 
 def _ws281x_block() -> str:
@@ -1253,7 +1402,9 @@ def test_a_failed_rpi_ws281x_build_does_not_abort_provisioning(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "APT_GET_WAS_CALLED" not in result.stderr, "nothing to install when there is no candidate"
+    assert "APT_GET_WAS_CALLED" not in result.stderr, (
+        "nothing to install when there is no candidate"
+    )
     assert "could not install rpi-ws281x" in result.stdout
     assert "blocking failure" in result.stdout
     assert "REACHED_THE_NEXT_STEP" in result.stdout
@@ -1313,7 +1464,9 @@ def test_the_starter_nvim_config_is_written_once_and_then_left_alone(tmp_path):
     init = home / ".config" / "nvim" / "init.lua"
     assert first.returncode == 0, first.stderr
     assert "Wrote starter" in first.stdout
-    assert init.read_text().startswith("-- Starting point written once by setup-device.sh.")
+    assert init.read_text().startswith(
+        "-- Starting point written once by setup-device.sh."
+    )
     assert init.read_text().endswith("\n")
     assert not (home / ".config" / "nvim" / "init.lua.visio-setup.tmp").exists()
 
@@ -1375,7 +1528,10 @@ def _run_final_steps(
     """Run steps 9 and 10 for real, with only DATA_DIR redirected."""
     env_file = tmp_path / "visio-recorder.env"
     env_file.write_text(env_text)
-    block = 'log "Step 9/10: data dir"' + _script_text().split('log "Step 9/10: data dir"')[1]
+    block = (
+        'log "Step 9/10: data dir"'
+        + _script_text().split('log "Step 9/10: data dir"')[1]
+    )
     snippet = "\n".join(
         [
             _extract_function("log"),
@@ -1414,7 +1570,9 @@ def test_a_failed_ws281x_build_is_repeated_in_the_summary(tmp_path):
     assert (tmp_path / "default-data-dir").is_dir()
     assert "Setup complete." not in result.stdout
     assert "Setup incomplete" in result.stdout
-    assert result.returncode == 1, "a device whose daemon cannot start is not a successful run"
+    assert result.returncode == 1, (
+        "a device whose daemon cannot start is not a successful run"
+    )
 
 
 def test_a_successful_run_says_nothing_about_ws281x(tmp_path):
@@ -1428,13 +1586,19 @@ def test_a_successful_run_says_nothing_about_ws281x(tmp_path):
 def test_the_data_dir_step_provisions_the_configured_directory(tmp_path):
     configured = tmp_path / "usb-mount" / "visio"
     result = _run_final_steps(
-        tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={configured}\n", ws281x_missing="false"
+        tmp_path,
+        _CONFIGURED_ENV + f"VISIO_DATA_DIR={configured}\n",
+        ws281x_missing="false",
     )
 
     assert result.returncode == 0, result.stderr
-    assert configured.is_dir(), "preflight checks this path, so provisioning has to create it"
+    assert configured.is_dir(), (
+        "preflight checks this path, so provisioning has to create it"
+    )
     assert not (tmp_path / "default-data-dir").exists()
-    assert str(configured) in result.stdout, "the summary has to name the directory it made"
+    assert str(configured) in result.stdout, (
+        "the summary has to name the directory it made"
+    )
 
 
 def test_the_data_dir_step_falls_back_to_the_default_when_unset(tmp_path):
@@ -1449,7 +1613,9 @@ def test_a_quoted_data_dir_is_unquoted_the_way_systemd_reads_it(tmp_path):
     # a literal directory named '"/mnt/usb"' would be a silent mis-provision.
     configured = tmp_path / "quoted-mount"
     result = _run_final_steps(
-        tmp_path, _CONFIGURED_ENV + f'VISIO_DATA_DIR="{configured}"\n', ws281x_missing="false"
+        tmp_path,
+        _CONFIGURED_ENV + f'VISIO_DATA_DIR="{configured}"\n',
+        ws281x_missing="false",
     )
 
     assert result.returncode == 0, result.stderr
@@ -1464,11 +1630,15 @@ def test_a_quoted_data_dir_is_unquoted_the_way_systemd_reads_it(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_an_uncreatable_data_dir_is_reported_in_the_summary_instead_of_aborting(tmp_path):
+def test_an_uncreatable_data_dir_is_reported_in_the_summary_instead_of_aborting(
+    tmp_path,
+):
     blocked = tmp_path / "occupied"
     blocked.write_text("a regular file where the data dir should be\n")
 
-    result = _run_final_steps(tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={blocked}/visio\n")
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={blocked}/visio\n"
+    )
 
     assert "cannot create" in result.stdout
     assert "VISIO_DATA_DIR" in result.stdout
@@ -1481,7 +1651,9 @@ def test_an_uncreatable_data_dir_is_reported_in_the_summary_instead_of_aborting(
     # ...and only then reports the outcome honestly, in both channels.
     assert "Setup complete." not in result.stdout
     assert "Setup incomplete" in result.stdout
-    assert result.returncode == 1, "a device with nowhere to record is not a successful run"
+    assert result.returncode == 1, (
+        "a device with nowhere to record is not a successful run"
+    )
 
 
 def test_a_relative_data_dir_is_rejected_rather_than_silently_diverging(tmp_path):
@@ -1493,7 +1665,9 @@ def test_a_relative_data_dir_is_rejected_rather_than_silently_diverging(tmp_path
     assert "not an absolute path" in result.stdout
     assert "INCOMPLETE" in result.stdout
     assert not (tmp_path / "recordings").exists()
-    assert not (tmp_path / "default-data-dir").exists(), "a bad value must not fall back silently"
+    assert not (tmp_path / "default-data-dir").exists(), (
+        "a bad value must not fall back silently"
+    )
     assert "Setup complete." not in result.stdout
     assert "Setup incomplete" in result.stdout
     assert result.returncode == 1
@@ -1510,7 +1684,9 @@ def test_a_created_data_dir_says_nothing_about_being_incomplete(tmp_path):
 def test_the_env_template_does_not_promise_preflight_can_read_it(tmp_path):
     # The file is chmod 600 root-owned, so the unprivileged read fails; the
     # template must not document that path as working.
-    template = _script_text().split("""cat > "${ENV_FILE}" <<'EOF'""")[1].split("\nEOF\n")[0]
+    template = (
+        _script_text().split("""cat > "${ENV_FILE}" <<'EOF'""")[1].split("\nEOF\n")[0]
+    )
 
     assert "VISIO_DATA_DIR" in template
     assert template.count("VISIO_DATA_DIR=") == 1, "the key must not be duplicated"
@@ -1544,10 +1720,16 @@ def test_env_file_value_reads_an_indented_key_the_way_systemd_does(tmp_path):
     # preflight both saw it, so this script would provision one data dir and
     # the unit would then block on another.
     env_file = tmp_path / "visio-recorder.env"
-    env_file.write_text("  VISIO_DATA_DIR=/mnt/usb/visio\n\tVISIO_BATTERY_SOURCE=none\n")
+    env_file.write_text(
+        "  VISIO_DATA_DIR=/mnt/usb/visio\n\tVISIO_BATTERY_SOURCE=none\n"
+    )
     lib = _shell_lib(tmp_path / "lib", "env_file_value")
 
-    result = _run(lib, 'env_file_value VISIO_DATA_DIR\nenv_file_value VISIO_BATTERY_SOURCE', env_file)
+    result = _run(
+        lib,
+        "env_file_value VISIO_DATA_DIR\nenv_file_value VISIO_BATTERY_SOURCE",
+        env_file,
+    )
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["/mnt/usb/visio", "none"]
@@ -1556,7 +1738,9 @@ def test_env_file_value_reads_an_indented_key_the_way_systemd_does(tmp_path):
 def test_an_indented_data_dir_is_provisioned_rather_than_missed(tmp_path):
     configured = tmp_path / "indented-mount"
 
-    result = _run_final_steps(tmp_path, _CONFIGURED_ENV + f"   VISIO_DATA_DIR={configured}\n")
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV + f"   VISIO_DATA_DIR={configured}\n"
+    )
 
     assert result.returncode == 0, result.stderr
     assert configured.is_dir(), "systemd would have given the daemon this path"
