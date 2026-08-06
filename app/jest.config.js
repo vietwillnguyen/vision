@@ -7,4 +7,9 @@ module.exports = {
   // every test passes in isolation - same class of flake already fixed for
   // the live-Supabase suite (see useDeviceStatus.live.test.tsx history).
   testTimeout: 15000,
+  // Raising testTimeout alone was not enough: RNTL's waitFor/findBy* have a
+  // separate 1000ms budget that jest never sees. jest.setup.js raises that one
+  // to match. The jest-expo preset defines no setupFilesAfterEnv, so this adds
+  // rather than overrides.
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
 };
