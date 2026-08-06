@@ -590,6 +590,9 @@ def test_read_env_file_parses_it_the_way_systemd_does(tmp_path):
 
     values = read_env_file(env_file)
 
+    # None is the distinct "could not read it" outcome; a readable file must
+    # never report that.
+    assert values is not None
     assert values["VISIO_DATA_DIR"] == "/last/assignment/wins"
     assert values["VISIO_BATTERY_SOURCE"] == "none"
     assert values["SUPABASE_URL"] == "https://x.supabase.co"
@@ -600,6 +603,7 @@ def test_read_env_file_strips_one_layer_of_matching_quotes(tmp_path):
     # named '"/mnt/usb"' would be a silent mis-check.
     values = read_env_file(_env_file(tmp_path, 'VISIO_DATA_DIR="/mnt/usb/visio"\n'))
 
+    assert values is not None
     assert values["VISIO_DATA_DIR"] == "/mnt/usb/visio"
 
 
@@ -735,6 +739,7 @@ def test_read_env_file_accepts_an_indented_key_the_way_systemd_does(tmp_path):
     # while systemd hands the daemon another.
     values = read_env_file(_env_file(tmp_path, "  VISIO_DATA_DIR=/mnt/usb/visio\n"))
 
+    assert values is not None
     assert values["VISIO_DATA_DIR"] == "/mnt/usb/visio"
 
 

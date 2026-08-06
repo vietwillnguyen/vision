@@ -6,8 +6,9 @@ on ``s3_key``, so persistence selects existing keys and splits into
 insert-new versus update-scores rather than relying on upsert.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from pipeline.models import ScoreWeights
 from pipeline.orchestrator import DeviceRecord, DlqEntry
@@ -19,7 +20,11 @@ STORAGE_LIST_PAGE_SIZE = 100
 
 
 class SupabaseStore:
-    def __init__(self, client):
+    # `client` is supabase-py's Client in production and a fake in tests.
+    # Annotating it as Client would reject the fakes this suite is built on, and
+    # supabase-py ships no Protocol for its fluent query builder - so the
+    # untyped boundary is stated explicitly as Any rather than left implicit.
+    def __init__(self, client: Any) -> None:
         self._client = client
 
     def list_devices(self) -> list[DeviceRecord]:
@@ -184,7 +189,7 @@ class SupabaseStore:
         entries = [entry for entry in entries if entry.key not in escalated_keys]
         if not entries:
             return
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         self._client.table(DLQ_TABLE).upsert(
             [
                 {

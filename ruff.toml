@@ -1,0 +1,33 @@
+# Shared ruff configuration for the three Python packages (firmware/, pipeline/,
+# integration/). Each package's pyproject.toml pulls this in with
+# `[tool.ruff] extend = "../ruff.toml"`, so the three uv projects share one rule
+# set instead of drifting apart. Ruff resolves config per file by walking up from
+# it, so `ruff check` behaves identically whether it is run from a package
+# directory or from the repo root.
+
+# Raspberry Pi OS Bookworm (the device target) ships Python 3.11, and all three
+# packages pin `requires-python = ">=3.11"`. A standalone ruff.toml has no
+# [project] table to infer that from, so state it here.
+target-version = "py311"
+line-length = 88
+
+[lint]
+# Ruff replaces black + flake8 + isort, so none of those are dependencies.
+select = [
+    "E", # pycodestyle errors
+    "W", # pycodestyle warnings
+    "F", # pyflakes - the unused-variable / empty-f-string class of real bug
+    "I", # isort - import ordering
+    "UP", # pyupgrade - modernize for the 3.11 floor
+    "B", # flake8-bugbear - likely bugs (mutable defaults, unstrict zip, ...)
+    "SIM", # flake8-simplify
+    "C4", # flake8-comprehensions
+]
+
+[lint.isort]
+# The three packages are separate uv projects, so ruff cannot infer first-party
+# names from a single source root.
+known-first-party = ["visio_recorder", "pipeline", "tests"]
+
+[format]
+docstring-code-format = true

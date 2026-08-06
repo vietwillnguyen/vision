@@ -1,8 +1,8 @@
 name: lint
 
 # Deliberately unfiltered on pull_request: unlike tests.yml, which only runs
-# for PRs targeting main, this must also run on PRs stacked onto a feature
-# branch - shell changes land there first.
+# for PRs targeting an explicit branch list, this must also run on PRs stacked
+# onto a feature branch - shell, Python and app changes all land there first.
 on:
   pull_request:
   push:
@@ -38,4 +38,57 @@ jobs:
         run: |
           shellcheck --severity=style \
             firmware/scripts/setup-device.sh \
-            scripts/hooks/pre-commit
+            scripts/hooks/pre-commit \
+            scripts/hooks/tests/test-pre-commit.sh
+
+  # Neither job below needs Docker or a Supabase instance: ruff and mypy read
+  # source only, and the app job type-checks and lints without bundling or
+  # running.
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [firmware, pipeline, integration]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # Device target is Python 3.11 on Raspberry Pi OS Bookworm, same as
+          # tests.yml - lint on the floor the code has to run on.
+          python-version: "3.11"
+          enable-cache: true
+      - name: Ruff lint
+        run: uv run --locked --extra dev ruff check .
+      - name: Ruff format
+        run: uv run --locked --extra dev ruff format --check .
+      - name: Mypy
+        # Paths come from each pyproject.toml's [tool.mypy] files setting.
+        run: uv run --locked --extra dev mypy
+
+  app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        env:
+          # Same transient-registry mitigation as tests.yml (issue #12).
+          NPM_CONFIG_FETCH_RETRIES: 5
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: 10000
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 60000
+      - name: ESLint
+        run: npm run lint
+      - name: Type-check
+        run: npm run typecheck

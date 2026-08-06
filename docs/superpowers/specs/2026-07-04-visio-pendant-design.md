@@ -131,7 +131,11 @@ A single Python systemd service manages the full device lifecycle.
 - `rpicam-vid` is invoked once per 5-minute segment (not one long-running `--segment` process), named `YYYYMMDD_HHMMSS.h264` - this keeps filename/timing control at capture start and lets each segment fail independently, at the cost of a ~1-2s gap between segments.
 - On segment completion the daemon wraps it into MP4 (`ffmpeg -c copy`), moves it to the upload queue, and hands it to a single background worker thread.
 - The worker thread is the sole owner of upload state (segment count, consecutive-failure count) and every upload-related LED transition; the main thread only records and enqueues.
-- The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop - a failed upload's file stays queued and the *next process startup's* flush (step 5 above) is the retry mechanism.
+- The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop, and no connectivity watcher or polling.
+  A failed upload's file stays queued until a drain reaches it: the next *successful* segment upload flushes the whole queue, because that success is itself the proof connectivity is back, and the next process startup's flush (step 5 above) covers a daemon that restarts before then.
+  So a WiFi gap during the day self-heals on the first segment after the network returns, rather than stranding its segments until the next boot.
+- Uploads are idempotent (`x-upsert`), and every drain treats "no longer queued" rather than "this call unlinked it" as the postcondition.
+  Both matter because a file is only unlinked *after* its upload returns: a power cut in that window leaves the object stored and the file still queued, and the segment drain and the flag-upload worker walk the same queue directory concurrently, so either can vacate a file the other is mid-way through.
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
 - On successful upload, local file is deleted to free SD space.
 
@@ -144,7 +148,7 @@ Flagged moments are always included in the highlight reel.
 **As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler only debounces, writes the marker, and hands the path to a dedicated flag-upload worker thread, keeping gpiozero's callback thread off the network so later presses are never delayed by a slow upload.
 The worker uploads each marker immediately as it arrives, so it reaches the pipeline before that night's run.
 Presses within a 2-second cooldown of the last accepted press are dropped (switch bounce and accidental double-taps).
-If the immediate upload fails, the marker stays in the upload queue and the next boot's flush retries it - the same retry contract as segments.
+If the immediate upload fails, the marker stays in the upload queue and the same drains retry it - the same retry contract as segments.
 
 **LED state machine:**
 

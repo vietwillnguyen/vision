@@ -2,7 +2,7 @@
 
 Visio pendant - a wearable camera that records your day and turns it into a nightly highlight reel.
 
-**Design spec:** [`docs/superpowers/specs/2026-07-04-visio-pendant-design.md`](docs/superpowers/specs/2026-07-04-visio-pendant-design.md)
+**Design specs:** [`2026-07-04-visio-pendant-design.md`](docs/superpowers/specs/2026-07-04-visio-pendant-design.md), [`2026-07-20-wifi-reonboard-qr-screen-design.md`](docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md), [`2026-07-21-visio-device-provisioning-design.md`](docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md) (all under `docs/superpowers/specs/`)
 **Roadmap:** [`docs/superpowers/plans/2026-07-04-visio-epics-overview.md`](docs/superpowers/plans/2026-07-04-visio-epics-overview.md)
 
 ## Repository layout
@@ -29,9 +29,12 @@ app/                 -- Epic 3: React Native (Expo) mobile companion app
   src/components/    -- presentational components (timeline, segment preview, reel player)
   src/theme.ts       -- shared dark theme for StyleSheet styling
   __tests__/         -- Jest suites run via `npm test`
+integration/         -- Epic 5: cross-service integration suite (Python package)
+  tests/             -- pytest suites running firmware + pipeline + app's real code
+                        against each other, and against a live local Supabase
 docs/
   superpowers/
-    specs/           -- approved design spec
+    specs/           -- approved design specs (rendered by docs/ARCHITECTURE.html)
     plans/           -- executable implementation plans (one per epic)
 ```
 
@@ -39,22 +42,66 @@ All three software subsystems (Epics 1-3) are implemented, including the Epic 5 
 
 ## Architecture doc
 
-[`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) is a living, visual rendering of the design spec - open it directly in a browser.
-It is generated from `docs/superpowers/specs/2026-07-04-visio-pendant-design.md`; edit the spec, then see [`docs/architecture-regeneration.md`](docs/architecture-regeneration.md) to regenerate the page.
-A pre-commit hook enforces that the two stay in sync - run this once per clone (worktrees share it):
+[`docs/ARCHITECTURE.html`](docs/ARCHITECTURE.html) is a living, visual rendering of the design specs - open it directly in a browser.
+It is generated from every spec under `docs/superpowers/specs/`; edit the specs, then see [`docs/architecture-regeneration.md`](docs/architecture-regeneration.md) to regenerate the page.
+The page embeds one `<!-- source-sha256: <hash>  <spec path> -->` comment per spec it renders, and a pre-commit hook blocks any commit that changes a spec without updating that spec's line - run this once per clone (worktrees share it):
 
 ```sh
 git config core.hooksPath scripts/hooks
 ```
 
+The hook's own suite is [`scripts/hooks/tests/test-pre-commit.sh`](scripts/hooks/tests/test-pre-commit.sh) (plain `git` + `sha256sum`, no test framework); [`.github/workflows/hooks.yml`](.github/workflows/hooks.yml) runs it on every PR and also re-verifies the committed manifest against the specs on disk.
+
 ## Continuous integration
 
-[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs all three test suites on every pull request targeting `main` and every push to `main`.
+Every pull request targeting `main`, and every push to `main`, is gated by the workflows below.
+They are split by what each needs to run, so a red check points at one thing:
+
+- [`tests.yml`](.github/workflows/tests.yml) - the subsystem test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) plus the pgTAP database contract. Needs Docker and a live local Supabase instance, so it is the slowest gate.
+- [`lint.yml`](.github/workflows/lint.yml) - `ruff check`, `ruff format --check`, and `mypy` on the Python packages, `npm run lint` (eslint) and `npm run typecheck` (`tsc --noEmit`) on the app, and `shellcheck` on the repo's shell scripts. Needs neither Docker nor Supabase, so it fails fast and independently of the suites above; see [Lint, format, and type-check](#lint-format-and-type-check). Type-checking is the one thing this split does not separate: `tsc --noEmit` runs here and in `tests.yml`, so a type error reddens both checks.
+- [`hooks.yml`](.github/workflows/hooks.yml) - the pre-commit architecture-sync guard's own suite, plus a re-check that the committed `source-sha256` manifest still matches every spec on disk (drift landed via `--no-verify` is invisible to the hook itself); see [Architecture doc](#architecture-doc) above.
+
+Each workflow's own `on:` block is the authoritative branch list, and two of them deviate from `main`-only on purpose.
+`lint.yml` is deliberately unfiltered on `pull_request`, so it also runs for pull requests stacked onto a feature branch - shell, Python and app changes all land there first.
+`tests.yml` and `hooks.yml` instead carry an explicit temporary entry per unmerged feature branch that has PRs stacked on it, each commented in place with the condition for removing it, so a stacked PR is not left with no suites and no manifest check at all.
+
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
-[`.github/workflows/lint.yml`](.github/workflows/lint.yml) runs `shellcheck` over the repo's shell scripts.
-Unlike `tests.yml` it is not filtered to `main`, so it also runs on pull requests stacked onto a feature branch.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
+The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the nine suites in [`supabase/tests/database/`](supabase/tests/database).
+It is a step inside that job rather than a job of its own because the suites finish in about a second, so a dedicated job would spend a third `supabase start` to save nothing, and because a new job would have to be added as a required status check in branch protection before it actually gated anything, whereas a step inherits the existing job's protection immediately.
+The step runs before the pytest step: each suite wraps itself in `begin`/`rollback`, so it leaves the freshly migrated database untouched for the tests that follow.
+The Supabase CLI is pinned through the workflow-level `SUPABASE_CLI_VERSION` env var rather than `version: latest`, so CI cannot change underneath a commit; Dependabot bumps action refs but not action inputs, so that pin is a manual bump.
+
+[`nightly-reel.yml`](.github/workflows/nightly-reel.yml) is not a gate - it is the scheduled pipeline run.
+
+## Lint, format, and type-check
+
+[`.github/workflows/lint.yml`](.github/workflows/lint.yml) gates the same commands on every pull request, and on every push to `main`.
+It needs neither Docker nor a Supabase instance.
+
+Python uses [ruff](https://docs.astral.sh/ruff/) for both linting and formatting (it replaces black, flake8, and isort) and [mypy](https://mypy.readthedocs.io/) for type checking.
+The rule set is shared: the repo-root [`ruff.toml`](ruff.toml) holds it, and each package's `pyproject.toml` extends it.
+Run all three from any of `firmware/`, `pipeline/`, or `integration/`:
+
+```bash
+uv run --extra dev ruff check .           # lint
+uv run --extra dev ruff check --fix .     # lint, fixing what is auto-fixable
+uv run --extra dev ruff format .          # format (--check to verify only)
+uv run --extra dev mypy                   # type-check (paths come from pyproject.toml)
+```
+
+The app uses ESLint with [`eslint-config-expo`](https://docs.expo.dev/guides/using-eslint/) and `tsc`:
+
+```bash
+cd app
+npm run lint        # eslint, warnings included (--max-warnings 0)
+npm run lint -- --fix
+npm run typecheck   # tsc --noEmit
+```
+
+Shell scripts are linted with [shellcheck](https://www.shellcheck.net/) at `--severity=style`.
+The `shellcheck` job in [`lint.yml`](.github/workflows/lint.yml) holds the file list, and its comment records the one-liner that finds a script missing from it.
 
 ## Supabase foundation (Epic 0)
 
@@ -76,12 +123,15 @@ supabase db reset   # recreate the database from migrations
 supabase test db    # run the pgTAP test suites
 ```
 
+The stack `supabase start` boots is trimmed: Studio, analytics, the edge runtime, and vector storage are disabled in [`supabase/config.toml`](supabase/config.toml), each with an inline comment recording why it is unused here.
+Flip `[studio]` back on locally if you want the table editor.
+
 ## Firmware (Epic 1)
 
 **Plan:** [`docs/superpowers/plans/2026-07-04-visio-firmware.md`](docs/superpowers/plans/2026-07-04-visio-firmware.md)
 
 The `visio-recorder` Python systemd daemon: boot-time battery check, WiFi + Supabase auth onboarding via QR code, rolling 5-minute H.264-to-MP4 segment capture and upload, an LED state machine, and per-segment `device_status` reporting.
-The manual flag marker (`FLAG_YYYYMMDD_HHMMSS.marker`, `flag_button.py`) is wired to a GPIO 17 button press in `main()`: a debounced press hands the marker to a dedicated flag-upload worker thread, which uploads it immediately or leaves it queued for the next boot's flush on failure.
+The manual flag marker (`FLAG_YYYYMMDD_HHMMSS.marker`, `flag_button.py`) is wired to a GPIO 17 button press in `main()`: a debounced press hands the marker to a dedicated flag-upload worker thread, which uploads it immediately or, on failure, leaves it queued for the next drain - the same retry contract as segments.
 Every hardware or network boundary (PiJuice, GPIO, WS2812B LEDs, `ffmpeg`/`rpicam-vid`, Supabase) is a small `Protocol` with a fake used in tests; `daemon.py` is the only module that wires real implementations together.
 On boot it runs the battery/LED startup sequence, scans a QR code to onboard WiFi (writing a NetworkManager keyfile) and Supabase auth on first boot, activates the NetworkManager connection (`nmcli connection reload` + `up`, retried best-effort on restart boots), registers the device, flushes any queued uploads left over from a previous run, then starts the per-segment `rpicam-vid` capture loop with the flag-button listener and a background upload worker with real disk-usage stats.
 Configuration is read from environment variables via the systemd unit's `EnvironmentFile=/etc/visio-recorder.env`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR`, `VISIO_SEGMENT_DURATION_MS`, `VISIO_FRAMERATE`.
@@ -155,7 +205,26 @@ The React Native (Expo, TypeScript) app: a bottom tab navigator (`@react-navigat
 cd app
 npm install           # install dependencies
 npm test              # run the Jest test suites
-npx tsc --noEmit      # type-check
 npx expo start        # launch the Expo dev server
 npx expo start --web  # preview in a browser (layout/styling only - no native video playback)
+```
+
+Lint and type-check commands are in [Lint, format, and type-check](#lint-format-and-type-check).
+
+## Cross-service integration suite (Epic 5)
+
+A fourth Python package whose tests run each subsystem's *real* code against the others, rather than against each subsystem's private fakes: firmware's marker/segment writers against pipeline's parsers, pipeline's real row shapes against the migrations and the app's `mapReelRow()`, and pipeline's real `SupabaseStore` plus firmware's real uploader against a live local Supabase instance for the RLS and storage-ingestion handoffs.
+Tests that need a live instance skip themselves when the `SUPABASE_*` env vars are unset, so the suite is runnable without Docker.
+`.github/workflows/tests.yml`'s `integration` job starts a real Supabase instance, so those tests actually run (not skip) on every PR.
+
+See [`integration/README.md`](integration/README.md) for what each test file proves and why, including the one integration test that lives in the `app` package instead (Realtime channel-error handling).
+
+### Local development
+
+Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).
+
+```bash
+cd integration
+uv sync --extra dev   # install dependencies from uv.lock
+uv run pytest         # run the suite (live-Supabase tests skip without SUPABASE_* set)
 ```

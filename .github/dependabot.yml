@@ -1,0 +1,78 @@
+version: 2
+
+# Four ecosystems live in this repo. The three Python projects each ship a
+# uv.lock and CI runs `uv run --locked`, so they use the `uv` ecosystem rather
+# than `pip` - `pip` would leave uv.lock untouched and every PR would fail the
+# --locked check.
+#
+# Every ecosystem groups its minor and patch bumps into a single weekly PR so
+# routine dependency churn costs one review instead of dozens. Major bumps stay
+# ungrouped and arrive as individual PRs, because those are the ones that
+# actually need reading.
+updates:
+  - package-ecosystem: "uv"
+    directory: "/firmware"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      firmware-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "uv"
+    directory: "/pipeline"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      pipeline-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "uv"
+    directory: "/integration"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      integration-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/app"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      app-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # Scans .github/workflows/. Keeps actions/checkout, setup-node, setup-uv,
+  # astral-sh, and supabase/setup-cli current. Note this bumps the action *ref*
+  # only - the pinned SUPABASE_CLI_VERSION input in tests.yml is a manual bump.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions-minor-and-patch:
+        update-types: ["minor", "patch"]

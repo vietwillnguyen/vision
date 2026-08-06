@@ -16,4 +16,10 @@ def list_pending(queue_dir: Path) -> list[Path]:
 
 
 def mark_uploaded(path: Path) -> None:
-    path.unlink()
+    # Idempotent because queue_dir has two concurrent drainers: FlagUploadWorker
+    # on its own thread, and flush_pending on the upload worker thread after
+    # every successful segment. Either can upload and remove a file in the
+    # window between the other's upload and its mark_uploaded, and both call
+    # this outside their try. "No longer queued" is the postcondition callers
+    # want, matching the idempotent upload the x-upsert header already gives.
+    path.unlink(missing_ok=True)

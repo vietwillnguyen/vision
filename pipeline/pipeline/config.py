@@ -25,7 +25,9 @@ def load_config(env: Mapping[str, str]) -> Config:
         if not env.get(name)
     ]
     if missing:
-        raise ValueError(f"missing required environment variables: {', '.join(missing)}")
+        raise ValueError(
+            f"missing required environment variables: {', '.join(missing)}"
+        )
     return Config(
         supabase_url=env["SUPABASE_URL"],
         supabase_service_role_key=env["SUPABASE_SERVICE_ROLE_KEY"],

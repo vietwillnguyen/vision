@@ -79,10 +79,11 @@ object, no matter the actual channel status. It also requires
 (see `supabase/migrations/20260720120000_enable_device_status_realtime.sql`)
 - without that, Supabase Realtime never streams `postgres_changes` for the
 table at all, and the channel silently never reaches `SUBSCRIBED`. The Jest
-run itself needs a `WebSocket` global (Node has none; polyfilled from the
-`ws` package) and a real `fetch` (jest-expo's React Native XHR-based polyfill
+run itself needs a real `fetch` (jest-expo's React Native XHR-based polyfill
 returns a broken response against a plain `http://` localhost URL, so the
-test passes `node-fetch` via `createClient`'s `global.fetch` option).
+test passes `node-fetch` via `createClient`'s `global.fetch` option); the
+`WebSocket` global `@supabase/realtime-js` requires is Node 22's native one,
+which jest-expo leaves in place, so no `ws` shim is needed.
 
 The plan's Stage 1 (firmware's upload adapter writing a real `segments` row)
 turned out not to map to reality: firmware only uploads bytes to Storage and

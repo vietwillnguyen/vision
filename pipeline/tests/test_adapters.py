@@ -123,7 +123,11 @@ class TestTranscriptionMapping:
         assert result.has_exclamation is False
 
     def test_exclamation_detected_from_text(self):
-        verbose = {"duration": 5.0, "text": "wow!", "segments": [{"start": 0, "end": 5}]}
+        verbose = {
+            "duration": 5.0,
+            "text": "wow!",
+            "segments": [{"start": 0, "end": 5}],
+        }
 
         assert transcription_result_from_verbose(verbose).has_exclamation is True
 
@@ -179,7 +183,9 @@ class TestExpoPush:
     def test_device_not_registered_raises_token_not_registered_error(self):
         client = ExpoPushClient(
             post=lambda url, body: {
-                "data": [{"status": "error", "details": {"error": "DeviceNotRegistered"}}]
+                "data": [
+                    {"status": "error", "details": {"error": "DeviceNotRegistered"}}
+                ]
             }
         )
 

@@ -14,6 +14,14 @@ on:
 permissions:
   contents: read
 
+env:
+  # Pinned deliberately. `version: latest` let the Supabase CLI - and with it the
+  # Postgres/storage/auth images `supabase start` boots - change underneath CI
+  # with no commit, so a green build could go red with nothing in the diff. Bump
+  # this in its own PR so a CLI regression is bisectable. Dependabot tracks
+  # action *refs*, not action *inputs*, so this bump stays manual.
+  SUPABASE_CLI_VERSION: "2.109.0"
+
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -61,10 +69,25 @@ jobs:
           enable-cache: true
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: ${{ env.SUPABASE_CLI_VERSION }}
       - name: Start local Supabase
         working-directory: .
         run: supabase start
+      - name: Run pgTAP database tests
+        working-directory: .
+        # The database contract - RLS policies, table grants, storage bucket
+        # policies - that every other subsystem codes against. Kept as a step in
+        # this job rather than a dedicated `database` job: the suites take ~1s,
+        # so a separate job would spend a whole third `supabase start` to save
+        # nothing off the critical path. This is already the database job, and
+        # the step name makes a failure here unambiguous against the pytest step
+        # below. Ordered before pytest because it is the fast fail, and because
+        # each suite wraps itself in begin/rollback, so it leaves the freshly
+        # migrated database untouched for the pytest run.
+        #
+        # `supabase test db` creates the pgtap extension itself - no migration
+        # declares it, and a plain `supabase start` is enough.
+        run: supabase test db
       - name: Export local Supabase connection env
         working-directory: .
         # supabase status has no plain key=value output flag as of the CLI
@@ -103,7 +126,7 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: ${{ env.SUPABASE_CLI_VERSION }}
       - name: Start local Supabase
         working-directory: .
         run: supabase start

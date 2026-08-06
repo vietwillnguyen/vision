@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
 import type { Reel } from '../types';
+import { useResetOnInputChange } from './useResetOnInputChange';
 
 export type ReelState =
   | { kind: 'loading' }
@@ -17,13 +18,15 @@ export type ReelsState =
 export function useReel(client: SupabaseClient, deviceId: string, date: string | null): ReelState {
   const [state, setState] = useState<ReelState>({ kind: date ? 'loading' : 'none' });
 
+  useResetOnInputChange([client, deviceId, date], () =>
+    setState({ kind: date ? 'loading' : 'none' }),
+  );
+
   useEffect(() => {
     if (!date) {
-      setState({ kind: 'none' });
       return;
     }
     let isMounted = true;
-    setState({ kind: 'loading' });
 
     client
       .from('reels')
@@ -64,9 +67,12 @@ export function useReelsInRange(
 ): ReelsState {
   const [state, setState] = useState<ReelsState>({ kind: 'loading' });
 
+  useResetOnInputChange([client, deviceId, startDate, endDate], () =>
+    setState({ kind: 'loading' }),
+  );
+
   useEffect(() => {
     let isMounted = true;
-    setState({ kind: 'loading' });
 
     client
       .from('reels')

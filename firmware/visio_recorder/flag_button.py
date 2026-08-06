@@ -40,7 +40,7 @@ class FlagUploadWorker:
     def __init__(self, storage_client: StorageClient, device_id: str) -> None:
         self._storage_client = storage_client
         self._device_id = device_id
-        self._work: "queue.Queue[Path | None]" = queue.Queue()
+        self._work: queue.Queue[Path | None] = queue.Queue()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 

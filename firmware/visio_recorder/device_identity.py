@@ -2,10 +2,10 @@ import json
 import os
 import uuid
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Protocol
 
 
-def _read_stored_device_id(state_path: Path) -> Optional[str]:
+def _read_stored_device_id(state_path: Path) -> str | None:
     try:
         device_id = json.loads(state_path.read_text())["device_id"]
     except (OSError, ValueError, KeyError, TypeError):

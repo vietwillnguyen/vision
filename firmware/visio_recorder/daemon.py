@@ -124,6 +124,13 @@ class LoopDeps:
     device_id: str
     segment_duration_ms: int
     framerate: int
+    # Seeded from the boot drain so both drain paths feed the same counter. The
+    # app renders it as "Segments uploaded today" from the segments_uploaded_today
+    # column, so the semantic is uploaded, not recorded: a backlog segment that
+    # goes up today counts wherever it is drained. on_segment_complete already
+    # counts the backlog its own drain clears; without this the identical
+    # overnight backlog would report 0 or 200 purely by which path reached it.
+    segments_uploaded_at_start: int = 0
 
 
 def run_recording_loop(
@@ -140,10 +147,10 @@ def run_recording_loop(
     CRITICAL LED is applied after the drain so it is the final LED state and
     cannot be overwritten by the drained segments' LED restores.
     """
-    work: "queue.Queue[Path | None]" = queue.Queue()
+    work: queue.Queue[Path | None] = queue.Queue()
 
     def worker() -> None:
-        segments_uploaded_today = 0
+        segments_uploaded_today = deps.segments_uploaded_at_start
         consecutive_failures = 0
         while True:
             item = work.get()
@@ -268,7 +275,7 @@ def main() -> int:
         register_device(clients.registration, device_id, _DEVICE_NAME)
         registered_marker_path.touch()
 
-    flush_pending(queue_dir, clients.storage, device_id)
+    segments_uploaded_at_start = flush_pending(queue_dir, clients.storage, device_id)
 
     stop = threading.Event()
 
@@ -301,6 +308,7 @@ def main() -> int:
         device_id=device_id,
         segment_duration_ms=config.segment_duration_ms,
         framerate=config.framerate,
+        segments_uploaded_at_start=segments_uploaded_at_start,
     )
     try:
         run_recording_loop(deps, stop)
