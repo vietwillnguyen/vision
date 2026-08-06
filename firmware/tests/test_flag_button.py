@@ -2,7 +2,12 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from tests.fakes import FailingStorageClient, FakeClock, FakeStorageClient
+from tests.fakes import (
+    ConcurrentlyRemovedStorageClient,
+    FailingStorageClient,
+    FakeClock,
+    FakeStorageClient,
+)
 from visio_recorder.flag_button import (
     FlagUploadWorker,
     make_flag_press_handler,
@@ -165,6 +170,37 @@ def test_worker_keeps_uploading_after_a_failure(tmp_path):
     assert [p.name for p in (tmp_path / "queue").iterdir()] == [
         "FLAG_20260704_120000.marker"
     ]
+
+
+def test_worker_survives_a_marker_the_segment_drain_removed_first(tmp_path):
+    # A successful segment upload now runs flush_pending on the recording
+    # worker thread, over this same queue_dir. It can upload and unlink a
+    # marker in the window between this worker's own upload and its
+    # mark_uploaded, which sits outside the try - so a non-idempotent unlink
+    # raised FileNotFoundError straight out of _run and killed the thread for
+    # the rest of the daemon's life, leaving every later press to wait for the
+    # ~5-minute segment drain instead of uploading immediately.
+    #
+    # The x-upsert fix is what exposed this: the duplicate upload used to raise
+    # "already exists" inside the try, so execution never reached the unlink.
+    queue_dir = tmp_path / "queue"
+    first = write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 0))
+    storage = ConcurrentlyRemovedStorageClient({first.name})
+    worker = FlagUploadWorker(storage, "dev-1")
+
+    worker.submit(first)
+    second = write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 5))
+    worker.submit(second)
+    worker.stop()
+
+    # The second marker uploading at all is the proof the thread outlived the
+    # contested first one; queue.Queue has a single consumer, so a dead thread
+    # would leave this submission unprocessed.
+    assert storage.uploaded == [
+        "dev-1/FLAG_20260704_120000.marker",
+        "dev-1/FLAG_20260704_120005.marker",
+    ]
+    assert list(queue_dir.iterdir()) == []
 
 
 def test_press_handler_marker_name_matches_the_pipeline_parser_contract(tmp_path):

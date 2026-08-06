@@ -9,7 +9,8 @@ module.exports = {
   testTimeout: 15000,
   // Raising testTimeout alone was not enough: RNTL's waitFor/findBy* have a
   // separate 1000ms budget that jest never sees. jest.setup.js raises that one
-  // to match. The jest-expo preset defines no setupFilesAfterEnv, so this adds
-  // rather than overrides.
+  // too, but to a value under this one so RNTL's far better failure message
+  // wins the race - see the reasoning there. The jest-expo preset defines no
+  // setupFilesAfterEnv, so this adds rather than overrides.
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
 };

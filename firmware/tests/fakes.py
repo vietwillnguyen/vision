@@ -123,6 +123,27 @@ class FakeStorageClientFailingOn(StorageClient):
         self.uploaded.append(object_path)
 
 
+class ConcurrentlyRemovedStorageClient(StorageClient):
+    """Succeeds, then unlinks any file whose name is in ``removed_names``.
+
+    Stands in for the other drainer of ``queue_dir`` winning the race, in the
+    one window that matters: after this caller's upload returns and before it
+    reaches ``mark_uploaded``. Both ``FlagUploadWorker`` and ``flush_pending``
+    upload from that directory and then unlink, so either can vacate a file the
+    other is mid-way through handling. Removing it from inside ``upload`` pins
+    the interleaving deterministically instead of racing real threads.
+    """
+
+    def __init__(self, removed_names: set[str]) -> None:
+        self.removed_names = set(removed_names)
+        self.uploaded: list[str] = []
+
+    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
+        self.uploaded.append(object_path)
+        if local_path.name in self.removed_names:
+            local_path.unlink()
+
+
 class ScriptedStorageClient(StorageClient):
     """Fails for a scripted set of segment filenames, else succeeds.
 

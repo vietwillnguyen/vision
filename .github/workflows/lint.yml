@@ -38,7 +38,8 @@ jobs:
         run: |
           shellcheck --severity=style \
             firmware/scripts/setup-device.sh \
-            scripts/hooks/pre-commit
+            scripts/hooks/pre-commit \
+            scripts/hooks/tests/test-pre-commit.sh
 
   # Neither job below needs Docker or a Supabase instance: ruff and mypy read
   # source only, and the app job type-checks and lints without bundling or

@@ -122,6 +122,7 @@ def _make_deps(
     led_driver,
     storage_client=None,
     status_client=None,
+    segments_uploaded_at_start=0,
 ) -> LoopDeps:
     return LoopDeps(
         command_runner=command_runner,
@@ -135,6 +136,7 @@ def _make_deps(
         device_id="device-abc",
         segment_duration_ms=1000,
         framerate=30,
+        segments_uploaded_at_start=segments_uploaded_at_start,
     )
 
 
@@ -165,6 +167,30 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
         "device-abc/20260704_120002.mp4",
     ]
     assert len(status.upserts) == 3
+
+
+def test_boot_drain_count_carries_into_the_status_the_worker_reports(tmp_path):
+    # main() feeds the startup flush_pending's return in here. The in-loop drain
+    # in on_segment_complete already adds whatever backlog it clears, so without
+    # this seed the same overnight backlog would reach the app's Device tab or
+    # not purely by which of the two drains happened to reach it first.
+    stop = threading.Event()
+    status = FakeStatusClient()
+    runner = FakeCommandRunner(
+        on_record=lambda count: stop.set() if count >= 1 else None
+    )
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        status_client=status,
+        segments_uploaded_at_start=7,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    assert [u["segments_uploaded_today"] for u in status.upserts] == [8]
 
 
 def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
