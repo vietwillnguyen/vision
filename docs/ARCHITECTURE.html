@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: e35b9750f2c45e05deaf8dcb07c54d16a78369e9e86594cba864ec4be0ff0771  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 999393902e3d36c3362bbb34a5d6d91ccb474961e53a638ecf1f8cad5159f2be  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 42c4fb31d70a1d679c34a83513ba16c5fcbf7f1e0ce4ac09271a711eede083ea  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-07-23 (spec-sync, main divergence merge) -->
+<!-- regenerated-at: 2026-08-06 (spec-sync, upload retry contract) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -215,6 +215,7 @@ flowchart TD
   W -- "mux + upload" --> S["Supabase Storage"]
   W -- "3 consecutive failures" --> CRIT["CRITICAL LED"]
   W -- "any success" --> RESET["reset failure counter"]
+  W -- "any success" --> BACKLOG["flush_pending:<br/>drain the queue backlog"]
   M -- "battery halt or stop signal" --> DRAIN["drain queue, join() worker"]
   DRAIN --> HALT["apply CRITICAL after worker fully joins"]
         </pre>
@@ -225,7 +226,8 @@ flowchart TD
       <h3 class="font-semibold mb-2">Key as-built decisions</h3>
       <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per 5-minute segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
-        <li>Upload retry is <em>startup-flush only</em> — no continuous while-running retry loop. A failed segment stays queued until the next process start.</li>
+        <li>Upload retry has no continuous while-running loop, no connectivity watcher and no polling - a failed segment stays queued until a <em>drain</em> reaches it: the next <em>successful</em> segment upload, which flushes the whole queue because that success is itself the connectivity signal, or the next process start. A daytime WiFi gap therefore self-heals on the first segment after the network returns instead of stranding its segments until the next boot.</li>
+        <li>Uploads are idempotent (<span class="font-mono text-xs bg-base-200 rounded px-1">x-upsert</span>) and every drain's unlink tolerates an already-gone file - a file is unlinked only <em>after</em> its upload returns, so a power cut in that window, or the flag-upload worker walking the same queue directory, must not poison the retry.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
       </ul>
@@ -236,7 +238,7 @@ flowchart TD
     <h2 class="text-2xl font-bold">As-built gaps</h2>
     <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed. Both previously tracked firmware gaps are closed; one hardware substitution is open:</p>
     <div class="alert alert-success alert-soft" role="alert">
-      <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, and hands it to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread never touches the network); a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for next-boot flush - the same retry contract as segments.</span>
+      <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, and hands it to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread never touches the network); a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for the next drain - the same retry contract as segments.</span>
     </div>
     <div class="alert alert-success alert-soft" role="alert">
       <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
