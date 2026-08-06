@@ -124,21 +124,23 @@ class FakeStorageClientFailingOn(StorageClient):
 
 
 class ScriptedStorageClient(StorageClient):
-    """Fails on a scripted set of 1-based upload attempt numbers, else succeeds.
+    """Fails for a scripted set of segment filenames, else succeeds.
 
-    Only the single upload worker calls ``upload``, so attempt ``k`` maps to the
-    ``k``-th completed segment in order.
+    Keyed on the filename rather than on a call counter. A successful upload
+    also drains the queued backlog, so one completed segment can produce
+    several ``upload`` calls and an attempt-numbered script would no longer map
+    onto segments. ``attempts`` still counts every call, retries included.
     """
 
-    def __init__(self, fail_on_attempts: set[int]) -> None:
-        self.fail_on_attempts = set(fail_on_attempts)
+    def __init__(self, failing_names: set[str]) -> None:
+        self.failing_names = set(failing_names)
         self.attempts = 0
         self.uploaded: list[str] = []
 
     def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
         self.attempts += 1
-        if self.attempts in self.fail_on_attempts:
-            raise RuntimeError(f"upload failed on attempt {self.attempts}")
+        if local_path.name in self.failing_names:
+            raise RuntimeError(f"upload failed for {local_path.name}")
         self.uploaded.append(object_path)
 
 

@@ -18,6 +18,7 @@ from visio_recorder.recording_loop import (
     next_led_state,
     on_segment_complete,
 )
+from visio_recorder.upload_queue import list_pending
 
 
 def test_next_led_state_prioritizes_low_battery_over_uploading():
@@ -233,6 +234,89 @@ def test_successful_upload_returns_ok_result(tmp_path):
 
     assert result.upload_ok is True
     assert result.segments_uploaded_today == 1
+
+
+def test_a_successful_upload_drains_a_backlog_left_by_an_earlier_wifi_gap(tmp_path):
+    # flush_pending used to run only at daemon startup, so segments stranded by
+    # a WiFi gap during the day sat queued until the next restart - on a pendant
+    # that is worn all day, potentially for the whole day. A segment uploading
+    # successfully is itself the proof connectivity is back, so it is the moment
+    # to drain, and it costs a directory listing when there is nothing to drain.
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    stranded = ["20260704_100000.mp4", "20260704_110000.mp4"]
+    for name in stranded:
+        (queue_dir / name).touch()
+    storage = FakeStorageClient()
+    status_client = FakeStatusClient()
+
+    result = on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=queue_dir,
+        command_runner=FakeCommandRunner(),
+        storage_client=storage,
+        status_client=status_client,
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+    )
+
+    assert result.upload_ok is True
+    # The segment itself plus both stranded ones.
+    assert result.segments_uploaded_today == 3
+    assert sorted(storage.uploaded) == [
+        "device-abc/20260704_100000.mp4",
+        "device-abc/20260704_110000.mp4",
+        "device-abc/20260704_120000.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+    # The status row the app's Device tab reads reports the drained queue, not
+    # the backlog as it stood when the segment completed.
+    assert status_client.upserts[0]["segments_pending"] == 0
+    assert status_client.upserts[0]["segments_uploaded_today"] == 3
+
+
+def test_a_failed_upload_leaves_the_backlog_alone(tmp_path):
+    # The drain is gated on this segment succeeding, because that success is
+    # the whole connectivity signal. Without the gate a daemon with no network
+    # would re-attempt the entire backlog on every completed segment.
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "20260704_100000.mp4").touch()
+    storage = FakeStorageClientFailingOn("20260704_120000.mp4")
+
+    result = on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=queue_dir,
+        command_runner=FakeCommandRunner(),
+        storage_client=storage,
+        status_client=FakeStatusClient(),
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+    )
+
+    assert result.upload_ok is False
+    assert result.segments_uploaded_today == 0
+    assert storage.uploaded == []
+    assert [p.name for p in list_pending(queue_dir)] == [
+        "20260704_100000.mp4",
+        "20260704_120000.mp4",
+    ]
 
 
 def test_flush_pending_uploads_and_clears_all_queued_files(tmp_path):

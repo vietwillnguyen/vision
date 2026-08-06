@@ -113,6 +113,21 @@ def on_segment_complete(
     except Exception:
         upload_ok = False
 
+    if upload_ok:
+        # This segment's upload succeeding *is* the connectivity signal, so it
+        # is the cheapest correct moment to drain whatever an earlier WiFi gap
+        # left behind. Without this, flush_pending runs only at daemon startup,
+        # so a gap during the day strands its segments until the next restart.
+        # Deliberately no connectivity watcher and no polling: on the common
+        # path the queue is empty and this costs one directory listing, and the
+        # backlog self-heals on the first segment after the network returns.
+        #
+        # Outside the try, and reading upload_ok rather than joining it:
+        # flush_pending logs and swallows per-file failures, so a backlog that
+        # is still unreachable must not turn this segment's success into the
+        # failure that drives the CRITICAL LED.
+        segments_uploaded_today += flush_pending(queue_dir, storage_client, device_id)
+
     apply_led_state(
         led_driver, next_led_state(battery_status.is_low, is_uploading=False)
     )

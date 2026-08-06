@@ -270,8 +270,21 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
     led = FakeLedDriver()
     # Segments 1-4 fail (CRITICAL at 3 and STILL CRITICAL at 4: a sustained
     # outage must stay red, not blip red once), 5 succeeds (reset), 6-8 fail
-    # (counter climbs back to the threshold at 8).
-    storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 4, 6, 7, 8})
+    # (counter climbs back to the threshold at 8). Segment 5's success also
+    # drains the backlog, which retries 1-4 and - since this script is keyed on
+    # the file, not on a call count - fails them again, leaving the LED
+    # sequence and the uploaded list below about segments alone.
+    storage = ScriptedStorageClient(
+        failing_names={
+            "20260704_120000.mp4",
+            "20260704_120001.mp4",
+            "20260704_120002.mp4",
+            "20260704_120003.mp4",
+            "20260704_120005.mp4",
+            "20260704_120006.mp4",
+            "20260704_120007.mp4",
+        }
+    )
 
     runner = FakeCommandRunner(
         on_record=lambda count: stop.set() if count >= 8 else None
