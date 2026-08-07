@@ -36,7 +36,9 @@ def test_high_motion_segment_runs_scene_scoring():
 
     assert vision_client.called is True
     assert location == "outdoor"
-    assert composite == pytest.approx(0.4 * 1.0 + 0.3 * 0.5 + 0.2 * (200.0 / 255.0))
+    # No audio term: audio_weight is 0 until vision-audio-capture, so this
+    # segment's 0.5 audio activity contributes nothing.
+    assert composite == pytest.approx(0.4 * 1.0 + 0.2 * (200.0 / 255.0))
 
 
 def test_low_motion_segment_skips_scene_scoring():
@@ -58,4 +60,4 @@ def test_low_motion_segment_skips_scene_scoring():
 
     assert vision_client.called is False
     assert location == "indoor"
-    assert composite == pytest.approx(0.4 * 0.0 + 0.3 * 0.0 + 0.2 * (1.0 / 255.0))
+    assert composite == pytest.approx(0.4 * 0.0 + 0.2 * (1.0 / 255.0))
