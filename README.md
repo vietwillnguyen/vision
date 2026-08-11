@@ -99,7 +99,7 @@ npm run typecheck   # tsc --noEmit
 
 The shared database contract every other subsystem codes against:
 
-- Tables: `devices`, `device_status`, `segments`, `reels`, `score_weights` (score weight defaults 0.4/0.3/0.2), and (added post-Epic-0 for issue #5) `pipeline_dlq`, the nightly pipeline's service_role-only dead-letter queue; `reels` is unique on `(device_id, date)` so same-day pipeline re-runs upsert.
+- Tables: `devices`, `device_status`, `segments`, `reels`, `score_weights` (score weight defaults 0.4/0/0.2 - audio is 0 until the firmware records any, see the scoring bullet below), and (added post-Epic-0 for issue #5) `pipeline_dlq`, the nightly pipeline's service_role-only dead-letter queue; `reels` is unique on `(device_id, date)` so same-day pipeline re-runs upsert.
 - `devices.push_token` (nullable) stores the mobile app's Expo push token for nightly reel notifications.
 - Row-level security on every table: rows are visible only to the owning user (`auth.uid()` matched directly or via the owning device's `user_id`).
 - Private `segments` and `reels` storage buckets with owner-scoped object policies keyed on the `{device_id}/` path prefix.
@@ -145,7 +145,10 @@ The unit-tested core of the nightly job that turns a day's segments into a highl
 Every stage is a pure function or takes an injectable client `Protocol`, so the test suite never calls a real LLM, FFmpeg, or Expo:
 
 - Ingestion (`pipeline/ingestion.py`): builds `segments` rows from storage object keys (`YYYYMMDD_HHMMSS.mp4`) and applies manual flag markers (`FLAG_YYYYMMDD_HHMMSS.marker`). Unparseable or out-of-device-prefix keys are returned as rejects, and markers matching no segment window as unmatched, for DLQ-style retry by the orchestrator.
-- Scoring (`pipeline/scoring/`): audio activity from transcription features, motion intensity from frame diffs (low-motion segments skip vision scoring as a cost gate), and scene novelty from a vision LLM routed through LiteLLM (Claude Haiku default, `json_schema` structured outputs). Combined by the composite formula: weighted sum (default weights 0.4/0.3/0.2), times 1.5 when manually flagged.
+- Scoring (`pipeline/scoring/`): audio activity from transcription features, motion intensity from frame diffs (low-motion segments skip vision scoring as a cost gate), and scene novelty from a vision LLM routed through LiteLLM (Claude Haiku default, `json_schema` structured outputs). Combined by the composite formula: weighted sum (default weights 0.4/0/0.2), times 1.5 when manually flagged.
+  The audio weight is deliberately 0, overriding the design spec's 0.3: the firmware records no audio (`rpicam-vid` with no ALSA source), so the transcription term is either a constant or Whisper hallucination noise.
+  Restore it to 0.3 in `pipeline/models.py` and a new migration together when `vision-audio-capture` lands a microphone.
+  Transcription still runs at weight 0 - the orchestrator extracts audio and calls the transcriber before scoring - so zeroing the weight does not yet save that cost.
 - Selection (`pipeline/selection/`): fills a 90s target with 15s clips, always includes manually flagged segments, and never places two same-location clips back to back.
 - Assembly (`pipeline/assembly/`): builds the FFmpeg trim and concat commands (720p, optional vintage filter).
 - Delivery (`pipeline/delivery/`): Expo push notification when the reel is ready.

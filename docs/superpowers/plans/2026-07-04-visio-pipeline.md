@@ -11,6 +11,8 @@
 **As-built note:** post-execution code review hardened the implementation beyond some inline snippets below; where they differ, the `pipeline/` source is authoritative.
 The deltas: `build_trim_command` re-encodes with `libx264` instead of `-c copy` so clip trims are frame-accurate; `build_segments_from_object_keys` and `apply_flag_markers` return `rejected_keys` (and, for markers, `unmatched_keys`) lists instead of silently skipping bad keys, and `apply_flag_markers` takes a `device_id` to scope markers to the device's prefix; `parse_scene_response` also validates the score's numeric type and 0-10 range and strips Markdown code fences; and the selection diversity veto only considers adjacency created by the candidate itself, so same-location adjacency between always-included flagged segments no longer vetoes unrelated candidates.
 A later coordinated rename (issue #9, ahead of Epic 5) changed flag marker filenames from `FLAG_HHMMSS.marker` to dated `FLAG_YYYYMMDD_HHMMSS.marker` names and dropped `apply_flag_markers`' `day` parameter, so inline snippets showing the undated format or the `day` argument are historical.
+`ScoreWeights.audio_weight` is 0 as built, not the 0.3 the constraint and snippets below give: the firmware records no audio, so the audio term is zeroed until `vision-audio-capture` lands a microphone, and every snippet or score assertion below carrying a 0.3 audio term is historical.
+[`README.md`](../../../README.md)'s Cloud AI pipeline section owns the current defaults and why.
 The Handoff section reflects the final contracts.
 
 ## Global Constraints
@@ -19,6 +21,7 @@ The Handoff section reflects the final contracts.
   `base_score = scene_weight * scene_novelty + audio_weight * audio_activity + motion_weight * motion_intensity`;
   `score = base_score * 1.5` if manually flagged, else `base_score`.
 - Default weights: `scene_weight = 0.4`, `audio_weight = 0.3`, `motion_weight = 0.2` (matches `score_weights` table in [`2026-07-04-visio-supabase-foundation.md`](2026-07-04-visio-supabase-foundation.md) - these are per-user and tunable, never hardcode them outside of the default).
+  `audio_weight` is 0 as built - see the As-built note above.
 - Motion-gated cost control: segments below the motion threshold skip Claude Haiku vision scoring entirely (Stage 3 is the expensive stage).
 - Scene scoring prompt and response shape are fixed by the spec: `{"score": N, "location": "indoor|outdoor", "people": true|false}`, `N` on a 1-10 scale.
 - Highlight selection fills a target duration (default 90s) and must never place two chronologically-consecutive selected segments from the same location (`indoor`/`outdoor`) back to back. Manually flagged segments are always included, ahead of ranking by score (spec: "Flagged moments are always included in the highlight reel").

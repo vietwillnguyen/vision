@@ -18,11 +18,13 @@
 > - `supabase migration up` is run between the red and green test steps to apply each new migration.
 >
 > Later epics extended the schema beyond this plan's scope: `20260710090000_grant_device_status_writes.sql` (firmware daemon writes its own status row as `authenticated`) and, for the pipeline's nightly orchestrator (issue #5), `20260716090000_create_pipeline_dlq.sql` (service_role-only DLQ table) and `20260716100000_add_reels_device_date_unique.sql` (one reel per device per day, so re-runs upsert).
+> `20260807120000_zero_audio_weight_default.sql` then dropped `score_weights.audio_weight`'s default from 0.3 to 0 while the firmware records no audio, so this plan's literal 0.3 default is historical; [`README.md`](../../../README.md)'s Cloud AI pipeline section owns the current defaults and why.
 
 ## Global Constraints
 
 - Schema must match the spec's Data Model section exactly: tables `devices`, `device_status`, `segments`, `reels`, `score_weights`.
 - `score_weights` defaults: `scene_weight = 0.4`, `audio_weight = 0.3`, `motion_weight = 0.2`.
+  `audio_weight`'s column default is 0 as built - see the Status note above.
 - `segments.user_feedback` is one of `include`, `exclude`, or `null`.
 - Storage buckets: `segments` and `reels`, both private (no public read).
 - Every table except `users` (Supabase Auth managed) must have an RLS policy restricting rows to the owning user.
