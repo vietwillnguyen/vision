@@ -62,7 +62,7 @@ They are split by what each needs to run, so a red check points at one thing:
 - [`lint.yml`](.github/workflows/lint.yml) - `ruff check`, `ruff format --check`, and `mypy` on the Python packages, plus `npm run lint` (eslint) and `npm run typecheck` (`tsc --noEmit`) on the app. Needs neither Docker nor Supabase, so it fails fast and independently of the suites above; see [Lint, format, and type-check](#lint-format-and-type-check). Type-checking is the one thing this split does not separate: `tsc --noEmit` runs here and in `tests.yml`, so a type error reddens both checks.
 - [`hooks.yml`](.github/workflows/hooks.yml) - the pre-commit architecture-sync guard's own suite, plus a re-check that the committed `source-sha256` manifest still matches every spec on disk (drift landed via `--no-verify` is invisible to the hook itself); see [Architecture doc](#architecture-doc) above.
 
-The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
+The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 - the floor all three packages declare (`requires-python = ">=3.11"`), so CI gates the oldest interpreter the firmware supports rather than whichever one the current device image ships; `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, a regeneration check on the committed database types (see [Generated database types](#generated-database-types)), `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
 The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the nine suites in [`supabase/tests/database/`](supabase/tests/database).
@@ -142,6 +142,76 @@ cd firmware
 uv sync --extra dev   # install dependencies from uv.lock
 uv run pytest         # run the test suite
 ```
+
+### Device access over Tailscale
+
+A provisioned pendant is a mobile device: over one day it joins a home router, a travel router, and cafe WiFi, so its LAN address is a new DHCP lease to hunt for every time and any address written down goes stale.
+[Tailscale](https://tailscale.com/) gives the Pi one name and one address that follow it across all of them, so the same `ssh` command keeps working no matter which network it is currently on.
+The device runs Raspberry Pi OS trixie (Debian 13); every command below assumes that.
+
+Install Tailscale on the device *after* provisioning has completed - it needs a working network connection first, and the login step needs a browser once:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --hostname <device-hostname>
+```
+
+`tailscale up` prints a login URL; open it in a browser on any machine (the Pi is headless) to authenticate the device into the tailnet.
+That is a one-time step - the installer enables `tailscaled` as a system service and the node key survives reboots.
+
+#### SSH over the tailnet
+
+Two mechanisms, not mutually exclusive:
+
+- **Tailscale SSH** - `sudo tailscale set --ssh` (or pass `--ssh` to the initial `tailscale up`).
+  `tailscaled` then answers SSH on the tailnet interface itself and authorizes by tailnet identity, so no key has to exist on the device.
+  Access is governed by the tailnet's ACL policy, which needs an `ssh` rule covering the device before connections are accepted.
+- **Ordinary key-based SSH** - unchanged, just reached over the tailnet address.
+  Raspberry Pi OS Lite ships `sshd` but leaves it disabled unless the imager enabled it, so run `sudo systemctl enable --now ssh` on the device and install the workstation's public key in `~<user>/.ssh/authorized_keys`.
+
+Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
+Trixie's `sshd_config` includes `/etc/ssh/sshd_config.d/*.conf`, so pin it with a drop-in rather than editing the main file:
+
+```bash
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
+  | sudo tee /etc/ssh/sshd_config.d/99-visio-no-passwords.conf
+sudo systemctl restart ssh
+```
+
+#### Connecting from a workstation
+
+Install Tailscale on the workstation and log it into the same tailnet, then:
+
+```bash
+tailscale status                # lists tailnet nodes; the pendant appears under its hostname
+ssh <user>@<device-hostname>
+```
+
+With MagicDNS enabled (the default), both the short hostname and `<device-hostname>.<tailnet>.ts.net` resolve directly, so the `100.x.y.z` address in `tailscale status` is never needed by hand.
+
+#### Raspberry Pi Connect as the fallback
+
+When the tailnet is unreachable - `tailscaled` wedged, the device on a network that blocks it - [Raspberry Pi Connect](https://www.raspberrypi.com/documentation/services/connect.html) provides a browser shell out of band:
+
+```bash
+sudo apt update && sudo apt install rpi-connect-lite   # headless variant: remote shell, no screen sharing
+rpi-connect on                                         # as <user>, not root
+rpi-connect signin                                     # prints a link to associate the device
+sudo loginctl enable-linger <user>
+```
+
+The lingering step is the non-obvious one: `rpi-connect` is a *user* systemd service, so without it the service is tied to a login session and the device silently stops answering after the next reboot.
+`enable-linger` is what starts the user manager at boot and keeps it running with nobody logged in.
+
+#### Troubleshooting
+
+- **Device absent from `tailscale status`.** Get a shell via Raspberry Pi Connect and check the daemon: `sudo systemctl status tailscaled`, `sudo journalctl -u tailscaled -n 50`.
+  If it is running but logged out, re-run `sudo tailscale up --hostname <device-hostname>` and complete the browser login.
+  Also confirm the node was not expired or removed in the tailnet admin console - key expiry looks identical to a dead device from the workstation side.
+- **Key rejected.** With Tailscale SSH, keys are irrelevant and a rejection is an ACL gap - check that the tailnet policy grants the connecting user an `ssh` rule to the device, and that `<user>` names an account that actually exists on the Pi.
+  With ordinary SSH, `ssh -v <user>@<device-hostname>` shows which key was offered; verify `~<user>/.ssh` is mode 0700 and `authorized_keys` 0600, since `sshd` ignores group- or world-writable files without saying so on the client.
+- **Device reachable but not recording.** The tailnet says nothing about the daemon.
+  On the device, `systemctl status visio-recorder` and `journalctl -u visio-recorder -n 100` show why it stopped, and `sudo python3 -m visio_recorder.preflight` (run from `/opt/visio-recorder`) re-runs the boot-time environment checks - packages, camera, config - and reports which ones fail.
 
 ## Cloud AI pipeline (Epic 2)
 
