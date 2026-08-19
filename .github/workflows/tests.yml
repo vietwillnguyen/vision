@@ -96,11 +96,13 @@ jobs:
             echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
           } >> "$GITHUB_ENV"
       - name: Run pytest
-        # Zero-Docker contract tests (filename/marker round-trip, segments/reels
-        # row-shape vs. migrations and app hooks) plus the live-Supabase RLS
-        # end-to-end and storage-ingestion handoff tests, now that this job
-        # starts a real local Supabase instance. Realtime channel-error
-        # handling is covered separately in the app job - see integration/README.md.
+        # Zero-Docker contract tests (filename/marker round-trip, and the
+        # pipeline's segment/reel row shapes against the generated schema
+        # fixture) plus the live-Supabase RLS end-to-end and storage-ingestion
+        # handoff tests, now that this job starts a real local Supabase
+        # instance. The app side of the row-shape contract is the app job's
+        # tsc step, not a test here. Realtime channel-error handling is covered
+        # separately in the app job - see integration/README.md.
         run: uv run --locked --extra dev pytest
       - name: Stop local Supabase
         if: always()
@@ -145,7 +147,23 @@ jobs:
           NPM_CONFIG_FETCH_RETRIES: 5
           NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: 10000
           NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 60000
+      - name: Verify generated database types are current
+        working-directory: .
+        # The committed app/src/types/database.ts and the Python contract test's
+        # schema fixture are both generated from the migrations by this script.
+        # Regenerating here against the instance this job already started and
+        # failing on a diff is what keeps them honest: a migration that lands
+        # without a regeneration reddens the build instead of leaving the app
+        # type-checking against a schema the database no longer has.
+        run: |
+          scripts/gen-db-types.sh
+          git diff --exit-code -- app/src/types/database.ts integration/tests/fixtures/public_schema.json
       - name: Type-check
+        # Gates the app half of the row-shape contract: with a
+        # createClient<Database> client, a hook that reads a column the schema
+        # does not have is a compile error. Also runs in lint.yml, which needs
+        # no Docker; this copy fails alongside the regeneration check above so a
+        # schema change and its fallout show up in one job.
         run: npx tsc --noEmit
       - name: Run jest
         run: npx jest --ci

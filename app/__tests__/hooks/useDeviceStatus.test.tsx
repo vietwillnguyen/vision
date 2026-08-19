@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useDeviceStatus } from '../../src/hooks/useDeviceStatus';
+import type { VisionClient } from '../../src/lib/supabase';
 
 function createFakeClient(
   initialRow: Record<string, unknown> | null,
@@ -64,7 +64,7 @@ function createFakeClient(
     });
 
   return {
-    client: client as unknown as SupabaseClient,
+    client: client as unknown as VisionClient,
     triggerUpdate: (row: Record<string, unknown>) => deliver('UPDATE', row),
     triggerInsert: (row: Record<string, unknown>) => deliver('INSERT', row),
     resolveInitialFetch: () =>

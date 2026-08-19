@@ -1,9 +1,9 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 
 import { DeviceContainer } from '../containers/DeviceContainer';
 import { ReonboardContainer } from '../containers/ReonboardContainer';
+import type { VisionClient } from '../lib/supabase';
 
 export type DeviceStackParamList = {
   DeviceHome: undefined;
@@ -13,7 +13,7 @@ export type DeviceStackParamList = {
 const Stack = createNativeStackNavigator<DeviceStackParamList>();
 
 interface DeviceStackProps {
-  client: SupabaseClient;
+  client: VisionClient;
   deviceId: string;
 }
 

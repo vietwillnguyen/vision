@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useReel, useReelsInRange } from '../../src/hooks/useReel';
+import type { VisionClient } from '../../src/lib/supabase';
 
 const ROW = {
   id: 'r1',
@@ -22,7 +22,7 @@ function fakeReelClient(rows: Record<string, unknown>[]) {
     then: (onFulfilled: (v: { data: unknown; error: null }) => unknown) =>
       Promise.resolve({ data: rows, error: null }).then(onFulfilled),
   };
-  return { from: () => chain } as unknown as SupabaseClient;
+  return { from: () => chain } as unknown as VisionClient;
 }
 
 describe('useReel', () => {

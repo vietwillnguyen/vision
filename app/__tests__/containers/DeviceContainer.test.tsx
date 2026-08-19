@@ -1,17 +1,17 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 
 import { DeviceContainer } from '../../src/containers/DeviceContainer';
+import type { VisionClient } from '../../src/lib/supabase';
 
-function fakeClient(row: Record<string, unknown>): SupabaseClient {
+function fakeClient(row: Record<string, unknown>): VisionClient {
   return {
     from: () => ({
       select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: row, error: null }) }) }),
     }),
     channel: () => ({ on: () => ({ subscribe: () => ({}) }) }),
     removeChannel: () => {},
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
 }
 
 function fakeNavigation() {

@@ -1,12 +1,14 @@
-import type { Session, SupabaseClient } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
 import { useCallback, useEffect, useState } from 'react';
+
+import type { VisionClient } from '../lib/supabase';
 
 export type AuthState =
   | { kind: 'loading' }
   | { kind: 'signed-out' }
   | { kind: 'signed-in'; session: Session };
 
-export function useAuth(client: SupabaseClient): {
+export function useAuth(client: VisionClient): {
   state: AuthState;
   signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;

@@ -1,4 +1,3 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import React, { useState } from 'react';
 import { Button, Share, StyleSheet, Text, View } from 'react-native';
 
@@ -10,11 +9,12 @@ import { utcDateString, utcRangeEndingAt } from '../logic/dates';
 import { buildReelSignedUrlRequest } from '../logic/segmentExport';
 import { ArchiveScreen } from '../screens/ArchiveScreen';
 import { colors, spacing } from '../theme';
+import type { VisionClient } from '../lib/supabase';
 
 const HEATMAP_DAYS = 30;
 
 interface ArchiveContainerProps {
-  client: SupabaseClient;
+  client: VisionClient;
   deviceId: string;
   now?: () => Date;
 }

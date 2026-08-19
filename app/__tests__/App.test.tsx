@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from '@testing-library/react-native';
-import type { Session, SupabaseClient } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
 import React from 'react';
 
 import { AppRoot } from '../App';
+import type { VisionClient } from '../src/lib/supabase';
 
 jest.mock('expo-video', () => {
   const { View } = jest.requireActual('react-native');
@@ -58,7 +59,7 @@ function fakeClient(session: Session | null, devices: Record<string, unknown>[])
     channel: () => ({ on: () => ({ subscribe: () => ({}) }) }),
     removeChannel: () => {},
     storage: { from: () => ({ createSignedUrl: () => Promise.resolve({ data: null, error: null }) }) },
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
 }
 
 describe('AppRoot', () => {

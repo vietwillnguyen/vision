@@ -1,14 +1,14 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useDevice } from '../../src/hooks/useDevice';
+import type { VisionClient } from '../../src/lib/supabase';
 
 function fakeClient(result: { data: unknown[] | null; error: { message: string } | null }) {
   return {
     from: () => ({
       select: () => ({ order: () => ({ limit: () => Promise.resolve(result) }) }),
     }),
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
 }
 
 describe('useDevice', () => {

@@ -1,0 +1,223 @@
+{
+    "source": "information_schema.columns, schema public, base tables only",
+    "tables": {
+        "reels": {
+            "id": {
+                "data_type": "uuid",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "date": {
+                "data_type": "date",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "style": {
+                "data_type": "text",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "s3_key": {
+                "data_type": "text",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "device_id": {
+                "data_type": "uuid",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "created_at": {
+                "data_type": "timestamp with time zone",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "duration_sec": {
+                "data_type": "integer",
+                "has_default": false,
+                "is_nullable": false
+            }
+        },
+        "devices": {
+            "name": {
+                "data_type": "text",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "user_id": {
+                "data_type": "uuid",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "device_id": {
+                "data_type": "uuid",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "created_at": {
+                "data_type": "timestamp with time zone",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "push_token": {
+                "data_type": "text",
+                "has_default": false,
+                "is_nullable": true
+            }
+        },
+        "segments": {
+            "id": {
+                "data_type": "uuid",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "s3_key": {
+                "data_type": "text",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "device_id": {
+                "data_type": "uuid",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "audio_score": {
+                "data_type": "numeric",
+                "has_default": false,
+                "is_nullable": true
+            },
+            "recorded_at": {
+                "data_type": "timestamp with time zone",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "scene_score": {
+                "data_type": "numeric",
+                "has_default": false,
+                "is_nullable": true
+            },
+            "duration_sec": {
+                "data_type": "integer",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "motion_score": {
+                "data_type": "numeric",
+                "has_default": false,
+                "is_nullable": true
+            },
+            "user_feedback": {
+                "data_type": "text",
+                "has_default": false,
+                "is_nullable": true
+            },
+            "composite_score": {
+                "data_type": "numeric",
+                "has_default": false,
+                "is_nullable": true
+            },
+            "manually_flagged": {
+                "data_type": "boolean",
+                "has_default": true,
+                "is_nullable": false
+            }
+        },
+        "pipeline_dlq": {
+            "key": {
+                "data_type": "text",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "kind": {
+                "data_type": "text",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "attempts": {
+                "data_type": "integer",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "device_id": {
+                "data_type": "uuid",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "escalated": {
+                "data_type": "boolean",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "updated_at": {
+                "data_type": "timestamp with time zone",
+                "has_default": true,
+                "is_nullable": false
+            }
+        },
+        "device_status": {
+            "device_id": {
+                "data_type": "uuid",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "updated_at": {
+                "data_type": "timestamp with time zone",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "battery_pct": {
+                "data_type": "integer",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "storage_free_gb": {
+                "data_type": "numeric",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "storage_used_gb": {
+                "data_type": "numeric",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "recording_active": {
+                "data_type": "boolean",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "segments_pending": {
+                "data_type": "integer",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "segments_uploaded_today": {
+                "data_type": "integer",
+                "has_default": true,
+                "is_nullable": false
+            }
+        },
+        "score_weights": {
+            "user_id": {
+                "data_type": "uuid",
+                "has_default": false,
+                "is_nullable": false
+            },
+            "audio_weight": {
+                "data_type": "numeric",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "scene_weight": {
+                "data_type": "numeric",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "motion_weight": {
+                "data_type": "numeric",
+                "has_default": true,
+                "is_nullable": false
+            }
+        }
+    },
+    "generated_by": "scripts/gen-db-types.sh"
+}
