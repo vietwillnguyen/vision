@@ -167,7 +167,8 @@ Two mechanisms, not mutually exclusive:
   `tailscaled` then answers SSH on the tailnet interface itself and authorizes by tailnet identity, so no key has to exist on the device.
   Access is governed by the tailnet's ACL policy, which needs an `ssh` rule covering the device before connections are accepted.
 - **Ordinary key-based SSH** - unchanged, just reached over the tailnet address.
-  Raspberry Pi OS Lite ships `sshd` but leaves it disabled unless the imager enabled it, so run `sudo systemctl enable --now ssh` on the device and install the workstation's public key in `~<user>/.ssh/authorized_keys`.
+  Raspberry Pi OS Lite ships `sshd` but leaves it disabled unless the imager enabled it, so this path assumes SSH was turned on at flash time in the imager's advanced options, with the workstation's public key installed in `~<user>/.ssh/authorized_keys`.
+  On an image flashed without it, use Tailscale SSH instead - `tailscaled` answers on the tailnet interface whether or not `sshd` is running.
 
 Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
 Trixie's `sshd_config` includes `/etc/ssh/sshd_config.d/*.conf`, so pin it with a drop-in rather than editing the main file:
@@ -175,8 +176,10 @@ Trixie's `sshd_config` includes `/etc/ssh/sshd_config.d/*.conf`, so pin it with 
 ```bash
 printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
   | sudo tee /etc/ssh/sshd_config.d/99-visio-no-passwords.conf
-sudo systemctl restart ssh
 ```
+
+No restart step follows: trixie enables `ssh.socket` by default, so systemd spawns a fresh `sshd` per connection and the next login already reads the drop-in.
+Restarting `ssh` would resolve to `ssh.service`, which conflicts with `ssh.socket` and drops the host off socket activation until reboot.
 
 #### Connecting from a workstation
 
@@ -211,7 +214,7 @@ The lingering step is the non-obvious one: `rpi-connect` is a *user* systemd ser
 - **Key rejected.** With Tailscale SSH, keys are irrelevant and a rejection is an ACL gap - check that the tailnet policy grants the connecting user an `ssh` rule to the device, and that `<user>` names an account that actually exists on the Pi.
   With ordinary SSH, `ssh -v <user>@<device-hostname>` shows which key was offered; verify `~<user>/.ssh` is mode 0700 and `authorized_keys` 0600, since `sshd` ignores group- or world-writable files without saying so on the client.
 - **Device reachable but not recording.** The tailnet says nothing about the daemon.
-  On the device, `systemctl status visio-recorder` and `journalctl -u visio-recorder -n 100` show why it stopped, and `sudo python3 -m visio_recorder.preflight` (run from `/opt/visio-recorder`) re-runs the boot-time environment checks - packages, camera, config - and reports which ones fail.
+  On the device, `systemctl status visio-recorder` and `journalctl -u visio-recorder -n 100` show why it stopped.
 
 ## Cloud AI pipeline (Epic 2)
 
