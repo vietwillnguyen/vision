@@ -43,6 +43,18 @@ describe('useReel', () => {
     await waitFor(() => expect(result.current).toEqual({ kind: 'none' }));
   });
 
+  it('falls back to the clean style for a style the app cannot render', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = fakeReelClient([{ ...ROW, style: 'noir' }]);
+    const { result } = renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
+
+    await waitFor(() => expect(result.current).toMatchObject({ kind: 'ready' }));
+    expect(result.current).toMatchObject({ kind: 'ready', reel: { style: 'clean' } });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('noir'));
+
+    warn.mockRestore();
+  });
+
   it('short-circuits to none for a null date', () => {
     const client = fakeReelClient([ROW]);
     const { result } = renderHook(() => useReel(client, 'dev-1', null));
