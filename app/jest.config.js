@@ -7,4 +7,5 @@ module.exports = {
   // every test passes in isolation - same class of flake already fixed for
   // the live-Supabase suite (see useDeviceStatus.live.test.tsx history).
   testTimeout: 15000,
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
 };
