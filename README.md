@@ -27,9 +27,10 @@ app/                 -- Epic 3: React Native (Expo) mobile companion app
   src/screens/       -- presentational screens (props in, JSX out)
   src/components/    -- presentational components (timeline, segment preview, reel player)
   src/theme.ts       -- shared dark theme for StyleSheet styling
+  src/types/         -- generated Supabase schema types (`npm run gen:types`)
   __tests__/         -- Jest suites run via `npm test`
 integration/         -- Epic 5: cross-service integration suite (Python package)
-  tests/             -- pytest suites running firmware + pipeline + app's real code
+  tests/             -- pytest suites running firmware's and pipeline's real code
                         against each other, and against a live local Supabase
 docs/
   superpowers/
@@ -61,7 +62,7 @@ They are split by what each needs to run, so a red check points at one thing:
 - [`hooks.yml`](.github/workflows/hooks.yml) - the pre-commit architecture-sync guard's own suite, plus a re-check that the committed `source-sha256` manifest still matches every spec on disk (drift landed via `--no-verify` is invisible to the hook itself); see [Architecture doc](#architecture-doc) above.
 
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
-The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
+The app job runs `npm ci`, a regeneration check on the committed database types (see [Generated database types](#generated-database-types)), `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
 The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the nine suites in [`supabase/tests/database/`](supabase/tests/database).
 It is a step inside that job rather than a job of its own because the suites finish in about a second, so a dedicated job would spend a third `supabase start` to save nothing, and because a new job would have to be added as a required status check in branch protection before it actually gated anything, whereas a step inherits the existing job's protection immediately.
@@ -114,6 +115,8 @@ supabase start      # start the local stack
 supabase db reset   # recreate the database from migrations
 supabase test db    # run the pgTAP test suites
 ```
+
+Any migration that changes the `public` schema must be followed by a regeneration of the committed schema artifacts - see [Generated database types](#generated-database-types); CI fails on drift.
 
 The stack `supabase start` boots is trimmed: Studio, analytics, the edge runtime, and vector storage are disabled in [`supabase/config.toml`](supabase/config.toml), each with an inline comment recording why it is unused here.
 Flip `[studio]` back on locally if you want the table editor.

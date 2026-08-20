@@ -96,9 +96,8 @@ which jest-expo leaves in place, so no `ws` shim is needed.
 
 The plan's Stage 1 (firmware's upload adapter writing a real `segments` row)
 turned out not to map to reality: firmware only uploads bytes to Storage and
-never inserts a `segments` row itself (see `test_row_schema_contract.py`'s
-docstring/learnings) - pipeline is the sole writer of that row via
-`SupabaseStore.persist_segments`. But firmware's real upload *does* feed
+never inserts a `segments` row itself - pipeline is the sole writer of that row
+via `SupabaseStore.persist_segments`. But firmware's real upload *does* feed
 pipeline's real listing: `tests/test_storage_ingestion_live.py` signs in as a
 real device owner, calls firmware's actual
 `visio_recorder.uploader.upload_segment` to write a stub MP4 into the live
