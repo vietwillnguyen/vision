@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import type { VisionClient } from '../lib/supabase';
 import type { DeviceStatus } from '../types';
-import type { Tables } from '../types/database';
+import type { Tables } from '../generated/database';
 import { useResetOnInputChange } from './useResetOnInputChange';
 
 type DeviceStatusRow = Tables<'device_status'>;

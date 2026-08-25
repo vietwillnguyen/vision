@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-import type { Database } from '../types/database';
+import type { Database } from '../generated/database';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string;
@@ -12,7 +12,7 @@ const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string;
  * Everything that queries the database takes this type rather than a bare
  * `SupabaseClient`, so `.from('reels').select('*')` resolves to the real column
  * list - names and nullability included - and `tsc` rejects a query the schema
- * cannot answer. Regenerate `src/types/database.ts` with `npm run gen:types`
+ * cannot answer. Regenerate `src/generated/database.ts` with `npm run gen:types`
  * after a migration.
  */
 export type VisionClient = SupabaseClient<Database>;

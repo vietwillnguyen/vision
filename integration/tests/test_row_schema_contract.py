@@ -6,7 +6,7 @@ columns those tables actually have.*
 The app half of this contract - that the reel and segment rows the app reads
 have the fields its hooks expect - is no longer checked here. It is enforced by
 the compiler instead: ``app/src/lib/supabase.ts`` builds its client as
-``createClient<Database>`` over the generated ``app/src/types/database.ts``, so
+``createClient<Database>`` over the generated ``app/src/generated/database.ts``, so
 every ``.from(...).select(...)`` in the app resolves to the real column list and
 ``tsc --noEmit`` (a gate in both lint.yml and tests.yml) rejects a field the
 schema does not have. That covers the whole app rather than the one hook a

@@ -26,7 +26,7 @@ It covers only the pipeline half of the plan's "Segment row shape ... matches
 what pipeline queries" bullet. The app half - "Reel row ... matches what app's
 hooks expect" - is no longer a Python test: `app/src/lib/supabase.ts` builds its
 client as `createClient<Database>` over the generated
-`app/src/types/database.ts`, so every `.from(...).select(...)` in the app is
+`app/src/generated/database.ts`, so every `.from(...).select(...)` in the app is
 typed against the real column list and `npx tsc --noEmit` rejects a field the
 schema does not have. That gates the whole app rather than the single hook the
 previous regex-based version of this test knew how to read. Both the generated

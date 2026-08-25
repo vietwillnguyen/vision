@@ -2,7 +2,7 @@
  * Hand-written camelCase domain types.
  *
  * These are deliberately *not* the generated snake_case row shapes in
- * `types/database.ts`: rows are mapped into these at the data-access edge (the
+ * `generated/database.ts`: rows are mapped into these at the data-access edge (the
  * hooks' `mapReelRow()` and friends) so components and hook signatures never
  * see a column name. The generated types type the query; these type the app.
  */

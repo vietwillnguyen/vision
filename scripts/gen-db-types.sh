@@ -2,7 +2,7 @@
 # Regenerate the two committed artifacts that carry the database schema into the
 # other subsystems, both derived from the same live local Supabase instance:
 #
-#   app/src/types/database.ts             TypeScript row/insert/update types,
+#   app/src/generated/database.ts         TypeScript row/insert/update types,
 #                                         produced by `supabase gen types`, that
 #                                         `createClient<Database>` uses to type
 #                                         every `.from(...).select(...)` call.
@@ -30,14 +30,21 @@ fi
 repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 cd "$repo_root"
 
-types_out="app/src/types/database.ts"
+types_out="app/src/generated/database.ts"
 fixture_out="integration/tests/fixtures/public_schema.json"
 
+# `supabase start` applies the migrations itself, but a stack that is already up
+# may predate the ones in the working tree. Reusing it without catching it up
+# would generate both artifacts from a schema older than
+# supabase/migrations/*.sql, contradicting the header this script writes.
 started_stack=0
 if ! supabase status >/dev/null 2>&1; then
   echo "gen-db-types: starting local Supabase" >&2
   supabase start
   started_stack=1
+else
+  echo "gen-db-types: reusing running local Supabase, applying pending migrations" >&2
+  supabase migration up --local
 fi
 cleanup() {
   if [ "$started_stack" = 1 ]; then

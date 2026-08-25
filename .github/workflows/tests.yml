@@ -149,7 +149,7 @@ jobs:
           NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 60000
       - name: Verify generated database types are current
         working-directory: .
-        # The committed app/src/types/database.ts and the Python contract test's
+        # The committed app/src/generated/database.ts and the Python contract test's
         # schema fixture are both generated from the migrations by this script.
         # Regenerating here against the instance this job already started and
         # failing on a diff is what keeps them honest: a migration that lands
@@ -157,7 +157,7 @@ jobs:
         # type-checking against a schema the database no longer has.
         run: |
           scripts/gen-db-types.sh
-          git diff --exit-code -- app/src/types/database.ts integration/tests/fixtures/public_schema.json
+          git diff --exit-code -- app/src/generated/database.ts integration/tests/fixtures/public_schema.json
       - name: Type-check
         # Gates the app half of the row-shape contract: with a
         # createClient<Database> client, a hook that reads a column the schema
