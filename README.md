@@ -167,11 +167,12 @@ Two mechanisms, not mutually exclusive:
   On an image flashed without it, use Tailscale SSH instead - `tailscaled` answers on the tailnet interface whether or not `sshd` is running.
 
 Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
-Trixie's `sshd_config` includes `/etc/ssh/sshd_config.d/*.conf`, so pin it with a drop-in rather than editing the main file:
+Trixie's `sshd_config` includes `/etc/ssh/sshd_config.d/*.conf`, so pin it with a drop-in rather than editing the main file.
+Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the drop-in has to sort ahead of anything the image already ships (imager and cloud-init style files land in the `10-`/`50-` range) rather than after it:
 
 ```bash
 printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
-  | sudo tee /etc/ssh/sshd_config.d/99-visio-no-passwords.conf
+  | sudo tee /etc/ssh/sshd_config.d/01-visio-no-passwords.conf
 ```
 
 Whether that takes effect immediately depends on how `sshd` is running, and the two plausible modes differ.
@@ -188,7 +189,7 @@ sudo sshd -T | grep -i passwordauthentication    # expect: passwordauthenticatio
 
 `reload` sends the running daemon a SIGHUP to re-read its config and leaves established sessions alone.
 Do not `restart` unconditionally: on a socket-activated host that starts `ssh.service` and drops it off socket activation until reboot.
-`sshd -T` parses the config files from disk rather than querying the running process, so it confirms the drop-in is included and wins; run it after the reload so what it reports is also what the live daemon has loaded.
+`sshd -T` parses the config files from disk rather than querying the running process, so it confirms the drop-in is included and that no earlier-sorting file beat it to the keyword; run it after the reload so what it reports is also what the live daemon has loaded.
 
 #### Connecting from a workstation
 
