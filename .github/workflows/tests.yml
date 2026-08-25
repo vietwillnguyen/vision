@@ -29,7 +29,7 @@ jobs:
         working-directory: firmware
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           # Device target is Python 3.11 on Raspberry Pi OS Bookworm; test on the floor.
           python-version: "3.11"
@@ -44,7 +44,7 @@ jobs:
         working-directory: pipeline
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
           enable-cache: true
@@ -58,7 +58,7 @@ jobs:
         working-directory: integration
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
           enable-cache: true
