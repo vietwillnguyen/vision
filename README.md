@@ -174,8 +174,21 @@ printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
   | sudo tee /etc/ssh/sshd_config.d/99-visio-no-passwords.conf
 ```
 
-No restart step follows: trixie enables `ssh.socket` by default, so systemd spawns a fresh `sshd` per connection and the next login already reads the drop-in.
-Restarting `ssh` would resolve to `ssh.service`, which conflicts with `ssh.socket` and drops the host off socket activation until reboot.
+Whether that takes effect immediately depends on how `sshd` is running, and the two plausible modes differ.
+Debian 13's package preset is socket activation (`ssh.socket`): systemd spawns a fresh `sshd` per connection, so the next login already reads the drop-in.
+Raspberry Pi OS commonly leaves the classic long-running daemon in charge instead - both the imager's boot-partition `ssh` marker (via `sshswitch.service`) and `raspi-config` enable `ssh.service` - and that daemon parses its config once at startup, so the drop-in does not reach the next login on its own.
+
+Reload only when the classic service is the listener, then confirm the effective setting:
+
+```bash
+systemctl is-active ssh.service                  # active => classic daemon; inactive => socket-activated
+sudo systemctl reload ssh                        # only if the line above printed active
+sudo sshd -T | grep -i passwordauthentication    # expect: passwordauthentication no
+```
+
+`reload` sends the running daemon a SIGHUP to re-read its config and leaves established sessions alone.
+Do not `restart` unconditionally: on a socket-activated host that starts `ssh.service` and drops it off socket activation until reboot.
+`sshd -T` parses the config files from disk rather than querying the running process, so it confirms the drop-in is included and wins; run it after the reload so what it reports is also what the live daemon has loaded.
 
 #### Connecting from a workstation
 
