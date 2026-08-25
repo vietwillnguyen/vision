@@ -171,22 +171,24 @@ Two mechanisms, not mutually exclusive:
   On an image flashed without it, use Tailscale SSH instead - `tailscaled` answers on the tailnet interface whether or not `sshd` is running.
 
 Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
-Trixie's `sshd_config` includes `/etc/ssh/sshd_config.d/*.conf`, so pin it with a drop-in rather than editing the main file.
-Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the drop-in has to sort ahead of anything the image already ships (imager and cloud-init style files land in the `10-`/`50-` range) rather than after it:
+It starts on: a stock image answers `sudo sshd -T | grep -i passwordauthentication` with `passwordauthentication yes`, because it ships `/etc/ssh/sshd_config.d/50-cloud-init.conf` containing exactly `PasswordAuthentication yes`.
+`/etc/ssh/sshd_config` pulls that directory in with an `Include /etc/ssh/sshd_config.d/*.conf` near the top of the file, so pin the setting with a drop-in of your own rather than editing the main file.
+Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the name has to sort ahead of `50-cloud-init.conf` - a `99-` prefix would be read after it and sit inert:
 
 ```bash
 printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
   | sudo tee /etc/ssh/sshd_config.d/01-visio-no-passwords.conf
 ```
 
-Whether that takes effect immediately depends on how `sshd` is running, and the two plausible modes differ.
-Debian 13's package preset is socket activation (`ssh.socket`): systemd spawns a fresh `sshd` per connection, so the next login already reads the drop-in.
-Raspberry Pi OS commonly leaves the classic long-running daemon in charge instead - both the imager's boot-partition `ssh` marker (via `sshswitch.service`) and `raspi-config` enable `ssh.service` - and that daemon parses its config once at startup, so the drop-in does not reach the next login on its own.
+Whether that takes effect immediately depends on how `sshd` is running.
+On Raspberry Pi OS trixie the classic long-running daemon is the listener: `ssh.service` is enabled and active while `ssh.socket` is inactive and disabled, because the imager's boot-partition `ssh` marker enables `ssh.service` through `sshswitch.service` (`raspi-config` takes the same path).
+That daemon parses its config once at startup, so the drop-in does not reach the next login on its own.
+Debian 13's own package preset is socket activation (`ssh.socket`), where systemd spawns a fresh `sshd` per connection and the next login already reads the drop-in - the check below distinguishes the two rather than assuming either.
 
 Reload only when the classic service is the listener, then confirm the effective setting:
 
 ```bash
-systemctl is-active ssh.service                  # active => classic daemon; inactive => socket-activated
+systemctl is-active ssh.service                  # active => classic daemon; inactive => socket-activated, or sshd not enabled at all
 sudo systemctl reload ssh                        # only if the line above printed active
 sudo sshd -T | grep -i passwordauthentication    # expect: passwordauthentication no
 ```
@@ -208,7 +210,8 @@ With MagicDNS enabled (the default), both the short hostname and `<device-hostna
 
 #### Raspberry Pi Connect as the fallback
 
-When the tailnet is unreachable - `tailscaled` wedged, the device on a network that blocks it - [Raspberry Pi Connect](https://www.raspberrypi.com/documentation/services/connect.html) provides a browser shell out of band:
+When the tailnet is unreachable - `tailscaled` wedged, the device on a network that blocks it - [Raspberry Pi Connect](https://www.raspberrypi.com/documentation/services/connect.html) provides a browser shell out of band.
+Set it up while the device is still reachable, right after `tailscale up` succeeds: the steps below need a shell on the device, which is exactly what is gone once the fallback is wanted.
 
 ```bash
 sudo apt update && sudo apt install rpi-connect-lite   # headless variant: remote shell, no screen sharing
@@ -223,7 +226,7 @@ The lingering step is the non-obvious one: `rpi-connect` is a *user* systemd ser
 #### Troubleshooting
 
 - **Device absent from `tailscale status`.** Get a shell via Raspberry Pi Connect and check the daemon: `sudo systemctl status tailscaled`, `sudo journalctl -u tailscaled -n 50`.
-  If it is running but logged out, re-run `sudo tailscale up --hostname <device-hostname>` and complete the browser login.
+  If it is running but logged out, re-run `sudo tailscale up` with the same flags used originally - including `--ssh` if Tailscale SSH was enabled that way, since `tailscale up` applies the whole preference set rather than only the flags named - and complete the browser login.
   Also confirm the node was not expired or removed in the tailnet admin console - key expiry looks identical to a dead device from the workstation side.
 - **Key rejected.** With Tailscale SSH, keys are irrelevant and a rejection is an ACL gap - check that the tailnet policy grants the connecting user an `ssh` rule to the device, and that `<user>` names an account that actually exists on the Pi.
   With ordinary SSH, `ssh -v <user>@<device-hostname>` shows which key was offered; verify `~<user>/.ssh` is mode 0700 and `authorized_keys` 0600, since `sshd` ignores group- or world-writable files without saying so on the client.
