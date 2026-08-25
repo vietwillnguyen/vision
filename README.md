@@ -173,14 +173,16 @@ Two mechanisms, not mutually exclusive:
 Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
 Prove the login that has to carry you afterwards *before* changing anything, because the drop-in below is armed the moment it exists on a socket-activated host - the reload further down is needed only in the other mode.
 The hazard is real: the Raspberry Pi imager offers a password and a public key independently, so an image flashed with a password and no key is an ordinary case, and turning passwords off on one locks the account out at the next login.
-From the workstation, in a second terminal, pinned to public key so no interactive method can make the test pass on its behalf:
+From the workstation - already on the same tailnet, which is what makes `<device-hostname>` resolve at all; see "Connecting from a workstation" below - in a second terminal, pinned to public key so no interactive method can make the test pass on its behalf:
 
 ```bash
 ssh -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes <user>@<device-hostname>
 ```
 
-If that does not succeed, do not write the drop-in at all.
-Install the workstation's public key into `~<user>/.ssh/authorized_keys` first (`~<user>/.ssh` mode 0700, `authorized_keys` 0600), or enable Tailscale SSH, and come back only once a key or Tailscale SSH login has actually succeeded.
+If that does not succeed, do not write the drop-in at all, and read which failure it is before fixing anything.
+`Could not resolve hostname` is not an authentication failure - the workstation is not on the tailnet yet, or MagicDNS is off - so settle that first.
+A name that resolves and a login that is then refused is the missing-key case: install the workstation's public key into `~<user>/.ssh/authorized_keys` (`~<user>/.ssh` mode 0700, `authorized_keys` 0600), or enable Tailscale SSH.
+Either way, come back only once a public-key or Tailscale SSH login has actually succeeded.
 On the Tailscale SSH path the equivalent proof is that a plain `ssh <user>@<device-hostname>` over the tailnet is answered by `tailscaled`.
 
 With that login proven, pin the setting off.
@@ -194,7 +196,7 @@ printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
 ```
 
 Whether that takes effect immediately depends on how `sshd` is running.
-On the one device this was checked on - an image with SSH enabled at flash time - the classic long-running daemon is the listener: `ssh.service` was enabled and active while `ssh.socket` was inactive and disabled, because the imager's boot-partition `ssh` marker enables `ssh.service` through `sshswitch.service` (`raspi-config` takes the same path).
+On an image with SSH enabled at flash time the classic long-running daemon is the listener: `ssh.service` is enabled and active while `ssh.socket` is inactive and disabled, because the imager's boot-partition `ssh` marker enables `ssh.service` through `sshswitch.service` (`raspi-config` takes the same path).
 That daemon parses its config once at startup, so the drop-in does not reach the next login on its own.
 Debian 13's own package preset is socket activation (`ssh.socket`), where systemd spawns a fresh `sshd` per connection and the next login already reads the drop-in - the check below distinguishes the two rather than assuming either.
 
