@@ -171,9 +171,9 @@ Two mechanisms, not mutually exclusive:
   On an image flashed without it, use Tailscale SSH instead - `tailscaled` answers on the tailnet interface whether or not `sshd` is running.
 
 Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
-It starts on: a stock image answers `sudo sshd -T | grep -i passwordauthentication` with `passwordauthentication yes`, because it ships `/etc/ssh/sshd_config.d/50-cloud-init.conf` containing exactly `PasswordAuthentication yes`.
+It starts on: OpenSSH's built-in default for `PasswordAuthentication` is `yes` and the main `sshd_config` ships that line commented out, so a stock image answers `sudo sshd -T | grep -i passwordauthentication` with `passwordauthentication yes`, and it also carries `/etc/ssh/sshd_config.d/50-cloud-init.conf` containing exactly `PasswordAuthentication yes`.
 `/etc/ssh/sshd_config` pulls that directory in with an `Include /etc/ssh/sshd_config.d/*.conf` near the top of the file, so pin the setting with a drop-in of your own rather than editing the main file.
-Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the name has to sort ahead of `50-cloud-init.conf` - a `99-` prefix would be read after it and sit inert:
+Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the name has to sort ahead of `50-cloud-init.conf` - a `99-` prefix would be read after it and sit inert, while `01-` wins whether or not that particular file is present on a given image:
 
 ```bash
 printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
@@ -181,11 +181,23 @@ printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
 ```
 
 Whether that takes effect immediately depends on how `sshd` is running.
-On Raspberry Pi OS trixie the classic long-running daemon is the listener: `ssh.service` is enabled and active while `ssh.socket` is inactive and disabled, because the imager's boot-partition `ssh` marker enables `ssh.service` through `sshswitch.service` (`raspi-config` takes the same path).
+On the one device this was checked on - an image with SSH enabled at flash time - the classic long-running daemon is the listener: `ssh.service` was enabled and active while `ssh.socket` was inactive and disabled, because the imager's boot-partition `ssh` marker enables `ssh.service` through `sshswitch.service` (`raspi-config` takes the same path).
 That daemon parses its config once at startup, so the drop-in does not reach the next login on its own.
 Debian 13's own package preset is socket activation (`ssh.socket`), where systemd spawns a fresh `sshd` per connection and the next login already reads the drop-in - the check below distinguishes the two rather than assuming either.
 
-Reload only when the classic service is the listener, then confirm the effective setting:
+Before making that live, prove a login that cannot fall back to a password still works, and keep the session you are already in open while you test: `reload` leaves established sessions alone, so that session is the only way back in if the test fails.
+The hazard is real - the Raspberry Pi imager offers a password and a public key independently, so an image flashed with a password and no key is an ordinary case, and turning passwords off on one locks the account out at the next login.
+From the workstation, in a second terminal:
+
+```bash
+ssh -o PasswordAuthentication=no <user>@<device-hostname>   # must succeed on its own
+```
+
+If that does not succeed, do not reload and do not go further.
+From the still-open session, remove or rename `/etc/ssh/sshd_config.d/01-visio-no-passwords.conf`, then either install the workstation's public key into `~<user>/.ssh/authorized_keys` (`~<user>/.ssh` mode 0700, `authorized_keys` 0600) or enable Tailscale SSH, and turn password authentication off only once a key or Tailscale SSH login has actually succeeded.
+On the Tailscale SSH path the equivalent check is that a plain `ssh <user>@<device-hostname>` over the tailnet is answered by `tailscaled` before any of this.
+
+With that login proven, reload only when the classic service is the listener, then confirm the effective setting:
 
 ```bash
 systemctl is-active ssh.service                  # active => classic daemon; inactive => socket-activated, or sshd not enabled at all
