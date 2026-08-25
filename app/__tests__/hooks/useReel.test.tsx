@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useReel, useReelsInRange } from '../../src/hooks/useReel';
+import type { VisionClient } from '../../src/lib/supabase';
 
 const ROW = {
   id: 'r1',
@@ -22,7 +22,7 @@ function fakeReelClient(rows: Record<string, unknown>[]) {
     then: (onFulfilled: (v: { data: unknown; error: null }) => unknown) =>
       Promise.resolve({ data: rows, error: null }).then(onFulfilled),
   };
-  return { from: () => chain } as unknown as SupabaseClient;
+  return { from: () => chain } as unknown as VisionClient;
 }
 
 describe('useReel', () => {
@@ -41,6 +41,18 @@ describe('useReel', () => {
     const client = fakeReelClient([]);
     const { result } = renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
     await waitFor(() => expect(result.current).toEqual({ kind: 'none' }));
+  });
+
+  it('falls back to the clean style for a style the app cannot render', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = fakeReelClient([{ ...ROW, style: 'noir' }]);
+    const { result } = renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
+
+    await waitFor(() => expect(result.current).toMatchObject({ kind: 'ready' }));
+    expect(result.current).toMatchObject({ kind: 'ready', reel: { style: 'clean' } });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('noir'));
+
+    warn.mockRestore();
   });
 
   it('short-circuits to none for a null date', () => {

@@ -15,15 +15,24 @@ Supabase instance is required for these.
 `pipeline.orchestrator.run_nightly` with only the plan's named external-cost
 boundaries faked (media probe, transcriber, vision, ffmpeg runner, push -
 same carve-out as the plan's Stage 2), then checks the real `segments`/`reels`
-row dicts it produces against two independent real sources of truth parsed
-straight from the repo: the `create table` column lists in the supabase
-migrations, and the `row.<field>` accesses in `app/src/hooks/useReel.ts`'s
-`mapReelRow()`. This covers two of the plan's "Now covered locally" bullets
-("Segment row shape ... matches what pipeline queries" and "Reel row ...
-matches what app's hooks expect") without a live Postgres instance, since
-`persist_segments`/`insert_reel` are faked at the store boundary rather than
-against a database - a schema rename on either side (migration column or
-`mapReelRow` field) breaks this test.
+row dicts it produces against `tests/fixtures/public_schema.json`: the public
+schema's `information_schema.columns`, read out of a live local Supabase
+instance by `scripts/gen-db-types.sh`. Because `persist_segments`/`insert_reel`
+are faked at the store boundary, this needs no live instance of its own, and a
+migration that adds a required column or renames one the pipeline writes breaks
+it.
+
+It covers only the pipeline half of the plan's "Segment row shape ... matches
+what pipeline queries" bullet. The app half - "Reel row ... matches what app's
+hooks expect" - is no longer a Python test: `app/src/lib/supabase.ts` builds its
+client as `createClient<Database>` over the generated
+`app/src/generated/database.ts`, so every `.from(...).select(...)` in the app is
+typed against the real column list and `npx tsc --noEmit` rejects a field the
+schema does not have. That gates the whole app rather than the single hook the
+previous regex-based version of this test knew how to read. Both the generated
+types and the fixture above come from the same script and the same instance, and
+the `app` job in `.github/workflows/tests.yml` regenerates them and fails on any
+diff, so neither can drift away from the migrations.
 
 `tests/test_rls_end_to_end.py` runs pipeline's real `SupabaseStore` (the
 same class the orchestrator uses in production) against a live local
@@ -87,9 +96,8 @@ which jest-expo leaves in place, so no `ws` shim is needed.
 
 The plan's Stage 1 (firmware's upload adapter writing a real `segments` row)
 turned out not to map to reality: firmware only uploads bytes to Storage and
-never inserts a `segments` row itself (see `test_row_schema_contract.py`'s
-docstring/learnings) - pipeline is the sole writer of that row via
-`SupabaseStore.persist_segments`. But firmware's real upload *does* feed
+never inserts a `segments` row itself - pipeline is the sole writer of that row
+via `SupabaseStore.persist_segments`. But firmware's real upload *does* feed
 pipeline's real listing: `tests/test_storage_ingestion_live.py` signs in as a
 real device owner, calls firmware's actual
 `visio_recorder.uploader.upload_segment` to write a stub MP4 into the live

@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useSegments } from '../../src/hooks/useSegments';
+import type { VisionClient } from '../../src/lib/supabase';
 
 const ROWS = [
   {
@@ -34,7 +34,7 @@ function fakeClient(options: { updateError?: { message: string } } = {}) {
         },
       }),
     }),
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
   return { client, updateCalls };
 }
 

@@ -1,8 +1,11 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
+import type { VisionClient } from '../lib/supabase';
 import type { DeviceStatus } from '../types';
+import type { Tables } from '../generated/database';
 import { useResetOnInputChange } from './useResetOnInputChange';
+
+type DeviceStatusRow = Tables<'device_status'>;
 
 export type RealtimeHealth = 'connecting' | 'live' | 'stale';
 
@@ -18,7 +21,7 @@ type FetchState =
 
 const NO_ROW_CODE = 'PGRST116';
 
-export function useDeviceStatus(client: SupabaseClient, deviceId: string): DeviceStatusState {
+export function useDeviceStatus(client: VisionClient, deviceId: string): DeviceStatusState {
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'loading' });
   const [realtime, setRealtime] = useState<RealtimeHealth>('connecting');
 
@@ -36,7 +39,7 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
       .eq('device_id', deviceId)
       .single()
       .then(
-        ({ data, error }: { data: Record<string, unknown> | null; error?: { code?: string; message?: string } | null }) => {
+        ({ data, error }) => {
           if (!isMounted) return;
           setFetchState((prev) => {
             if (prev.kind === 'ready') return prev; // realtime beat the fetch
@@ -60,13 +63,18 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
     // as an INSERT, and the initial fetch above finds no row on first boot.
     const channel = client
       .channel(`device_status:${deviceId}`)
-      .on(
+      .on<DeviceStatusRow>(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'device_status', filter: `device_id=eq.${deviceId}` },
-        (payload: { new: Record<string, unknown> }) => {
-          if (isMounted) {
-            setFetchState({ kind: 'ready', status: mapRow(payload.new) });
-          }
+        (payload) => {
+          if (!isMounted) return;
+          // DELETE carries an empty `new` (it is the *old* row that went away),
+          // so mapping it would publish a status whose every field is
+          // undefined. The row only disappears when the device itself is
+          // deleted; keep the last known status and let the device query drive
+          // that transition.
+          if (payload.eventType === 'DELETE') return;
+          setFetchState({ kind: 'ready', status: mapRow(payload.new) });
         },
       )
       .subscribe((status: string) => {
@@ -90,13 +98,13 @@ export function useDeviceStatus(client: SupabaseClient, deviceId: string): Devic
   return fetchState;
 }
 
-function mapRow(row: Record<string, unknown>): DeviceStatus {
+function mapRow(row: DeviceStatusRow): DeviceStatus {
   return {
-    batteryPct: row.battery_pct as number,
-    storageUsedGb: row.storage_used_gb as number,
-    storageFreeGb: row.storage_free_gb as number,
-    segmentsPending: row.segments_pending as number,
-    segmentsUploadedToday: row.segments_uploaded_today as number,
-    recordingActive: row.recording_active as boolean,
+    batteryPct: row.battery_pct,
+    storageUsedGb: row.storage_used_gb,
+    storageFreeGb: row.storage_free_gb,
+    segmentsPending: row.segments_pending,
+    segmentsUploadedToday: row.segments_uploaded_today,
+    recordingActive: row.recording_active,
   };
 }

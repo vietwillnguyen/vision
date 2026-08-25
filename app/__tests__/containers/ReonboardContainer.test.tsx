@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import type { Session, SupabaseClient } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
 import React from 'react';
 
 import { ReonboardContainer } from '../../src/containers/ReonboardContainer';
+import type { VisionClient } from '../../src/lib/supabase';
 
 jest.mock('react-native-qrcode-svg', () => function MockQrCode(props: { value: string }) {
   const { Text } = jest.requireActual('react-native');
@@ -14,12 +15,12 @@ const SESSION = {
   refresh_token: 'refresh-xyz',
 } as unknown as Session;
 
-function fakeClient(session: Session | null, error: { message: string } | null = null): SupabaseClient {
+function fakeClient(session: Session | null, error: { message: string } | null = null): VisionClient {
   return {
     auth: {
       getSession: () => Promise.resolve({ data: { session }, error }),
     },
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
 }
 
 function fakeNavigation() {
@@ -86,7 +87,7 @@ describe('ReonboardContainer', () => {
   it('shows the error step when getSession rejects instead of resolving', async () => {
     const rejectingClient = {
       auth: { getSession: () => Promise.reject(new Error('fetch failed')) },
-    } as unknown as SupabaseClient;
+    } as unknown as VisionClient;
     render(
       <ReonboardContainer
         client={rejectingClient}
@@ -111,7 +112,7 @@ describe('ReonboardContainer', () => {
           resolveSession = resolve;
         }),
     );
-    const client = { auth: { getSession } } as unknown as SupabaseClient;
+    const client = { auth: { getSession } } as unknown as VisionClient;
 
     render(
       <ReonboardContainer

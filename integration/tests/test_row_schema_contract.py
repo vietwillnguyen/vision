@@ -1,98 +1,65 @@
-"""Cross-service row-shape contract tests.
+"""Pipeline row-shape contract test.
 
-Stage 0 of the test-validation-plan integration suite (see
-.lavish/test-validation-plan.html): asserts two of the "Now covered locally"
-bullets without needing a live Supabase/Postgres instance (Docker is
-unavailable in this sandbox, so the full supabase-start chain from the plan's
-Stages 1-3 is still deferred):
+Guarantee: *the row dicts ``pipeline.orchestrator.run_nightly`` writes match the
+columns those tables actually have.*
 
-  * "Segment row shape written by firmware matches what pipeline queries"
-  * "Reel row + storage object shape written by pipeline matches what app's
-    hooks expect"
+The app half of this contract - that the reel and segment rows the app reads
+have the fields its hooks expect - is no longer checked here. It is enforced by
+the compiler instead: ``app/src/lib/supabase.ts`` builds its client as
+``createClient<Database>`` over the generated ``app/src/generated/database.ts``, so
+every ``.from(...).select(...)`` in the app resolves to the real column list and
+``tsc --noEmit`` (a gate in both lint.yml and tests.yml) rejects a field the
+schema does not have. That covers the whole app rather than the one hook a
+regex was taught to read.
 
-Rather than mocking pipeline's own persistence boundary, this drives the
-*real* ``pipeline.orchestrator.run_nightly`` with only the plan's named
-external-cost boundaries faked (media probe, transcriber, vision, ffmpeg
-command runner, push) - exactly the "LLM/FFmpeg calls stubbed" carve-out the
-plan describes for Stage 2 - then checks the real row dicts it produces
-against two independent, real sources of truth:
+Generated TypeScript does nothing for ``pipeline/``, so this half stays in
+Python - but sourced from the schema rather than from a regex over DDL.
+``tests/fixtures/public_schema.json`` is ``information_schema.columns`` read out
+of a live local Supabase instance by ``scripts/gen-db-types.sh``, the same
+script and the same instance that produce the TypeScript types. CI regenerates
+both and fails on any diff, so a migration cannot land without updating them.
 
-  * the actual `create table` column list in the supabase migrations, parsed
-    from the SQL text (not hand-copied), so a schema change breaks this test
-    instead of silently drifting
-  * the actual field accesses in app/src/hooks/useReel.ts's mapReelRow(),
-    parsed from the TypeScript source, so an app-side rename also breaks
-    this test
+Rather than mocking pipeline's own persistence boundary, this drives the *real*
+``run_nightly`` with only the external-cost boundaries faked (media probe,
+transcriber, vision, ffmpeg command runner, push), then checks the real row
+dicts it produces against that fixture. It needs no live instance itself.
 """
 
-import re
+import json
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from pipeline.orchestrator import DeviceRecord, OrchestratorDeps, run_nightly
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS_DIR = REPO_ROOT / "supabase" / "migrations"
-USE_REEL_TS = REPO_ROOT / "app" / "src" / "hooks" / "useReel.ts"
+SCHEMA_FIXTURE = Path(__file__).parent / "fixtures" / "public_schema.json"
 
 
-def _parse_create_table_columns(sql_text: str, table_name: str) -> dict[str, dict]:
-    """Parse a `create table public.<table_name> (...)` block into
-    {column_name: {"not_null": bool, "has_default": bool}}, skipping
-    table-level constraint lines (primary key/foreign key/unique/check).
+def _load_columns(table_name: str) -> dict[str, dict]:
+    """Return {column_name: column_metadata} for a public base table.
+
+    Asserts the fixture actually describes the table: the regex-parsing
+    predecessor of this test passed green whenever its own parsing found
+    nothing, and an empty column set would make every check below vacuous.
     """
-    match = re.search(
-        rf"create table public\.{re.escape(table_name)}\s*\((.*)\)\s*;",
-        sql_text,
-        re.S,
+    schema = json.loads(SCHEMA_FIXTURE.read_text())
+    tables = schema["tables"]
+    assert table_name in tables, (
+        f"{SCHEMA_FIXTURE.name} has no {table_name} table; "
+        "regenerate it with scripts/gen-db-types.sh"
     )
-    assert match, f"no create table for {table_name} found"
-    body = match.group(1)
-
-    parts: list[str] = []
-    current = ""
-    depth = 0
-    for ch in body:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        if ch == "," and depth == 0:
-            parts.append(current)
-            current = ""
-        else:
-            current += ch
-    parts.append(current)
-
-    columns: dict[str, dict] = {}
-    skip_keywords = {"primary", "foreign", "unique", "check", "constraint"}
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        name = part.split()[0]
-        if name.lower() in skip_keywords:
-            continue
-        lowered = part.lower()
-        columns[name] = {
-            "not_null": "not null" in lowered,
-            "has_default": "default" in lowered,
-        }
+    columns = tables[table_name]
+    assert columns, f"{table_name} has no columns in {SCHEMA_FIXTURE.name}"
     return columns
 
 
-def _table_columns(migration_glob: str, table_name: str) -> dict[str, dict]:
-    matches = list(MIGRATIONS_DIR.glob(migration_glob))
-    assert matches, f"no migration matching {migration_glob} in {MIGRATIONS_DIR}"
-    sql_text = matches[0].read_text()
-    return _parse_create_table_columns(sql_text, table_name)
-
-
-def _required_columns_without_default(columns: dict[str, dict]) -> set[str]:
+def _required_columns(columns: dict[str, dict]) -> set[str]:
+    """Columns a writer must supply: not nullable and with no default."""
     return {
         name
         for name, meta in columns.items()
-        if meta["not_null"] and not meta["has_default"]
+        if not meta["is_nullable"] and not meta["has_default"]
     }
 
 
@@ -192,18 +159,14 @@ class FakeRunner:
         Path(command[-1]).write_bytes(b"out")
 
 
-def _run_pipeline_once():
+@pytest.fixture
+def nightly_run(tmp_path):
+    """Run the real orchestrator once and hand back what it tried to write."""
     device = DeviceRecord(device_id="dev-1", user_id="user-1", push_token=None)
-    day = date(2026, 7, 14)
     store = FakeStore(
         devices=[device],
         segment_keys={"dev-1": ["dev-1/20260714_090000.mp4"]},
     )
-    return store, device, day
-
-
-def test_segment_row_matches_required_migration_columns(tmp_path):
-    store, device, day = _run_pipeline_once()
     deps = OrchestratorDeps(
         store=store,
         media=FakeMedia(),
@@ -214,51 +177,27 @@ def test_segment_row_matches_required_migration_columns(tmp_path):
         workdir=tmp_path,
     )
 
-    run_nightly(deps, day)
+    run_nightly(deps, date(2026, 7, 14))
+    return store
 
-    assert len(store.persisted_segments) == 1
-    row = store.persisted_segments[0]
 
-    columns = _table_columns("*_create_segments.sql", "segments")
-    unknown = set(row.keys()) - set(columns.keys())
+def test_segment_row_matches_migration_columns(nightly_run):
+    assert len(nightly_run.persisted_segments) == 1
+    row = nightly_run.persisted_segments[0]
+
+    columns = _load_columns("segments")
+    unknown = set(row) - set(columns)
     assert not unknown, f"pipeline writes unknown segment columns: {unknown}"
-    required = _required_columns_without_default(columns) - {"id"}
-    missing = required - set(row.keys())
+    missing = _required_columns(columns) - set(row)
     assert not missing, f"pipeline's segment row is missing required columns: {missing}"
 
 
-def test_reel_row_matches_required_migration_columns_and_app_hook_fields(tmp_path):
-    store, device, day = _run_pipeline_once()
-    deps = OrchestratorDeps(
-        store=store,
-        media=FakeMedia(),
-        transcriber=FakeTranscriber(),
-        vision=FakeVision(),
-        push=FakePush(),
-        runner=FakeRunner(),
-        workdir=tmp_path,
-    )
+def test_reel_row_matches_migration_columns(nightly_run):
+    assert len(nightly_run.inserted_reels) == 1
+    row = nightly_run.inserted_reels[0]
 
-    run_nightly(deps, day)
-
-    assert len(store.inserted_reels) == 1
-    row = store.inserted_reels[0]
-
-    columns = _table_columns("*_create_reels.sql", "reels")
-    unknown = set(row.keys()) - set(columns.keys())
+    columns = _load_columns("reels")
+    unknown = set(row) - set(columns)
     assert not unknown, f"pipeline writes unknown reel columns: {unknown}"
-    required = _required_columns_without_default(columns) - {"id", "created_at"}
-    missing_required = required - set(row.keys())
-    assert not missing_required, (
-        f"pipeline's reel row is missing required columns: {missing_required}"
-    )
-
-    ts_source = USE_REEL_TS.read_text()
-    app_fields = set(re.findall(r"row\.(\w+)\s+as\s", ts_source))
-    assert app_fields, "expected to find `row.<field> as <Type>` accesses in useReel.ts"
-    # id/created_at are DB-generated (not in pipeline's insert payload) but are
-    # present on every real row Supabase returns, so the app can read them.
-    db_generated = {"id", "created_at"}
-    available_to_app = set(row.keys()) | db_generated
-    missing = app_fields - available_to_app
-    assert not missing, f"useReel.ts reads fields the reel row never has: {missing}"
+    missing = _required_columns(columns) - set(row)
+    assert not missing, f"pipeline's reel row is missing required columns: {missing}"

@@ -27,9 +27,11 @@ app/                 -- Epic 3: React Native (Expo) mobile companion app
   src/screens/       -- presentational screens (props in, JSX out)
   src/components/    -- presentational components (timeline, segment preview, reel player)
   src/theme.ts       -- shared dark theme for StyleSheet styling
+  src/generated/     -- generated Supabase schema types (`npm run gen:types`)
+  src/types.ts       -- hand-written camelCase domain types the rows map into
   __tests__/         -- Jest suites run via `npm test`
 integration/         -- Epic 5: cross-service integration suite (Python package)
-  tests/             -- pytest suites running firmware + pipeline + app's real code
+  tests/             -- pytest suites running firmware's and pipeline's real code
                         against each other, and against a live local Supabase
 docs/
   superpowers/
@@ -61,7 +63,7 @@ They are split by what each needs to run, so a red check points at one thing:
 - [`hooks.yml`](.github/workflows/hooks.yml) - the pre-commit architecture-sync guard's own suite, plus a re-check that the committed `source-sha256` manifest still matches every spec on disk (drift landed via `--no-verify` is invisible to the hook itself); see [Architecture doc](#architecture-doc) above.
 
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
-The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
+The app job runs `npm ci`, a regeneration check on the committed database types (see [Generated database types](#generated-database-types)), `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
 The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the nine suites in [`supabase/tests/database/`](supabase/tests/database).
 It is a step inside that job rather than a job of its own because the suites finish in about a second, so a dedicated job would spend a third `supabase start` to save nothing, and because a new job would have to be added as a required status check in branch protection before it actually gated anything, whereas a step inherits the existing job's protection immediately.
@@ -114,6 +116,8 @@ supabase start      # start the local stack
 supabase db reset   # recreate the database from migrations
 supabase test db    # run the pgTAP test suites
 ```
+
+Any migration that changes the `public` schema must be followed by a regeneration of the committed schema artifacts - see [Generated database types](#generated-database-types); CI fails on drift.
 
 The stack `supabase start` boots is trimmed: Studio, analytics, the edge runtime, and vector storage are disabled in [`supabase/config.toml`](supabase/config.toml), each with an inline comment recording why it is unused here.
 Flip `[studio]` back on locally if you want the table editor.
@@ -170,7 +174,7 @@ uv run --extra dev pytest   # run the unit test suite
 
 The React Native (Expo, TypeScript) app: a bottom tab navigator (`@react-navigation/bottom-tabs`) composing Today's Reel, Raw Footage, Device, and Archive behind real Supabase Auth (sign-in, session restore, and `@react-native-async-storage/async-storage` session persistence), backed by `src/logic/` calculation, `src/hooks/` data fetching, and `src/containers/` wiring the two together to presentational screens/components.
 
-- Strict layering: `src/logic/` is pure TypeScript with zero React imports; hooks take an injected `SupabaseClient` as their first parameter (tested with a fake client, never a real network call, and never imported as a module-level singleton outside `App.tsx` and `src/lib/supabase.ts`); `src/containers/` wire hooks to presentational screens/components.
+- Strict layering: `src/logic/` is pure TypeScript with zero React imports; hooks take an injected `VisionClient` (the schema-typed `SupabaseClient<Database>`, see [Generated database types](#generated-database-types)) as their first parameter (tested with a fake client, never a real network call, and never imported as a module-level singleton outside `App.tsx` and `src/lib/supabase.ts`); `src/containers/` wire hooks to presentational screens/components.
 - Video playback uses `expo-video` (registered as a config plugin in `app.json`), not the deprecated `expo-av`; timeline thumbnails are generated and cached per-segment via `expo-video-thumbnails`.
 - `useDeviceStatus` exposes a discriminated `loading | error | ready` state and a `subscribe()` status callback so realtime channel errors (`CHANNEL_ERROR`/`TIMED_OUT`/`CLOSED`) surface as a stale banner instead of silently-stale data.
 - Archive heat-map ranges are normalized to UTC midnight via `src/logic/dates.ts` (30-day inclusive range), avoiding the off-by-one the original plan's Handoff section warned about for users west of UTC.
@@ -192,9 +196,26 @@ npx expo start --web  # preview in a browser (layout/styling only - no native vi
 
 Lint and type-check commands are in [Lint, format, and type-check](#lint-format-and-type-check).
 
+### Generated database types
+
+`app/src/generated/database.ts` is generated by `supabase gen types typescript` and committed.
+`src/lib/supabase.ts` builds the client as `createClient<Database>(...)`, so every `.from(...).select(...)` in the app resolves to the real column list - names and nullability included - and a query the schema cannot answer is a compile error rather than a runtime surprise.
+
+Generated snake_case row shapes stop at the data-access edge: the hooks map them into the hand-written camelCase domain types in `src/types.ts` (`Segment`, `Reel`, `DeviceStatus`), so no component or hook signature mentions a column name.
+
+Regenerate after any migration:
+
+```bash
+cd app && npm run gen:types    # wraps scripts/gen-db-types.sh; needs Docker and psql
+```
+
+That one command writes both generated artifacts from a live local Supabase instance: the TypeScript types above, and `integration/tests/fixtures/public_schema.json`, the `information_schema` dump the Python row-shape contract test reads (generated TypeScript does nothing for `pipeline/`).
+It starts and stops the stack itself, or reuses a running one after applying any migrations that stack is missing.
+The `app` job in [`tests.yml`](.github/workflows/tests.yml) re-runs it against the instance it has already started and fails on any diff, so a migration cannot land without a regeneration.
+
 ## Cross-service integration suite (Epic 5)
 
-A fourth Python package whose tests run each subsystem's *real* code against the others, rather than against each subsystem's private fakes: firmware's marker/segment writers against pipeline's parsers, pipeline's real row shapes against the migrations and the app's `mapReelRow()`, and pipeline's real `SupabaseStore` plus firmware's real uploader against a live local Supabase instance for the RLS and storage-ingestion handoffs.
+A fourth Python package whose tests run each subsystem's *real* code against the others, rather than against each subsystem's private fakes: firmware's marker/segment writers against pipeline's parsers, pipeline's real row shapes against the generated schema fixture, and pipeline's real `SupabaseStore` plus firmware's real uploader against a live local Supabase instance for the RLS and storage-ingestion handoffs.
 Tests that need a live instance skip themselves when the `SUPABASE_*` env vars are unset, so the suite is runnable without Docker.
 `.github/workflows/tests.yml`'s `integration` job starts a real Supabase instance, so those tests actually run (not skip) on every PR.
 

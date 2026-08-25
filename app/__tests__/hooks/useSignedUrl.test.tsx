@@ -1,14 +1,14 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useSignedUrl } from '../../src/hooks/useSignedUrl';
+import type { VisionClient } from '../../src/lib/supabase';
 
 function fakeStorageClient(signedUrl: string | null) {
   const createSignedUrl = jest.fn().mockResolvedValue({
     data: signedUrl ? { signedUrl } : null,
     error: signedUrl ? null : { message: 'not found' },
   });
-  const client = { storage: { from: jest.fn(() => ({ createSignedUrl })) } } as unknown as SupabaseClient;
+  const client = { storage: { from: jest.fn(() => ({ createSignedUrl })) } } as unknown as VisionClient;
   return { client, createSignedUrl };
 }
 

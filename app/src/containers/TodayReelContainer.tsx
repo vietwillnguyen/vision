@@ -1,4 +1,3 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 import { Share, StyleSheet, Text, View } from 'react-native';
 
@@ -8,9 +7,10 @@ import { useSignedUrl } from '../hooks/useSignedUrl';
 import { utcDateString } from '../logic/dates';
 import { buildReelSignedUrlRequest } from '../logic/segmentExport';
 import { colors, spacing } from '../theme';
+import type { VisionClient } from '../lib/supabase';
 
 interface TodayReelContainerProps {
-  client: SupabaseClient;
+  client: VisionClient;
   deviceId: string;
   now?: () => Date;
 }

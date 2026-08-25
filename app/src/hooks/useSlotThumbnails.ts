@@ -1,12 +1,12 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useRef, useState } from 'react';
 
+import type { VisionClient } from '../lib/supabase';
 import * as VideoThumbnails from '../lib/videoThumbnails';
 import { buildSegmentSignedUrlRequest } from '../logic/segmentExport';
 import type { TimelineSlot } from '../logic/timeline';
 
 export function useSlotThumbnails(
-  client: SupabaseClient,
+  client: VisionClient,
   slots: TimelineSlot[],
 ): Record<number, string> {
   const [thumbnails, setThumbnails] = useState<Record<number, string>>({});
