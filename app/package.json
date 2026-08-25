@@ -34,7 +34,7 @@
     "react-dom": "19.2.3",
     "react-native-web": "^0.21.2",
     "react-test-renderer": "19.2.3",
-    "typescript": "~6.0.3"
+    "typescript": "~7.0.2"
   },
   "scripts": {
     "start": "expo start",
