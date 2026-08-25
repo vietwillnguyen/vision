@@ -206,11 +206,11 @@ Generated snake_case row shapes stop at the data-access edge: the hooks map them
 Regenerate after any migration:
 
 ```bash
-cd app && npm run gen:types    # wraps scripts/gen-db-types.sh; needs Docker
+cd app && npm run gen:types    # wraps scripts/gen-db-types.sh; needs Docker and psql
 ```
 
 That one command writes both generated artifacts from a live local Supabase instance: the TypeScript types above, and `integration/tests/fixtures/public_schema.json`, the `information_schema` dump the Python row-shape contract test reads (generated TypeScript does nothing for `pipeline/`).
-It starts and stops the stack itself unless one is already running.
+It starts and stops the stack itself, or reuses a running one after applying any migrations that stack is missing.
 The `app` job in [`tests.yml`](.github/workflows/tests.yml) re-runs it against the instance it has already started and fails on any diff, so a migration cannot land without a regeneration.
 
 ## Cross-service integration suite (Epic 5)
