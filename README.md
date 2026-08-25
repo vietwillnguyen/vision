@@ -167,8 +167,21 @@ Two mechanisms, not mutually exclusive:
   On an image flashed without it, use Tailscale SSH instead - `tailscaled` answers on the tailnet interface whether or not `sshd` is running.
 
 Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
+Prove the login that has to carry you afterwards *before* changing anything, because the drop-in below is armed the moment it exists on a socket-activated host - the reload further down is needed only in the other mode.
+The hazard is real: the Raspberry Pi imager offers a password and a public key independently, so an image flashed with a password and no key is an ordinary case, and turning passwords off on one locks the account out at the next login.
+From the workstation, in a second terminal, pinned to public key so no interactive method can make the test pass on its behalf:
+
+```bash
+ssh -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes <user>@<device-hostname>
+```
+
+If that does not succeed, do not write the drop-in at all.
+Install the workstation's public key into `~<user>/.ssh/authorized_keys` first (`~<user>/.ssh` mode 0700, `authorized_keys` 0600), or enable Tailscale SSH, and come back only once a key or Tailscale SSH login has actually succeeded.
+On the Tailscale SSH path the equivalent proof is that a plain `ssh <user>@<device-hostname>` over the tailnet is answered by `tailscaled`.
+
+With that login proven, pin the setting off.
 It starts on: OpenSSH's built-in default for `PasswordAuthentication` is `yes` and the main `sshd_config` ships that line commented out, so a stock image answers `sudo sshd -T | grep -i passwordauthentication` with `passwordauthentication yes`, and it also carries `/etc/ssh/sshd_config.d/50-cloud-init.conf` containing exactly `PasswordAuthentication yes`.
-`/etc/ssh/sshd_config` pulls that directory in with an `Include /etc/ssh/sshd_config.d/*.conf` near the top of the file, so pin the setting with a drop-in of your own rather than editing the main file.
+`/etc/ssh/sshd_config` pulls that directory in with an `Include /etc/ssh/sshd_config.d/*.conf` near the top of the file, so use a drop-in of your own rather than editing the main file.
 Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the name has to sort ahead of `50-cloud-init.conf` - a `99-` prefix would be read after it and sit inert, while `01-` wins whether or not that particular file is present on a given image:
 
 ```bash
@@ -181,19 +194,7 @@ On the one device this was checked on - an image with SSH enabled at flash time 
 That daemon parses its config once at startup, so the drop-in does not reach the next login on its own.
 Debian 13's own package preset is socket activation (`ssh.socket`), where systemd spawns a fresh `sshd` per connection and the next login already reads the drop-in - the check below distinguishes the two rather than assuming either.
 
-Before making that live, prove a login that cannot fall back to a password still works, and keep the session you are already in open while you test: `reload` leaves established sessions alone, so that session is the only way back in if the test fails.
-The hazard is real - the Raspberry Pi imager offers a password and a public key independently, so an image flashed with a password and no key is an ordinary case, and turning passwords off on one locks the account out at the next login.
-From the workstation, in a second terminal:
-
-```bash
-ssh -o PasswordAuthentication=no <user>@<device-hostname>   # must succeed on its own
-```
-
-If that does not succeed, do not reload and do not go further.
-From the still-open session, remove or rename `/etc/ssh/sshd_config.d/01-visio-no-passwords.conf`, then either install the workstation's public key into `~<user>/.ssh/authorized_keys` (`~<user>/.ssh` mode 0700, `authorized_keys` 0600) or enable Tailscale SSH, and turn password authentication off only once a key or Tailscale SSH login has actually succeeded.
-On the Tailscale SSH path the equivalent check is that a plain `ssh <user>@<device-hostname>` over the tailnet is answered by `tailscaled` before any of this.
-
-With that login proven, reload only when the classic service is the listener, then confirm the effective setting:
+Reload only when the classic service is the listener, then confirm the effective setting:
 
 ```bash
 systemctl is-active ssh.service                  # active => classic daemon; inactive => socket-activated, or sshd not enabled at all
@@ -228,7 +229,7 @@ rpi-connect signin                                     # prints a link to associ
 sudo loginctl enable-linger <user>
 ```
 
-The lingering step is the non-obvious one: `rpi-connect` is a *user* systemd service, so without it the service is tied to a login session and the device silently stops answering after the next reboot.
+The lingering step is the non-obvious one: `rpi-connect` is a *user* systemd service, and systemd tears a user manager down when that user's last session ends, so without it the device stops answering as soon as the setup session closes and never comes back at boot.
 `enable-linger` is what starts the user manager at boot and keeps it running with nobody logged in.
 
 #### Troubleshooting
