@@ -177,8 +177,9 @@ ssh -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes <user>@<de
 
 If that does not succeed, do not write the drop-in at all, and read which failure it is before fixing anything.
 `Could not resolve hostname` is not an authentication failure - the workstation is not on the tailnet yet, or MagicDNS is off - so settle that first.
-A name that resolves and a login that is then refused is the missing-key case: install the workstation's public key into `~<user>/.ssh/authorized_keys` (`~<user>/.ssh` mode 0700, `authorized_keys` 0600), or enable Tailscale SSH.
-Either way, come back only once a public-key or Tailscale SSH login has actually succeeded.
+`Connection refused` or a timeout on a name that does resolve is not an authentication failure either - MagicDNS answers whether or not a daemon is listening, so this is the Lite image above with `sshd` never enabled: turn SSH on at the device or use Tailscale SSH, since no key helps a daemon that is not running.
+A connection that is accepted and a login that is then refused is the missing-key case: install the workstation's public key into `~<user>/.ssh/authorized_keys` (`~<user>/.ssh` mode 0700, `authorized_keys` 0600), or enable Tailscale SSH.
+Whichever it is, come back only once a public-key or Tailscale SSH login has actually succeeded.
 On the Tailscale SSH path the equivalent proof is that a plain `ssh <user>@<device-hostname>` over the tailnet is answered by `tailscaled`.
 
 With that login proven, pin the setting off.
