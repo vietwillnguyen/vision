@@ -188,9 +188,9 @@ Whichever it is, come back only once a public-key or Tailscale SSH login has act
 On the Tailscale SSH path the equivalent proof is that a plain `ssh <user>@<device-hostname>` over the tailnet is answered by `tailscaled`.
 
 With that login proven, pin the setting off.
-It starts on: OpenSSH's built-in default for `PasswordAuthentication` is `yes` and the main `sshd_config` ships that line commented out, so a stock image answers `sudo sshd -T | grep -i passwordauthentication` with `passwordauthentication yes`, and it also carries `/etc/ssh/sshd_config.d/50-cloud-init.conf` containing exactly `PasswordAuthentication yes`.
-`/etc/ssh/sshd_config` pulls that directory in with an `Include /etc/ssh/sshd_config.d/*.conf` near the top of the file, so use a drop-in of your own rather than editing the main file.
-Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the name has to sort ahead of `50-cloud-init.conf` - a `99-` prefix would be read after it and sit inert, while `01-` wins whether or not that particular file is present on a given image:
+It starts on: OpenSSH's built-in default for `PasswordAuthentication` is `yes` and the main `sshd_config` ships that line commented out, so a stock image answers `sudo sshd -T | grep -i passwordauthentication` with `passwordauthentication yes`.
+`/etc/ssh/sshd_config` pulls in `/etc/ssh/sshd_config.d/` with an `Include /etc/ssh/sshd_config.d/*.conf` near the top of the file, so use a drop-in there rather than editing the main file.
+Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the name has to sort ahead of anything already in that directory that sets the keyword - a `99-` prefix would be read after such a file and sit inert, while `01-` wins whatever else the directory happens to hold:
 
 ```bash
 printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
