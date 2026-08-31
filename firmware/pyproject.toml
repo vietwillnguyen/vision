@@ -9,8 +9,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
-    "ruff>=0.14.0",
-    "mypy>=1.18.0",
+    "ruff>=0.16.5",
+    "mypy>=2.3.1",
 ]
 
 # Without a build-system table uv treats this as a virtual project: the package
