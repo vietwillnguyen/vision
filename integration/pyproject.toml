@@ -11,8 +11,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
-    "ruff>=0.14.0",
-    "mypy>=1.18.0",
+    "ruff>=0.16.5",
+    "mypy>=2.3.1",
 ]
 
 [tool.uv.sources]
