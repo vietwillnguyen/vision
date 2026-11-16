@@ -89,13 +89,34 @@ def build_audio_extract_command(video_path: Path, audio_path: Path) -> list[str]
     ]
 
 
+def build_audio_stream_probe_command(video_path: Path) -> list[str]:
+    return [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        str(video_path),
+    ]
+
+
 class SubprocessRunner:
     def run(self, command: list[str]) -> None:
         run_captured(command)
 
 
 class FfmpegMediaProbe:
-    def extract_audio(self, video_path: Path, workdir: Path) -> Path:
+    def extract_audio(self, video_path: Path, workdir: Path) -> Path | None:
+        # The pendant records video only (capture.py runs rpicam-vid with no
+        # ALSA source), and ffmpeg refuses to write a WAV from a file with no
+        # audio stream, so check first and report silence as None.
+        streams = run_captured(build_audio_stream_probe_command(video_path))
+        if not streams.stdout.strip():
+            return None
         audio_path = workdir / (video_path.stem + ".wav")
         run_captured(build_audio_extract_command(video_path, audio_path))
         return audio_path

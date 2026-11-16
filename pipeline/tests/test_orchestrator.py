@@ -94,10 +94,13 @@ class FakeStore:
 
 
 class FakeMedia:
-    def __init__(self, frame_diffs=None):
+    def __init__(self, frame_diffs=None, silent=False):
         self.frame_diffs = frame_diffs if frame_diffs is not None else [200.0]
+        self.silent = silent
 
     def extract_audio(self, video_path, workdir):
+        if self.silent:
+            return None
         audio = workdir / (video_path.stem + ".wav")
         audio.write_bytes(b"audio")
         return audio
@@ -112,7 +115,11 @@ class FakeMedia:
 
 
 class FakeTranscriber:
+    def __init__(self):
+        self.calls = 0
+
     def transcribe(self, audio_path):
+        self.calls += 1
         return TranscriptionResult(
             speech_presence_ratio=0.8, silence_ratio=0.1, has_exclamation=False
         )
@@ -155,11 +162,13 @@ DEVICE = DeviceRecord(
 DAY = date(2026, 7, 14)
 
 
-def make_deps(store, tmp_path, vision=None, media=None, push=None, runner=None):
+def make_deps(
+    store, tmp_path, vision=None, media=None, push=None, runner=None, transcriber=None
+):
     return OrchestratorDeps(
         store=store,
         media=media or FakeMedia(),
-        transcriber=FakeTranscriber(),
+        transcriber=transcriber or FakeTranscriber(),
         vision=vision or FakeVision(),
         push=push or FakePush(),
         runner=runner or FakeRunner(),
@@ -253,6 +262,24 @@ class TestHappyPath:
 
 
 class TestEdgeCases:
+    def test_silent_segment_is_scored_without_transcription(self, tmp_path):
+        # The pendant records no audio (capture.py has no ALSA source), so the
+        # media probe finds no audio stream; that is silence, not a failure.
+        store = FakeStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090000")]}
+        )
+        transcriber = FakeTranscriber()
+        deps = make_deps(
+            store, tmp_path, media=FakeMedia(silent=True), transcriber=transcriber
+        )
+
+        result = run_nightly(deps, DAY)
+
+        assert result.devices_failed == []
+        assert transcriber.calls == 0
+        assert len(store.persisted_segments) == 1
+        assert len(store.inserted_reels) == 1
+
     def test_no_segments_means_no_reel_and_no_notification(self, tmp_path):
         store = FakeStore(devices=[DEVICE])
         push = FakePush()

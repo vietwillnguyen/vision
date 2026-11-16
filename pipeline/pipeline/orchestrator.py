@@ -46,7 +46,7 @@ from pipeline.ingestion import (
     parse_flag_marker_filename,
 )
 from pipeline.models import ScoreWeights, Segment
-from pipeline.scoring.audio import TranscriptionClient
+from pipeline.scoring.audio import TranscriptionClient, TranscriptionResult
 from pipeline.scoring.scene import VisionClient
 from pipeline.scoring_pipeline import score_segment
 from pipeline.selection.highlight_selector import CLIP_DURATION_SEC, select_highlights
@@ -56,6 +56,10 @@ logger = logging.getLogger(__name__)
 MAX_DLQ_ATTEMPTS = 5
 ESCALATION_TITLE = "Some footage needs attention"
 ESCALATION_BODY = "Some of your footage could not be processed after repeated attempts."
+# What a segment with no audio stream scores as; no transcription call is made.
+SILENT_TRANSCRIPTION = TranscriptionResult(
+    speech_presence_ratio=0.0, silence_ratio=1.0, has_exclamation=False
+)
 
 
 @dataclass
@@ -105,7 +109,9 @@ class PipelineStore(Protocol):
 
 
 class MediaProbe(Protocol):
-    def extract_audio(self, video_path: Path, workdir: Path) -> Path: ...
+    def extract_audio(self, video_path: Path, workdir: Path) -> Path | None:
+        """Write the segment's audio as a WAV, or return None if it has none."""
+        ...
 
     def extract_frame_diffs(self, video_path: Path) -> list[float]: ...
 
@@ -296,7 +302,11 @@ def _score_one(
 ) -> Segment:
     video_path = deps.store.download_segment(segment.s3_key, workdir)
     audio_path = deps.media.extract_audio(video_path, workdir)
-    transcription = deps.transcriber.transcribe(audio_path)
+    transcription = (
+        SILENT_TRANSCRIPTION
+        if audio_path is None
+        else deps.transcriber.transcribe(audio_path)
+    )
     frame_diffs = deps.media.extract_frame_diffs(video_path)
     frame_paths = deps.media.extract_frames(video_path, workdir)
     segment.composite_score, segment.location = score_segment(
