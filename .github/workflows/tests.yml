@@ -48,6 +48,10 @@ jobs:
         with:
           python-version: "3.11"
           enable-cache: true
+      - name: Install ffmpeg
+        # tests/test_ffmpeg_media_live.py runs the real media adapter against
+        # generated pendant-shaped segments; without ffmpeg it would skip.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Run pytest
         run: uv run --locked --extra dev pytest
 

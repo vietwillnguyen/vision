@@ -1,0 +1,27 @@
+{
+  "source_segments": {
+    "20260714_090000": {
+      "bytes": 6427125,
+      "duration_sec": 299.997,
+      "frames": 9000
+    },
+    "20260714_090500": {
+      "bytes": 38222,
+      "duration_sec": 39.9996,
+      "frames": 1200
+    },
+    "20260714_090600": {
+      "bytes": 73124560,
+      "duration_sec": 299.997,
+      "frames": 9000
+    }
+  },
+  "run": {
+    "devices_processed": 0,
+    "devices_failed": 1
+  },
+  "segments_rows": [],
+  "reels_row": null,
+  "dlq_rows": [],
+  "clips": {}
+}

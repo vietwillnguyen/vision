@@ -15,6 +15,12 @@ segment and resolves instead of escalating. Recovered DLQ rows are only
 resolved after the device's day completes, so a later failure cannot lose a
 not-yet-persisted recovery.
 
+Segment lengths are measured, not assumed: every segment is downloaded and
+probed before flag markers are matched, because a marker's window, the clip
+cut from the segment and the stored ``duration_sec`` all depend on the file's
+real length (a stop press ends a segment early). A file with no measurable
+duration is rejected into the DLQ like a malformed key.
+
 Push delivery failures never fail an otherwise-successful device day: they
 are logged, a permanently dead token (DeviceNotRegistered) clears the
 device's stored push_token, and a DLQ row is only marked escalated once the
@@ -25,13 +31,14 @@ failure retries the escalation on the next run.
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Protocol
 
 from pipeline.assembly.ffmpeg_assembler import (
     build_assembly_command,
     build_trim_command,
+    compute_clip_duration_sec,
     compute_clip_offset_sec,
     render_concat_file_content,
 )
@@ -44,9 +51,11 @@ from pipeline.ingestion import (
     apply_flag_markers,
     build_segments_from_object_keys,
     parse_flag_marker_filename,
+    segment_window_end,
+    stored_duration_sec,
 )
 from pipeline.models import ScoreWeights, Segment
-from pipeline.scoring.audio import TranscriptionClient
+from pipeline.scoring.audio import TranscriptionClient, TranscriptionResult
 from pipeline.scoring.scene import VisionClient
 from pipeline.scoring_pipeline import score_segment
 from pipeline.selection.highlight_selector import CLIP_DURATION_SEC, select_highlights
@@ -56,6 +65,13 @@ logger = logging.getLogger(__name__)
 MAX_DLQ_ATTEMPTS = 5
 ESCALATION_TITLE = "Some footage needs attention"
 ESCALATION_BODY = "Some of your footage could not be processed after repeated attempts."
+# Re-encoding at clip boundaries moves a reel's length by a frame or two per
+# clip; a whole clip missing is far outside this.
+REEL_DURATION_TOLERANCE_SEC = 1.0
+# What a segment with no audio stream scores as; no transcription call is made.
+SILENT_TRANSCRIPTION = TranscriptionResult(
+    speech_presence_ratio=0.0, silence_ratio=1.0, has_exclamation=False
+)
 
 
 @dataclass
@@ -105,11 +121,19 @@ class PipelineStore(Protocol):
 
 
 class MediaProbe(Protocol):
-    def extract_audio(self, video_path: Path, workdir: Path) -> Path: ...
+    def probe_duration_sec(self, video_path: Path) -> float:
+        """The file's real length; raises UnreadableSegmentError if it has none."""
+        ...
+
+    def extract_audio(self, video_path: Path, workdir: Path) -> Path | None:
+        """Write the segment's audio as a WAV, or return None if it has none."""
+        ...
 
     def extract_frame_diffs(self, video_path: Path) -> list[float]: ...
 
-    def extract_frames(self, video_path: Path, workdir: Path) -> list[Path]: ...
+    def extract_frames(
+        self, video_path: Path, workdir: Path, duration_sec: float
+    ) -> list[Path]: ...
 
 
 class CommandRunner(Protocol):
@@ -160,8 +184,16 @@ def _run_device_day(deps: OrchestratorDeps, device: DeviceRecord, day: date) -> 
     retried_segment_keys = [e.key for e in pending if e.kind == "rejected"]
     retried_marker_keys = [e.key for e in pending if e.kind == "unmatched"]
 
+    device_workdir = deps.workdir / device.device_id
+    device_workdir.mkdir(parents=True, exist_ok=True)
+    local_paths: dict[str, Path] = {}
+
+    def measure_duration_sec(s3_key: str) -> float:
+        local_paths[s3_key] = store.download_segment(s3_key, device_workdir)
+        return deps.media.probe_duration_sec(local_paths[s3_key])
+
     segments, rejected = build_segments_from_object_keys(
-        segment_keys + retried_segment_keys, device.device_id
+        segment_keys + retried_segment_keys, device.device_id, measure_duration_sec
     )
     segments, marker_rejected, unmatched = apply_flag_markers(
         segments, marker_keys + retried_marker_keys, device.device_id
@@ -176,7 +208,7 @@ def _run_device_day(deps: OrchestratorDeps, device: DeviceRecord, day: date) -> 
     failed_keys.update((key, "unmatched") for key in unmatched)
     recovered = _apply_dlq_policy(deps, device, pending_by_key, failed_keys)
 
-    _process_device_segments(deps, device, day, segments)
+    _process_device_segments(deps, device, day, segments, local_paths, device_workdir)
 
     if recovered:
         store.resolve_dlq(device.device_id, recovered)
@@ -188,7 +220,7 @@ def _flag_persisted_segment(
     flag_at = parse_flag_marker_filename(marker_key.split("/")[-1])
     for row in store.list_segment_rows(device_id, flag_at.date()):
         recorded_at = datetime.fromisoformat(row["recorded_at"]).replace(tzinfo=None)
-        window_end = recorded_at + timedelta(seconds=row["duration_sec"])
+        window_end = segment_window_end(recorded_at, row["duration_sec"])
         if recorded_at <= flag_at < window_end:
             store.flag_segment(row["s3_key"])
             return True
@@ -196,24 +228,41 @@ def _flag_persisted_segment(
 
 
 def _process_device_segments(
-    deps: OrchestratorDeps, device: DeviceRecord, day: date, segments: list[Segment]
+    deps: OrchestratorDeps,
+    device: DeviceRecord,
+    day: date,
+    segments: list[Segment],
+    local_paths: dict[str, Path],
+    device_workdir: Path,
 ) -> None:
     store = deps.store
     if not segments:
         return
 
     weights = store.fetch_score_weights(device.user_id)
-    device_workdir = deps.workdir / device.device_id
-    device_workdir.mkdir(parents=True, exist_ok=True)
     scored = [
-        _score_one(deps, segment, weights, device_workdir) for segment in segments
+        _score_one(deps, segment, local_paths[segment.s3_key], weights, device_workdir)
+        for segment in segments
     ]
     store.persist_segments([_segment_row(s) for s in scored])
 
     selected = select_highlights(scored, target_duration_sec=deps.target_duration_sec)
     if not selected:
         return
-    reel_path = _assemble_reel(deps, selected, device_workdir, day)
+    reel_path = _assemble_reel(deps, selected, local_paths, device_workdir, day)
+    reel_duration_sec = deps.media.probe_duration_sec(reel_path)
+    planned_sec = sum(
+        compute_clip_duration_sec(s.duration_sec, CLIP_DURATION_SEC) for s in selected
+    )
+    if abs(reel_duration_sec - planned_sec) > REEL_DURATION_TOLERANCE_SEC:
+        # A dropped or truncated clip; the row still records what the file is.
+        logger.warning(
+            "reel for device %s on %s is %.2fs but its clips total %.2fs",
+            device.device_id,
+            day.isoformat(),
+            reel_duration_sec,
+            planned_sec,
+        )
 
     reel_key = store.upload_reel(device.device_id, day, reel_path)
     store.insert_reel(
@@ -221,7 +270,7 @@ def _process_device_segments(
             "device_id": device.device_id,
             "date": day.isoformat(),
             "s3_key": reel_key,
-            "duration_sec": len(selected) * CLIP_DURATION_SEC,
+            "duration_sec": round(reel_duration_sec),
             "style": "vintage" if deps.vintage else "clean",
         }
     )
@@ -292,13 +341,20 @@ def _apply_dlq_policy(
 
 
 def _score_one(
-    deps: OrchestratorDeps, segment: Segment, weights: ScoreWeights, workdir: Path
+    deps: OrchestratorDeps,
+    segment: Segment,
+    video_path: Path,
+    weights: ScoreWeights,
+    workdir: Path,
 ) -> Segment:
-    video_path = deps.store.download_segment(segment.s3_key, workdir)
     audio_path = deps.media.extract_audio(video_path, workdir)
-    transcription = deps.transcriber.transcribe(audio_path)
+    transcription = (
+        SILENT_TRANSCRIPTION
+        if audio_path is None
+        else deps.transcriber.transcribe(audio_path)
+    )
     frame_diffs = deps.media.extract_frame_diffs(video_path)
-    frame_paths = deps.media.extract_frames(video_path, workdir)
+    frame_paths = deps.media.extract_frames(video_path, workdir, segment.duration_sec)
     segment.composite_score, segment.location = score_segment(
         transcription=transcription,
         frame_diffs=frame_diffs,
@@ -314,7 +370,7 @@ def _segment_row(segment: Segment) -> dict:
     return {
         "device_id": segment.device_id,
         "recorded_at": segment.recorded_at.isoformat(),
-        "duration_sec": segment.duration_sec,
+        "duration_sec": stored_duration_sec(segment.duration_sec),
         "s3_key": segment.s3_key,
         "composite_score": segment.composite_score,
         "manually_flagged": segment.manually_flagged,
@@ -322,14 +378,20 @@ def _segment_row(segment: Segment) -> dict:
 
 
 def _assemble_reel(
-    deps: OrchestratorDeps, selected: list[Segment], workdir: Path, day: date
+    deps: OrchestratorDeps,
+    selected: list[Segment],
+    local_paths: dict[str, Path],
+    workdir: Path,
+    day: date,
 ) -> Path:
     clip_paths: list[Path] = []
     for index, segment in enumerate(selected):
-        source = workdir / Path(segment.s3_key).name
         clip = workdir / f"clip_{index:03d}.mp4"
-        offset = compute_clip_offset_sec(segment.duration_sec, CLIP_DURATION_SEC)
-        deps.runner.run(build_trim_command(source, clip, offset, CLIP_DURATION_SEC))
+        clip_sec = compute_clip_duration_sec(segment.duration_sec, CLIP_DURATION_SEC)
+        offset = compute_clip_offset_sec(segment.duration_sec, clip_sec)
+        deps.runner.run(
+            build_trim_command(local_paths[segment.s3_key], clip, offset, clip_sec)
+        )
         clip_paths.append(clip)
 
     concat_file = workdir / "concat.txt"

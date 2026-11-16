@@ -202,6 +202,7 @@ class TestPersistSegments:
     def test_inserts_new_rows_and_updates_existing_by_s3_key(self):
         existing = {
             "s3_key": "dev-1/20260714_090000.mp4",
+            "duration_sec": 300,
             "composite_score": 0.0,
             "manually_flagged": False,
         }
@@ -213,7 +214,7 @@ class TestPersistSegments:
                     "device_id": "dev-1",
                     "s3_key": "dev-1/20260714_090000.mp4",
                     "recorded_at": "2026-07-14T09:00:00",
-                    "duration_sec": 300,
+                    "duration_sec": 40,
                     "composite_score": 0.7,
                     "manually_flagged": True,
                 },
@@ -233,6 +234,8 @@ class TestPersistSegments:
         assert segments.inserted[0]["s3_key"] == "dev-1/20260714_091500.mp4"
         assert existing["composite_score"] == 0.7
         assert existing["manually_flagged"] is True
+        # A re-run corrects a duration persisted before it was measured.
+        assert existing["duration_sec"] == 40
 
 
 class TestScoreWeights:
