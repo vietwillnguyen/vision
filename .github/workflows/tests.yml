@@ -94,7 +94,8 @@ jobs:
         # Anonymous pulls from public.ecr.aws (the CLI's default registry) hit
         # `toomanyrequests` on shared runners. This loads every image from the
         # Actions cache, or seeds it from Supabase's GHCR mirror on a miss, and
-        # then blocks public.ecr.aws and ghcr.io for the rest of the job.
+        # then blocks public.ecr.aws and its ghcr.io and Docker Hub fallbacks for
+        # the rest of the job.
         uses: ./.github/actions/supabase-images
         with:
           cli-version: ${{ env.SUPABASE_CLI_VERSION }}
@@ -170,7 +171,8 @@ jobs:
         # Anonymous pulls from public.ecr.aws (the CLI's default registry) hit
         # `toomanyrequests` on shared runners. This loads every image from the
         # Actions cache, or seeds it from Supabase's GHCR mirror on a miss, and
-        # then blocks public.ecr.aws and ghcr.io for the rest of the job.
+        # then blocks public.ecr.aws and its ghcr.io and Docker Hub fallbacks for
+        # the rest of the job.
         uses: ./.github/actions/supabase-images
         with:
           cli-version: ${{ env.SUPABASE_CLI_VERSION }}
