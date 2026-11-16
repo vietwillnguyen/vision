@@ -28,7 +28,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 055f89d48306c4b17edb142d9822287db7ef182988abaf29feb5f62229ed92de  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 3167c02c55ca06e9b17e4132705703d25dcaa6492abc9e8e72c3e032bc242be1  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 4c56b6f08f289c7ce8177e7c65a87f27fedb418ff4416e5673bcc6ab43f40b84  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-16 (merge of main: trixie OS reconcile + segment duration contract + recording lifecycle) -->
@@ -247,7 +247,7 @@ flowchart TD
             <tr><td>Storage</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">reels</span> buckets carry a 50 MiB <span class="font-mono text-xs bg-base-200 rounded px-1">file_size_limit</span>, enforced on every stack</td></tr>
             <tr><td>Capture</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_VIDEO_WIDTH/HEIGHT/FRAMERATE/BITRATE</span> (1280x720@30, 4 Mbps) passed to <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> explicitly</td></tr>
             <tr><td>Segment length</td><td>longest 10 s multiple whose predicted size <span class="font-mono text-xs bg-base-200 rounded px-1">(video + 128 kbps audio reserve) / 8 x s x 1.02</span> uses at most 2/3 of <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_MAX_UPLOAD_BYTES</span>: 60 s, ~31.6 MB, at the defaults</td></tr>
-            <tr><td>Oversize guard</td><td>a file over the limit is split with <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg -c copy -f segment</span> into parts named by their start; a part storage still 413s is split again; an unsplittable one moves to <span class="font-mono text-xs bg-base-200 rounded px-1">rejected/</span>, counts in <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.segments_rejected</span>, and is never retried; a split that fails for a passing reason (full SD card, ffmpeg failing on a nearly full disk) stays queued for the next boot</td></tr>
+            <tr><td>Oversize guard</td><td>a file over the limit is split with <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg -c copy -f segment</span> into parts named by their start; a part storage still 413s is split again; an unsplittable one moves to <span class="font-mono text-xs bg-base-200 rounded px-1">rejected/</span>, counts in <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.segments_rejected</span>, and is never retried; a split that fails for a passing reason (full SD card, ffmpeg failing with under twice the file size free) stays queued for the next boot</td></tr>
           </tbody>
         </table>
       </div>

@@ -302,19 +302,30 @@ def test_a_full_disk_while_writing_parts_keeps_the_segment_queued(tmp_path):
     assert not rejected_dir(queue_dir).exists()
 
 
-def test_ffmpeg_failing_on_a_nearly_full_disk_keeps_the_segment_queued(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("free", "expected"),
+    [(0, (0, 1, 0)), (4999, (0, 1, 0)), (5000, (0, 0, 1))],
+)
+def test_ffmpeg_failing_with_under_twice_the_file_free_keeps_the_segment_queued(
+    tmp_path, monkeypatch, free, expected
 ):
     queue_dir = tmp_path / "queue"
     path = _segment(queue_dir, "20261116_090000.mp4", 2500)
-    monkeypatch.setattr(shutil, "disk_usage", lambda _path: SimpleNamespace(free=100))
     runner = FakeSplitRunner([], fail=True)
+    calls: list[tuple[str, int]] = []
+
+    def disk_usage(probed):
+        calls.append((str(probed), len(runner.calls)))
+        return SimpleNamespace(free=free)
+
+    monkeypatch.setattr(shutil, "disk_usage", disk_usage)
 
     outcome = upload_queued(path, RecordingStorage(), "dev", _limit(runner))
 
-    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 1, 0)
-    assert sorted(p.name for p in queue_dir.iterdir()) == ["20261116_090000.mp4"]
-    assert not rejected_dir(queue_dir).exists()
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == expected
+    assert calls == [(str(queue_dir), 1)]
+    kept = sorted(p.name for p in queue_dir.iterdir())
+    assert kept == (["20261116_090000.mp4"] if expected[1] else [])
 
 
 def test_upload_queued_skips_a_path_already_gone(tmp_path):

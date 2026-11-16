@@ -13,15 +13,16 @@ a fitting file too large after the fact. So before upload:
   consecutive segments;
 - a part storage still answers 413 for is split again, under half its size;
 - a segment that cannot be split under the limit (ffprobe cannot read its
-  duration, ffmpeg fails with ample free space, the split yields fewer than
-  two parts, a part is still too large, or parts would share a name) is moved
-  to ``rejected/`` beside the queue, logged as an error and counted in
-  ``device_status.segments_rejected``. It is kept for manual recovery but
-  never retried;
+  duration, ffmpeg fails with at least twice its size free, the split yields
+  fewer than two parts, a part is still too large, or parts would share a
+  name) is moved to ``rejected/`` beside the queue, logged as an error and
+  counted in ``device_status.segments_rejected``. It is kept for manual
+  recovery but never retried;
 - a split that fails for a passing reason (any ``OSError`` such as a full SD
   card, or ffmpeg failing while the queue's filesystem has less free space
-  than the file being split) leaves the segment queued and counts it as
-  failed, so the next boot's flush tries again.
+  than twice the file being split, which covers the parts, their per-part
+  ``moov`` overhead and the segment still recording) leaves the segment
+  queued and counts it as failed, so the next boot's flush tries again.
 
 Splitting is crash-safe: parts are built in a scratch directory inside the
 queue (skipped by ``list_pending``), every part except the one that reuses the
@@ -152,11 +153,11 @@ def split_segment(
         work_dir.mkdir()
         chunks = math.ceil(size / (max_bytes * SPLIT_FILL))
         chunk_sec = probe.duration_sec(path) / chunks
-        free = shutil.disk_usage(path.parent).free
         try:
             runner.run(build_split_command(path, chunk_sec, work_dir))
         except subprocess.CalledProcessError as err:
-            if free < size:
+            free = shutil.disk_usage(path.parent).free
+            if free < 2 * size:
                 raise SegmentSplitDeferred(
                     f"{path.name}: ffmpeg failed with {free} bytes free: {err!r}"
                 ) from err
