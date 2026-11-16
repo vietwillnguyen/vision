@@ -23,7 +23,8 @@ class Segment:
     id: str
     device_id: str
     recorded_at: datetime
-    duration_sec: int
+    # Measured from the file, never the firmware's nominal segment length.
+    duration_sec: float
     s3_key: str
     location: str
     composite_score: float = 0.0

@@ -11,7 +11,9 @@ from pipeline.adapters.expo_push import (
 from pipeline.adapters.ffmpeg_media import (
     FRAME_HEIGHT,
     FRAME_WIDTH,
+    VISION_FRAME_COUNT,
     build_audio_extract_command,
+    build_duration_probe_command,
     build_frame_extract_command,
     build_raw_gray_command,
     compute_frame_diffs_from_raw,
@@ -65,10 +67,26 @@ class TestFfmpegCommands:
         assert cmd[-1] == "-"
 
     def test_frame_extract_command_writes_jpegs_to_pattern(self):
-        cmd = build_frame_extract_command(Path("in.mp4"), Path("/tmp/frames"))
+        cmd = build_frame_extract_command(
+            Path("in.mp4"), Path("/tmp/frames"), duration_sec=300.0
+        )
 
         assert cmd[0] == "ffmpeg"
         assert str(Path("/tmp/frames") / "frame_%03d.jpg") in cmd
+
+    def test_frame_extract_rate_spreads_frames_over_the_real_duration(self):
+        cmd = build_frame_extract_command(
+            Path("in.mp4"), Path("/tmp/frames"), duration_sec=40.0
+        )
+
+        assert f"fps={VISION_FRAME_COUNT}/40.000" in cmd
+
+    def test_duration_probe_command_reads_the_container_duration(self):
+        cmd = build_duration_probe_command(Path("in.mp4"))
+
+        assert cmd[0] == "ffprobe"
+        assert "format=duration" in cmd
+        assert cmd[-1] == "in.mp4"
 
     def test_audio_extract_command_produces_wav(self):
         cmd = build_audio_extract_command(Path("in.mp4"), Path("/tmp/a.wav"))

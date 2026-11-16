@@ -121,6 +121,9 @@ class FakeStore:
 
 
 class FakeMedia:
+    def probe_duration_sec(self, video_path):
+        return 39.9996
+
     def extract_audio(self, video_path, workdir):
         audio = workdir / (video_path.stem + ".wav")
         audio.write_bytes(b"audio")
@@ -129,7 +132,7 @@ class FakeMedia:
     def extract_frame_diffs(self, video_path):
         return [200.0]
 
-    def extract_frames(self, video_path, workdir):
+    def extract_frames(self, video_path, workdir, duration_sec):
         frame = workdir / (video_path.stem + ".jpg")
         frame.write_bytes(b"jpg")
         return [frame]
@@ -190,6 +193,9 @@ def test_segment_row_matches_migration_columns(nightly_run):
     assert not unknown, f"pipeline writes unknown segment columns: {unknown}"
     missing = _required_columns(columns) - set(row)
     assert not missing, f"pipeline's segment row is missing required columns: {missing}"
+    # The measured duration is fractional; the column is not.
+    assert columns["duration_sec"]["data_type"] == "integer"
+    assert isinstance(row["duration_sec"], int)
 
 
 def test_reel_row_matches_migration_columns(nightly_run):
@@ -201,3 +207,5 @@ def test_reel_row_matches_migration_columns(nightly_run):
     assert not unknown, f"pipeline writes unknown reel columns: {unknown}"
     missing = _required_columns(columns) - set(row)
     assert not missing, f"pipeline's reel row is missing required columns: {missing}"
+    assert columns["duration_sec"]["data_type"] == "integer"
+    assert isinstance(row["duration_sec"], int)

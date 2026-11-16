@@ -81,14 +81,27 @@ def test_firmware_uploaded_object_is_ingested_by_pipeline_listing(
             "real upload adapter just wrote"
         )
 
+        # The real probe is ffmpeg (covered in pipeline's
+        # test_ffmpeg_media_live.py); this test is about the storage handoff,
+        # so it measures the bytes pipeline actually downloads from the bucket.
+        downloaded: dict[str, bytes] = {}
+
+        def measure_downloaded(key: str) -> float:
+            local = pipeline_store.download_segment(key, tmp_path / "pipeline")
+            downloaded[key] = local.read_bytes()
+            return 40.0
+
+        (tmp_path / "pipeline").mkdir()
         segments, rejected_keys = build_segments_from_object_keys(
-            object_keys, device_id
+            object_keys, device_id, measure_downloaded
         )
         assert rejected_keys == []
         assert len(segments) == 1
         assert segments[0].device_id == device_id
         assert segments[0].recorded_at == recorded_at.replace(tzinfo=None)
         assert segments[0].s3_key == object_path
+        assert segments[0].duration_sec == 40.0
+        assert downloaded == {object_path: b"stub mp4 bytes"}
     finally:
         if device_id is not None and stub_segment is not None:
             admin_client.storage.from_("segments").remove(

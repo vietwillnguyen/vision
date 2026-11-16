@@ -6,6 +6,7 @@ from pipeline.assembly.ffmpeg_assembler import (
     VINTAGE_FILTER,
     build_assembly_command,
     build_trim_command,
+    compute_clip_duration_sec,
     compute_clip_offset_sec,
     render_concat_file_content,
 )
@@ -19,6 +20,26 @@ def test_compute_clip_offset_centers_the_clip_in_a_longer_segment():
 
 def test_compute_clip_offset_clamps_to_zero_when_segment_shorter_than_clip():
     assert compute_clip_offset_sec(segment_duration_sec=10, clip_duration_sec=15) == 0.0
+
+
+def test_compute_clip_offset_centers_the_clip_in_a_short_segment():
+    # A 40 s segment left by a stop press: the clip must start inside the file,
+    # not 142.5 s in, where ffmpeg writes a zero-frame clip and exits 0.
+    assert compute_clip_offset_sec(
+        segment_duration_sec=40.0, clip_duration_sec=15
+    ) == pytest.approx(12.5)
+
+
+def test_compute_clip_duration_is_the_full_clip_when_the_segment_is_longer():
+    assert (
+        compute_clip_duration_sec(segment_duration_sec=40.0, clip_duration_sec=15) == 15
+    )
+
+
+def test_compute_clip_duration_is_the_whole_segment_when_it_is_shorter():
+    assert compute_clip_duration_sec(
+        segment_duration_sec=9.5, clip_duration_sec=15
+    ) == pytest.approx(9.5)
 
 
 def test_build_trim_command_reencodes_for_frame_accurate_cuts():

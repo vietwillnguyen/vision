@@ -19,9 +19,13 @@ and the push client records instead of sending.
 
 The device day:
 
+Segments are 320x180 to keep uploads small; resolution plays no part in
+duration handling.
+
 * ``090000`` - a full 300 s segment.
 * ``090500`` - a 40 s segment, as a stop press would leave it.
 * ``090600`` - a full 300 s segment recorded after the restart.
+* ``100000`` - a full 300 s segment later in the day.
 * ``FLAG_..._090520`` - a flag press inside the 40 s segment.
 * ``FLAG_..._090700`` - a flag press inside the restarted segment.
 """
@@ -46,11 +50,19 @@ from pipeline.scoring.audio import TranscriptionResult
 
 DAY = date(2026, 7, 14)
 FRAMERATE = 30
+# Each source flips between bright and dark every second, so the 1 fps motion
+# probe clears MOTION_GATING_THRESHOLD and the stub vision's location is used;
+# the chroma differs per segment so their clips are told apart in the reel.
+FLICKER = (
+    "nullsrc=size=320x180:rate={rate},"
+    "geq=lum='if(mod(floor(T),2),220,30)':cb={cb}:cr={cr}"
+)
 SEGMENTS = [
-    # (stem, seconds, lavfi source, location the stub vision reports)
-    ("20260714_090000", 300, "testsrc", "indoor"),
-    ("20260714_090500", 40, "smptebars", "outdoor"),
-    ("20260714_090600", 300, "testsrc2", "indoor"),
+    # (stem, seconds, chroma (cb, cr), location the stub vision reports)
+    ("20260714_090000", 300, (90, 90), "indoor"),
+    ("20260714_090500", 40, (200, 60), "outdoor"),
+    ("20260714_090600", 300, (60, 200), "indoor"),
+    ("20260714_100000", 300, (200, 200), "outdoor"),
 ]
 MARKERS = ["FLAG_20260714_090520.marker", "FLAG_20260714_090700.marker"]
 
@@ -61,7 +73,9 @@ def _run(command: list[str]) -> str:
     ).stdout.strip()
 
 
-def make_segment(media_dir: Path, stem: str, seconds: int, source: str) -> Path:
+def make_segment(
+    media_dir: Path, stem: str, seconds: int, chroma: tuple[int, int]
+) -> Path:
     mp4 = media_dir / f"{stem}.mp4"
     if mp4.exists():
         return mp4
@@ -69,7 +83,8 @@ def make_segment(media_dir: Path, stem: str, seconds: int, source: str) -> Path:
     _run(
         [
             "ffmpeg", "-v", "error", "-y",
-            "-f", "lavfi", "-i", f"{source}=size=640x360:rate={FRAMERATE}",
+            "-f", "lavfi",
+            "-i", FLICKER.format(rate=FRAMERATE, cb=chroma[0], cr=chroma[1]),
             "-t", str(seconds),
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             "-f", "h264", str(h264),
@@ -107,6 +122,18 @@ def probe(path: Path) -> dict[str, Any]:
     }
 
 
+class RecordingMediaProbe(FfmpegMediaProbe):
+    """The real probe, also recording how many frames vision is handed."""
+
+    def __init__(self) -> None:
+        self.vision_frames: dict[str, int] = {}
+
+    def extract_frames(self, video_path: Path, *args: Any, **kwargs: Any) -> list[Path]:
+        frames = super().extract_frames(video_path, *args, **kwargs)
+        self.vision_frames[video_path.stem] = len(frames)
+        return frames
+
+
 class SilentTranscriber:
     def transcribe(self, audio_path: Path) -> TranscriptionResult:
         return TranscriptionResult(
@@ -116,6 +143,8 @@ class SilentTranscriber:
 
 class StubVision:
     def score_frames(self, frame_paths: list[Path], prompt: str) -> str:
+        # With no frames there is nothing to locate; a real model can only
+        # guess, so the stub falls back to the pipeline's default location.
         stem = frame_paths[0].parent.name.removesuffix("_frames") if frame_paths else ""
         location = next((s[3] for s in SEGMENTS if s[0] == stem), "indoor")
         return json.dumps({"score": 6, "location": location, "people": False})
@@ -180,8 +209,8 @@ def main() -> int:
         bucket = client.storage.from_("segments")
 
         report["source_segments"] = {}
-        for stem, seconds, source, _ in SEGMENTS:
-            mp4 = make_segment(media_dir, stem, seconds, source)
+        for stem, seconds, chroma, _ in SEGMENTS:
+            mp4 = make_segment(media_dir, stem, seconds, chroma)
             report["source_segments"][stem] = probe(mp4)
             key = f"{device_id}/{mp4.name}"
             bucket.upload(key, mp4.read_bytes(), {"content-type": "video/mp4"})
@@ -191,9 +220,10 @@ def main() -> int:
             bucket.upload(key, b"", {"content-type": "application/octet-stream"})
             uploaded.append(key)
 
+        media = RecordingMediaProbe()
         deps = OrchestratorDeps(
             store=OneDeviceStore(client, device_id),
-            media=FfmpegMediaProbe(),
+            media=media,
             transcriber=SilentTranscriber(),
             vision=StubVision(),
             push=RecordingPush(),
@@ -205,10 +235,11 @@ def main() -> int:
             "devices_processed": result.devices_processed,
             "devices_failed": len(result.devices_failed),
         }
+        report["vision_frames_per_segment"] = media.vision_frames
 
         segment_rows = (
             client.table("segments")
-            .select("recorded_at, duration_sec, manually_flagged")
+            .select("recorded_at, duration_sec, manually_flagged, composite_score")
             .eq("device_id", device_id)
             .order("recorded_at")
             .execute()
