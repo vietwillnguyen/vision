@@ -62,7 +62,7 @@ They are split by what each needs to run, so a red check points at one thing:
 - [`lint.yml`](.github/workflows/lint.yml) - `ruff check`, `ruff format --check`, and `mypy` on the Python packages, plus `npm run lint` (eslint) and `npm run typecheck` (`tsc --noEmit`) on the app. Needs neither Docker nor Supabase, so it fails fast and independently of the suites above; see [Lint, format, and type-check](#lint-format-and-type-check). Type-checking is the one thing this split does not separate: `tsc --noEmit` runs here and in `tests.yml`, so a type error reddens both checks.
 - [`hooks.yml`](.github/workflows/hooks.yml) - the pre-commit architecture-sync guard's own suite, plus a re-check that the committed `source-sha256` manifest still matches every spec on disk (drift landed via `--no-verify` is invisible to the hook itself); see [Architecture doc](#architecture-doc) above.
 
-The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 - the floor all three packages declare (`requires-python = ">=3.11"`), so CI gates the oldest interpreter the firmware supports rather than whichever one the current device image ships; `--locked` enforces the committed `uv.lock`.
+The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, a regeneration check on the committed database types (see [Generated database types](#generated-database-types)), `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
 The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the nine suites in [`supabase/tests/database/`](supabase/tests/database).
@@ -171,7 +171,7 @@ Two mechanisms, not mutually exclusive:
   On an image flashed without it, use Tailscale SSH instead - `tailscaled` answers on the tailnet interface whether or not `sshd` is running.
 
 Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
-Prove the login that has to carry you afterwards *before* changing anything, because the drop-in below is armed the moment it exists on a socket-activated host - the reload further down is needed only in the other mode.
+Prove the login that has to carry you afterwards *before* changing anything, because once the drop-in below takes effect a missing key means no way back in over SSH.
 The hazard is real: the Raspberry Pi imager offers a password and a public key independently, so an image flashed with a password and no key is an ordinary case, and turning passwords off on one locks the account out at the next login.
 From the workstation - already on the same tailnet, which is what makes `<device-hostname>` resolve at all; see "Connecting from a workstation" below - in a second terminal, pinned to public key so no interactive method can make the test pass on its behalf:
 
@@ -197,22 +197,24 @@ printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
   | sudo tee /etc/ssh/sshd_config.d/01-visio-no-passwords.conf
 ```
 
-Whether that takes effect immediately depends on how `sshd` is running.
-On an image with SSH enabled at flash time the classic long-running daemon is the listener: `ssh.service` is enabled and active while `ssh.socket` is inactive and disabled, because the imager's boot-partition `ssh` marker enables `ssh.service` through `sshswitch.service` (`raspi-config` takes the same path).
-That daemon parses its config once at startup, so the drop-in does not reach the next login on its own.
-Debian 13's own package preset is socket activation (`ssh.socket`), where systemd spawns a fresh `sshd` per connection and the next login already reads the drop-in - the check below distinguishes the two rather than assuming either.
-
-Reload only when the classic service is the listener, then confirm the effective setting:
+Syntax-check it, then confirm what the files on disk now resolve to:
 
 ```bash
-systemctl is-active ssh.service                  # active => classic daemon; inactive => socket-activated, or sshd not enabled at all
-sudo systemctl reload ssh                        # only if the line above printed active
-sudo sshd -T | grep -i passwordauthentication    # expect: passwordauthentication no
+sudo sshd -t                                      # silent on success
+sudo sshd -T | grep -i passwordauthentication     # expect: passwordauthentication no
 ```
 
-`reload` sends the running daemon a SIGHUP to re-read its config and leaves established sessions alone.
-Do not `restart` unconditionally: on a socket-activated host that starts `ssh.service` and drops it off socket activation until reboot.
-`sshd -T` parses the config files from disk rather than querying the running process, so it confirms the drop-in is included and that no earlier-sorting file beat it to the keyword; run it after the reload so what it reports is also what the live daemon has loaded.
+`sshd -T` parses the config files from disk rather than querying the running process, so it proves the drop-in is included and that no earlier-sorting file beat it to the keyword - not that the live daemon has loaded it.
+The `sshd` already listening keeps the config it started with, so apply the change by rebooting the device (`sudo reboot`), which starts a fresh `sshd` under whichever unit - `ssh.service` or `ssh.socket` - the host uses, with no need to tell the two apart.
+
+Then check the live daemon from the workstation with a password-only attempt, which must be refused:
+
+```bash
+ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no <user>@<device-hostname>
+# expect: Permission denied (publickey).
+```
+
+On the Tailscale SSH path `tailscaled` answers this connection instead of `sshd`, so the test does not exercise the drop-in there.
 
 #### Connecting from a workstation
 
