@@ -1,0 +1,10 @@
+E       assert 0 == 1
+ERROR    visio_recorder.recording_loop:recording_loop.py:78 flush_pending failed to upload queued segment /tmp/pytest-of-viet/pytest-82/test_next_boot_flush_clears_a_0/queue/20260714_090000.mp4
+storage3.exceptions.StorageApiError: {'statusCode': 409, 'error': Duplicate, 'message': The resource already exists}
+E       AssertionError: assert 'text/plain' == 'video/mp4'
+E       AssertionError: upload peaked at 117339694 bytes for a 41943040 byte file
+E       assert 117339694 < (41943040 // 4)
+FAILED tests/test_firmware_upload_live.py::test_next_boot_flush_clears_a_segment_that_already_reached_storage
+FAILED tests/test_firmware_upload_live.py::test_segment_is_stored_as_video_mp4
+FAILED tests/test_firmware_upload_live.py::test_segment_upload_does_not_hold_the_whole_file_in_memory
+3 failed, 1 passed, 28 warnings in 44.73s

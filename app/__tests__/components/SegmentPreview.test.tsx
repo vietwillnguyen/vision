@@ -24,7 +24,13 @@ const seg: Segment = {
 describe('SegmentPreview', () => {
   it('renders nothing when no segment is selected', () => {
     const { queryByTestId } = render(
-      <SegmentPreview segment={null} videoUri={null} onSave={jest.fn()} onShare={jest.fn()} onClose={jest.fn()} />,
+      <SegmentPreview
+        segment={null}
+        videoUri={null}
+        onSave={jest.fn()}
+        onShare={jest.fn()}
+        onClose={jest.fn()}
+      />,
     );
     expect(queryByTestId('segment-preview')).toBeNull();
   });
@@ -32,7 +38,13 @@ describe('SegmentPreview', () => {
   it('calls onSave when the save button is pressed', () => {
     const onSave = jest.fn();
     const { getByTestId } = render(
-      <SegmentPreview segment={seg} videoUri={null} onSave={onSave} onShare={jest.fn()} onClose={jest.fn()} />,
+      <SegmentPreview
+        segment={seg}
+        videoUri={null}
+        onSave={onSave}
+        onShare={jest.fn()}
+        onClose={jest.fn()}
+      />,
     );
     fireEvent.press(getByTestId('save-button'));
     expect(onSave).toHaveBeenCalledTimes(1);
@@ -41,7 +53,13 @@ describe('SegmentPreview', () => {
   it('calls onShare when the share button is pressed', () => {
     const onShare = jest.fn();
     const { getByTestId } = render(
-      <SegmentPreview segment={seg} videoUri={null} onSave={jest.fn()} onShare={onShare} onClose={jest.fn()} />,
+      <SegmentPreview
+        segment={seg}
+        videoUri={null}
+        onSave={jest.fn()}
+        onShare={onShare}
+        onClose={jest.fn()}
+      />,
     );
     fireEvent.press(getByTestId('share-button'));
     expect(onShare).toHaveBeenCalledTimes(1);
@@ -49,14 +67,26 @@ describe('SegmentPreview', () => {
 
   it('renders the video player when a uri is ready', () => {
     render(
-      <SegmentPreview segment={seg} videoUri="https://signed/s1.mp4" onSave={jest.fn()} onShare={jest.fn()} onClose={jest.fn()} />,
+      <SegmentPreview
+        segment={seg}
+        videoUri="https://signed/s1.mp4"
+        onSave={jest.fn()}
+        onShare={jest.fn()}
+        onClose={jest.fn()}
+      />,
     );
     expect(screen.getByTestId('video-view')).toBeTruthy();
   });
 
   it('shows a placeholder while the uri is pending', () => {
     render(
-      <SegmentPreview segment={seg} videoUri={null} onSave={jest.fn()} onShare={jest.fn()} onClose={jest.fn()} />,
+      <SegmentPreview
+        segment={seg}
+        videoUri={null}
+        onSave={jest.fn()}
+        onShare={jest.fn()}
+        onClose={jest.fn()}
+      />,
     );
     expect(screen.getByText('Preparing playback...')).toBeTruthy();
   });

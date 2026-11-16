@@ -2,10 +2,10 @@ import json
 from pathlib import Path
 
 import pytest
-from storage3._sync.file_api import DEFAULT_FILE_OPTIONS
+from storage3.exceptions import StorageApiError
 
 from visio_recorder.recording_loop import flush_pending
-from visio_recorder.supabase_clients import build_supabase_clients
+from visio_recorder.supabase_clients import SupabaseStorage, build_supabase_clients
 from visio_recorder.upload_queue import enqueue, list_pending
 
 
@@ -29,37 +29,75 @@ class FakeAuth:
         return FakeAuthResponse(self._user_id)
 
 
-class DuplicateObjectError(RuntimeError):
-    """What Supabase Storage answers a non-upsert POST over an existing key."""
-
-
 class FakeStorageBucket:
-    # Models the one storage3/Supabase behaviour the retry path depends on:
-    # a POST over a key that already exists is rejected unless the request
-    # carries x-upsert, and storage3 merges file_options over
-    # DEFAULT_FILE_OPTIONS, so an unset key keeps its default rather than
-    # being absent.
+    # Mirrors the local storage API: x-upsert=false rejects an existing key
+    # with a 409 Duplicate (status as a string, as storage3 reports it).
     def __init__(self, bucket: str, uploads: list, objects: dict) -> None:
         self._bucket = bucket
         self._uploads = uploads
         self._objects = objects
+        self.info_has_size = True
 
-    def upload(self, path: str, data: bytes, file_options: dict | None = None) -> None:
-        headers = {**DEFAULT_FILE_OPTIONS, **(file_options or {})}
+    def upload(self, path: str, file, file_options=None) -> None:
+        # Record what supabase-py's storage3 would turn into the request: the
+        # file handle (read here, while the adapter still holds it open) and
+        # the headers it would send.
+        data = file.read() if hasattr(file, "read") else file
+        self._uploads.append(
+            {
+                "bucket": self._bucket,
+                "path": path,
+                "file": file,
+                "data": data,
+                "file_options": file_options,
+            }
+        )
         key = (self._bucket, path)
-        if key in self._objects and headers["x-upsert"] != "true":
-            raise DuplicateObjectError(f"The resource already exists: {path}")
+        if key in self._objects:
+            raise StorageApiError("The resource already exists", "Duplicate", "409")
         self._objects[key] = data
-        self._uploads.append((self._bucket, path, data, headers))
+
+    def info(self, path: str) -> dict:
+        # Like the storage API: a missing object is a 404 not_found.
+        if (self._bucket, path) not in self._objects:
+            raise StorageApiError("Object not found", "not_found", 404)
+        info: dict = {"name": path}
+        if self.info_has_size:
+            info["size"] = len(self._objects[(self._bucket, path)])
+        return info
+
+    def list(self, folder: str, options: dict | None = None) -> list[dict]:
+        # Like the storage API: names sorted ascending, filtered by a name
+        # prefix search, and capped at one page (storage3's default limit 100).
+        options = options or {}
+        prefix = f"{folder}/"
+        search = options.get("search", "")
+        names = sorted(
+            path[len(prefix) :]
+            for (bucket, path) in self._objects
+            if bucket == self._bucket
+            and path.startswith(prefix)
+            and path[len(prefix) :].startswith(search)
+        )
+        return [
+            {
+                "name": name,
+                "metadata": {"size": len(self._objects[(self._bucket, prefix + name)])},
+            }
+            for name in names[: options.get("limit", 100)]
+        ]
 
 
 class FakeStorage:
-    def __init__(self, uploads: list, objects: dict) -> None:
+    def __init__(self, uploads: list) -> None:
         self._uploads = uploads
-        self._objects = objects
+        self.objects: dict = {}
+        self.info_has_size = True
 
     def from_(self, bucket: str) -> FakeStorageBucket:
-        return FakeStorageBucket(bucket, self._uploads, self._objects)
+        api = FakeStorageBucket(bucket, self._uploads, self.objects)
+        api.info_has_size = self.info_has_size
+        return api
 
 
 class FakeTable:
@@ -81,8 +119,7 @@ class FakeSupabase:
     def __init__(self, user_id: str = "user-123") -> None:
         self.auth = FakeAuth(user_id)
         self.uploads: list = []
-        self.objects: dict = {}
-        self.storage = FakeStorage(self.uploads, self.objects)
+        self.storage = FakeStorage(self.uploads)
         self.upserts: dict = {}
 
     @property
@@ -123,34 +160,131 @@ def test_storage_adapter_uploads_to_bucket_and_path(tmp_path):
 
     clients.storage.upload("segments", "device-abc/20260709_080000.mp4", local)
 
-    bucket, path, data, _headers = fake.uploads[0]
-    assert (bucket, path, data) == (
-        "segments",
-        "device-abc/20260709_080000.mp4",
-        b"vid",
-    )
-    assert len(fake.uploads) == 1
+    [upload] = fake.uploads
+    assert upload["bucket"] == "segments"
+    assert upload["path"] == "device-abc/20260709_080000.mp4"
+    assert upload["data"] == b"vid"
 
 
-def test_storage_adapter_labels_segments_and_markers_by_their_own_type(tmp_path):
-    # storage3's DEFAULT_FILE_OPTIONS content type is text/plain;charset=UTF-8
-    # and file_options is merged *over* it, so leaving the key unset does not
-    # mean "let the server sniff it" - it means every object is stored
-    # mislabelled. `.marker` has no registered type, hence the fallback.
+def _upload_one(tmp_path: Path, filename: str) -> dict:
     fake = FakeSupabase()
     clients = build_supabase_clients(
-        "http://x", "anon", _write_session(tmp_path), client_factory=lambda u, k: fake
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
     )
-    segment = tmp_path / "20260709_080000.mp4"
-    segment.write_bytes(b"vid")
-    marker = tmp_path / "FLAG_20260709_080000.marker"
-    marker.write_bytes(b"")
+    local = tmp_path / filename
+    local.write_bytes(b"payload")
+    clients.storage.upload("segments", f"device-abc/{filename}", local)
+    [upload] = fake.uploads
+    return upload
 
-    clients.storage.upload("segments", "device-abc/20260709_080000.mp4", segment)
-    clients.storage.upload("segments", "device-abc/FLAG_20260709_080000.marker", marker)
 
-    assert fake.uploads[0][3]["content-type"] == "video/mp4"
-    assert fake.uploads[1][3]["content-type"] == "application/octet-stream"
+def _storage_with_existing(
+    tmp_path: Path, existing: bytes, *, info_has_size: bool = True
+) -> tuple[FakeSupabase, SupabaseStorage]:
+    fake = FakeSupabase()
+    fake.storage.info_has_size = info_has_size
+    fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] = existing
+    clients = build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
+    return fake, clients.storage
+
+
+def test_storage_adapter_never_requests_an_overwrite(tmp_path):
+    # Keys are naive local timestamps that can repeat (DST fall-back, a Pi
+    # without an RTC booting before NTP sync), so an upsert could replace an
+    # earlier, different segment.
+    upload = _upload_one(tmp_path, "20260709_080000.mp4")
+
+    assert "upsert" not in upload["file_options"]
+
+
+def test_storage_adapter_retry_does_not_resend_an_already_stored_file(tmp_path):
+    # The size check runs before the upload, so a retried ~170 MB segment is
+    # not sent over WiFi again only to be rejected as a duplicate.
+    fake, storage = _storage_with_existing(tmp_path, b"payload")
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"payload")
+
+    storage.upload("segments", "device-abc/20260709_080000.mp4", local)
+
+    assert fake.uploads == []
+
+
+@pytest.mark.parametrize("info_has_size", [True, False])
+def test_storage_adapter_retry_of_an_already_stored_file_succeeds(
+    tmp_path, info_has_size
+):
+    # flush_pending retries a queued file on every boot. If the first attempt
+    # reached storage but the device lost power before unlinking it, the retry
+    # targets an object that already exists and must count as uploaded.
+    fake, storage = _storage_with_existing(
+        tmp_path, b"payload", info_has_size=info_has_size
+    )
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"payload")
+
+    storage.upload("segments", "device-abc/20260709_080000.mp4", local)
+
+    assert fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] == (
+        b"payload"
+    )
+
+
+def test_storage_adapter_retry_finds_the_stored_size_past_the_first_list_page(
+    tmp_path,
+):
+    # A device folder passes 100 objects within about a day; the list fallback
+    # must target the one key rather than read the first page of the folder.
+    fake, storage = _storage_with_existing(tmp_path, b"payload", info_has_size=False)
+    for i in range(150):
+        fake.storage.objects[("segments", f"device-abc/20260101_{i:06d}.mp4")] = b""
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"payload")
+
+    storage.upload("segments", "device-abc/20260709_080000.mp4", local)
+
+
+def test_storage_adapter_refuses_a_different_file_under_an_existing_key(tmp_path):
+    fake, storage = _storage_with_existing(tmp_path, b"earlier segment")
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"later, different segment")
+
+    with pytest.raises(FileExistsError):
+        storage.upload("segments", "device-abc/20260709_080000.mp4", local)
+
+    assert fake.uploads == []
+    assert fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] == (
+        b"earlier segment"
+    )
+
+
+def test_storage_adapter_labels_segments_as_video_mp4(tmp_path):
+    # storage3's default content-type is text/plain;charset=UTF-8.
+    upload = _upload_one(tmp_path, "20260709_080000.mp4")
+
+    assert upload["file_options"]["content-type"] == "video/mp4"
+
+
+def test_storage_adapter_labels_flag_markers_as_binary(tmp_path):
+    upload = _upload_one(tmp_path, "FLAG_20260709_080000.marker")
+
+    assert upload["file_options"]["content-type"] == "application/octet-stream"
+
+
+def test_storage_adapter_streams_the_file_instead_of_reading_it_whole(tmp_path):
+    # A ~170 MB segment read into one bytes object is a large share of a
+    # 512 MB Pi Zero 2W; handing storage3 the open file lets httpx stream it.
+    upload = _upload_one(tmp_path, "20260709_080000.mp4")
+
+    assert not isinstance(upload["file"], bytes)
+    assert hasattr(upload["file"], "read")
 
 
 def test_a_retry_after_power_loss_between_upload_and_unlink_still_drains(tmp_path):
@@ -173,26 +307,13 @@ def test_a_retry_after_power_loss_between_upload_and_unlink_still_drains(tmp_pat
 
     # The pre-crash boot: the first segment reached storage, then the power
     # went before mark_uploaded could unlink it.
-    fake.objects[("segments", "device-abc/20260709_080000.mp4")] = b"vid"
+    fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] = b"vid"
 
     uploaded = flush_pending(queue_dir, clients.storage, "device-abc")
 
     assert uploaded == 2
     assert list_pending(queue_dir) == []
-
-
-def test_upload_raises_when_the_object_exists_and_upsert_is_not_requested():
-    # Pins the fake to the behaviour the test above depends on: without
-    # x-upsert this is a hard error, not a silent overwrite. If Supabase ever
-    # stopped rejecting duplicates, the test above would pass for the wrong
-    # reason and this one would fail and say so.
-    fake = FakeSupabase()
-    fake.objects[("segments", "device-abc/20260709_080000.mp4")] = b"vid"
-
-    with pytest.raises(DuplicateObjectError):
-        fake.storage.from_("segments").upload(
-            "device-abc/20260709_080000.mp4", b"vid", {"x-upsert": "false"}
-        )
+    assert [u["path"] for u in fake.uploads] == ["device-abc/20260709_080500.mp4"]
 
 
 def test_status_adapter_upserts_device_status_row(tmp_path):

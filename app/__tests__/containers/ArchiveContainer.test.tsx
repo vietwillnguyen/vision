@@ -28,7 +28,11 @@ const REEL_ROW_EMPTY_KEY = {
   style: 'clean',
 };
 
-function fakeClient(options?: { reelsInRange?: unknown[]; singleReelData?: unknown; singleReelError?: { message: string } }) {
+function fakeClient(options?: {
+  reelsInRange?: unknown[];
+  singleReelData?: unknown;
+  singleReelError?: { message: string };
+}) {
   const reelsInRangeData = options?.reelsInRange ?? [REEL_ROW];
   const singleReelData = options?.singleReelData ?? REEL_ROW;
   const singleReelError = options?.singleReelError ?? null;
@@ -51,12 +55,14 @@ function fakeClient(options?: { reelsInRange?: unknown[]; singleReelData?: unkno
       return chain;
     },
     limit: () => {
-      const data = queryType === 'range' ? reelsInRangeData : singleReelData ? [singleReelData] : null;
+      const data =
+        queryType === 'range' ? reelsInRangeData : singleReelData ? [singleReelData] : null;
       const error = queryType === 'range' ? null : singleReelError;
       return Promise.resolve({ data, error });
     },
     then: (onFulfilled: (v: { data: unknown; error: unknown }) => unknown) => {
-      const data = queryType === 'range' ? reelsInRangeData : singleReelData ? [singleReelData] : null;
+      const data =
+        queryType === 'range' ? reelsInRangeData : singleReelData ? [singleReelData] : null;
       const error = queryType === 'range' ? null : singleReelError;
       return Promise.resolve({ data, error }).then(onFulfilled);
     },
@@ -76,7 +82,11 @@ function fakeClient(options?: { reelsInRange?: unknown[]; singleReelData?: unkno
 describe('ArchiveContainer', () => {
   it('renders 30 UTC-midnight-aligned cells ending today', async () => {
     render(
-      <ArchiveContainer client={fakeClient()} deviceId="dev-1" now={() => new Date('2026-07-18T23:30:00Z')} />,
+      <ArchiveContainer
+        client={fakeClient()}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T23:30:00Z')}
+      />,
     );
     await waitFor(() => expect(screen.getByTestId('archive-heatmap')).toBeTruthy());
     expect(screen.getByTestId('heatmap-cell-2026-06-19')).toBeTruthy();
@@ -87,7 +97,11 @@ describe('ArchiveContainer', () => {
 
   it('plays the reel for a pressed day', async () => {
     render(
-      <ArchiveContainer client={fakeClient()} deviceId="dev-1" now={() => new Date('2026-07-18T12:00:00Z')} />,
+      <ArchiveContainer
+        client={fakeClient()}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T12:00:00Z')}
+      />,
     );
     await waitFor(() => expect(screen.getByTestId('heatmap-cell-2026-07-10')).toBeTruthy());
     fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-10'));
@@ -99,7 +113,10 @@ describe('ArchiveContainer', () => {
   it('handles empty s3_key without crashing', async () => {
     render(
       <ArchiveContainer
-        client={fakeClient({ reelsInRange: [REEL_ROW_EMPTY_KEY], singleReelData: REEL_ROW_EMPTY_KEY })}
+        client={fakeClient({
+          reelsInRange: [REEL_ROW_EMPTY_KEY],
+          singleReelData: REEL_ROW_EMPTY_KEY,
+        })}
         deviceId="dev-1"
         now={() => new Date('2026-07-18T12:00:00Z')}
       />,
@@ -119,7 +136,11 @@ describe('ArchiveContainer', () => {
       singleReelError: { message: 'Failed to fetch reel details' },
     });
     render(
-      <ArchiveContainer client={errorClient} deviceId="dev-1" now={() => new Date('2026-07-18T12:00:00Z')} />,
+      <ArchiveContainer
+        client={errorClient}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T12:00:00Z')}
+      />,
     );
     await waitFor(() => expect(screen.getByTestId('heatmap-cell-2026-07-10')).toBeTruthy());
     fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-10'));

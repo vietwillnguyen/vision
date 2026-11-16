@@ -181,8 +181,9 @@ def test_worker_survives_a_marker_the_segment_drain_removed_first(tmp_path):
     # the rest of the daemon's life, leaving every later press to wait for the
     # ~5-minute segment drain instead of uploading immediately.
     #
-    # The x-upsert fix is what exposed this: the duplicate upload used to raise
-    # "already exists" inside the try, so execution never reached the unlink.
+    # Idempotent uploads are what exposed this: a duplicate upload used to
+    # raise "already exists" inside the try, so execution never reached the
+    # unlink. SupabaseStorage now treats a same-size stored object as uploaded.
     queue_dir = tmp_path / "queue"
     first = write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 0))
     storage = ConcurrentlyRemovedStorageClient({first.name})

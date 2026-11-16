@@ -24,7 +24,10 @@ describe('DeviceScreen', () => {
 
   it('shows an error state', () => {
     render(
-      <DeviceScreen state={{ kind: 'error', message: 'network down' }} onReonboardPress={jest.fn()} />,
+      <DeviceScreen
+        state={{ kind: 'error', message: 'network down' }}
+        onReonboardPress={jest.fn()}
+      />,
     );
     expect(screen.getByTestId('device-error')).toHaveTextContent('network down');
   });

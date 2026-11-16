@@ -109,7 +109,11 @@ The Camera Module 3 Wide with a post-process FFmpeg filter is the recommended de
 
 ### OS
 
-Raspberry Pi OS Lite (Bookworm, 64-bit headless).
+Raspberry Pi OS Lite (trixie / Debian 13, 64-bit headless).
+
+**As-built deviation:** this spec originally targeted Bookworm; the provisioned device runs trixie, verified during physical bring-up for device provisioning (PR #26).
+Two trixie differences matter to provisioning: `dphys-swapfile` is replaced by `rpi-swap`, and the Raspberry Pi archive no longer ships `pijuice-base`.
+The firmware's Python floor stays 3.11 (`requires-python`), while trixie itself ships Python 3.13.
 
 ### Recording Daemon (`visio-recorder`)
 
@@ -117,13 +121,18 @@ A single Python systemd service manages the full device lifecycle.
 
 **Startup sequence (as-built, Epic 5 daemon glue):**
 
-1. PiJuice powers on Pi; systemd starts `visio-recorder` with `EnvironmentFile=/etc/visio-recorder.env` supplying Supabase credentials and the data-dir/segment/framerate tunables.
-2. Check battery level via PiJuice API. If below the halt threshold (<10%), flash LED red and exit 0 without recording; below the 20% low-battery threshold, proceed but show the low-battery LED throughout.
+1. PiJuice powers on Pi; systemd starts `visio-recorder` with `EnvironmentFile=/etc/visio-recorder.env` supplying Supabase credentials and the data-dir/segment/framerate/battery-source tunables.
+   The unit's `ExecStartPre` runs the runtime preflight check (`python -m visio_recorder.preflight`) first, and `main()` runs the same checks again before anything else, so a missing camera, data dir, or hardware library fails fast with a clear diagnostic instead of partway through startup; see the [provisioning & preflight spec](2026-07-21-visio-device-provisioning-design.md).
+2. Check battery level through the reader `VISIO_BATTERY_SOURCE` selects (`pijuice`, the default, reads the PiJuice API; `none` is the bring-up-only unmetered reader for a USB power bank). If below the halt threshold (<10%), flash LED red and exit 0 without recording; below the 20% low-battery threshold, proceed but show the low-battery LED throughout.
 3. First boot only (no session file on disk yet): scan a QR code via `rpicam-still` + zbar to onboard WiFi (writes the NetworkManager keyfile) and Supabase auth, up to 60 attempts; exit 1 if onboarding never succeeds.
    Then activate the connection (`nmcli connection reload` + `nmcli connection up visio`); on activation failure, flash the Critical red LED and exit 1 so systemd retries.
    On restart boots (session file already on disk), the same reload/up runs again as a best-effort retry whenever the keyfile exists, so a first boot whose activation failed is not stranded offline; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
 4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
-5. Flush any pending upload queue left over from a previous run.
+5. Flush any pending upload queue left over from a previous run, then recover orphaned captures that an unclean stop (SIGTERM mid-capture, power cut, crash) left at the top level of the data dir, and flush again only if anything was recovered.
+   A lone or interrupted `.h264` is (re-)muxed and queued, and a lone `.mp4` is queued as is.
+   On a mux failure the partial `.mp4` is removed, but the `.h264` is deleted only when it is zero bytes; a non-empty capture is kept for the next boot, since the failure may be transient (for example a full SD card).
+   Recovery runs here because no capture is in flight yet; see `recover_orphaned_segments` in `firmware/visio_recorder/recording_loop.py`.
+   The segments both flushes upload seed the `segments_uploaded_today` count the recording loop reports, so a boot-time backlog counts as uploaded today the same way an in-loop drain does.
 6. Register the GPIO 17 flag-button listener, then begin rolling H.264 recording via `rpicam-vid`.
 
 **Recording loop (as-built):**
@@ -134,7 +143,7 @@ A single Python systemd service manages the full device lifecycle.
 - The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop, and no connectivity watcher or polling.
   A failed upload's file stays queued until a drain reaches it: the next *successful* segment upload flushes the whole queue, because that success is itself the proof connectivity is back, and the next process startup's flush (step 5 above) covers a daemon that restarts before then.
   So a WiFi gap during the day self-heals on the first segment after the network returns, rather than stranding its segments until the next boot.
-- Uploads are idempotent (`x-upsert`), and every drain treats "no longer queued" rather than "this call unlinked it" as the postcondition.
+- Uploads are idempotent without overwriting: the storage adapter looks the object up first, treats an existing object of the local file's byte size as already uploaded, and refuses (leaving the file queued) one of a different size, since keys are second-resolution local timestamps that can repeat; every drain treats "no longer queued" rather than "this call unlinked it" as the postcondition.
   Both matter because a file is only unlinked *after* its upload returns: a power cut in that window leaves the object stored and the file still queued, and the segment drain and the flag-upload worker walk the same queue directory concurrently, so either can vacate a file the other is mid-way through.
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
 - On successful upload, local file is deleted to free SD space.
@@ -184,6 +193,9 @@ segments_pending, segments_uploaded_today, recording_active, updated_at
 
 The mobile app subscribes to this row via Supabase Realtime for live status without polling.
 
+`recording_active` reflects whether the recording loop is running: the daemon also upserts the row with `recording_active = true` before the first capture and with `recording_active = false` (and the final counts) after the loop exits for any reason - stop signal, battery halt, or a capture failure.
+Those two upserts log and swallow their own failures, so an unreachable Supabase can neither block recording nor turn a clean stop into a crash.
+
 ---
 
 ## Cloud AI Pipeline
@@ -197,6 +209,36 @@ Supabase Edge Functions were ruled out because the pipeline is Python + FFmpeg a
 The pending-segment-count threshold trigger is not implemented.
 
 **As-built addition:** storage keys the nightly run cannot process (unparseable/out-of-prefix keys, flag markers matching no segment window) are persisted to a `pipeline_dlq` table and retried each night with an attempt count; after 5 attempts the key is escalated and the device owner is notified via push.
+
+### Segment Duration Contract
+
+A segment's length is a property of its file, never of the recording configuration.
+The firmware's 5-minute segment length (`VISIO_SEGMENT_DURATION_MS`) is only an upper bound: a stop press, a crash or a dead battery ends a segment early, and a segment that ends early is still a valid segment.
+This contract is a prerequisite for start/stop recording, which will produce short segments routinely.
+
+What each side guarantees:
+
+- **Firmware** names each segment `YYYYMMDD_HHMMSS.mp4` after its capture start, and muxes it with the capture framerate (`ffmpeg -framerate <fps> -c copy`), so the MP4 container's duration is the real recorded length.
+  It reports no duration anywhere else: no field in the key, no column, no metadata.
+  An early-ended segment only has to be a finalised, muxable file; nothing about its length needs signalling.
+- **Pipeline** downloads and probes every segment (`ffprobe` `format=duration`) before matching flag markers, and that measured length is the only segment length it uses.
+  A file with no measurable duration (not video, zero length, no video stream) is rejected into `pipeline_dlq` as `rejected`, like a malformed key, and the rest of the device day carries on.
+  A failed download is not a rejection: it fails the device day, which the next run retries.
+
+Where the measured length is used:
+
+| Consumer | Rule |
+|---|---|
+| Flag-marker window | A segment covers `[recorded_at, recorded_at + duration)`; a marker in the gap after a short segment matches nothing and is DLQ'd as `unmatched`. |
+| Clip extraction | The clip is `min(15 s, duration)` long, centred: offset `(duration - clip) / 2`, so it always starts inside the file. |
+| Vision frames | The 3 frames are spread over the real duration (`fps=3/<duration>`), so a short segment is not scored with no frames. |
+| `segments.duration_sec` | Whole seconds, rounded up (after rounding to the millisecond, so probe noise cannot add a second), so a window rebuilt from the row still covers every one-second marker the file covers. A re-run rewrites it on existing rows. |
+| `reels.duration_sec` | The assembled reel is probed and its length stored, rounded to the nearest second; a reel more than 1 s away from the sum of its clips is logged as a warning, since that means a clip was dropped. |
+
+Flag markers have one-second resolution (`FLAG_YYYYMMDD_HHMMSS`), so the in-memory window uses the exact measured float and the stored integer rounds up rather than to nearest.
+
+**As-built finding (silent segments):** the firmware records video only, and `ffmpeg` refuses to extract audio from a file with no audio stream, so before this was handled every real device day failed in Stage 1.
+A segment with no audio stream now scores as silence without a Whisper call.
 
 ### Pipeline Stages
 
@@ -243,7 +285,7 @@ A diversity constraint prevents two consecutive segments from the same location 
 
 **Stage 6 - FFmpeg Assembly**
 
-Selected segments are concatenated and encoded as 720p H.264 MP4.
+A 15-second clip is cut from the middle of each selected segment (the whole segment if it is shorter, see Segment Duration Contract), and the clips are concatenated and encoded as 720p H.264 MP4.
 
 Standard output: clean 720p feed.
 

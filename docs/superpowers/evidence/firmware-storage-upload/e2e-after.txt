@@ -1,0 +1,7 @@
+segment: 20260714_090000.mp4 5502888 bytes
+first upload: ok, peak python memory 312051 bytes (0.06x file size)
+power cut before mark_uploaded: file stays queued
+next boot flush_pending uploaded: 1
+queue after flush: []
+stored mimetype: video/mp4  size: 5502888
+downloaded object ffprobe: duration=59.933000

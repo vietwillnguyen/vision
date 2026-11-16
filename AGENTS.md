@@ -8,7 +8,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Gates
 
-PRs are gated by `.github/workflows/tests.yml` (pytest, jest, web-bundle smoke, pgTAP), `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint, shellcheck), and `.github/workflows/hooks.yml` (the pre-commit hook's own suite plus a re-verification of the `docs/ARCHITECTURE.html` manifest); `tsc --noEmit` runs in both tests.yml and lint.yml, so a type error reddens both.
+PRs are gated by `.github/workflows/tests.yml` (pytest, jest, web-bundle smoke, pgTAP, generated-database-types drift check), `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint, prettier, shellcheck), and `.github/workflows/hooks.yml` (the pre-commit hook's own suite plus a re-verification of the `docs/ARCHITECTURE.html` manifest); `tsc --noEmit` runs in both tests.yml and lint.yml, so a type error reddens both.
 README's "Lint, format, and type-check" section has the exact local commands.
 Run them before proposing a change is done; `uv run --locked` means a dependency edit must be followed by `uv lock` in that package.
 
@@ -23,6 +23,10 @@ working directories - read it before inventing one.
   must go through `uv`, never bare `pip`.
 - `app/` - `npx tsc --noEmit`, `npx jest --ci`, plus an `expo export` web-bundle
   smoke check that catches native-only modules imported at module top level.
+- Generated database types - `scripts/gen-db-types.sh` regenerates
+  `app/src/generated/database.ts` and `integration/tests/fixtures/public_schema.json`
+  from a running local Supabase; CI fails on any diff, so a `public` schema
+  migration must be followed by a regeneration in the same PR.
 - `supabase/tests/database/` - pgTAP, run with `supabase test db`. This is the
   database contract (RLS policies, table grants, storage bucket policies) that
   every other subsystem codes against. `supabase test db` creates the `pgtap`

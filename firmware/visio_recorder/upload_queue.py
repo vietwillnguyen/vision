@@ -21,5 +21,6 @@ def mark_uploaded(path: Path) -> None:
     # every successful segment. Either can upload and remove a file in the
     # window between the other's upload and its mark_uploaded, and both call
     # this outside their try. "No longer queued" is the postcondition callers
-    # want, matching the idempotent upload the x-upsert header already gives.
+    # want, matching the idempotent upload SupabaseStorage already gives (an
+    # object already stored with the same size counts as uploaded).
     path.unlink(missing_ok=True)

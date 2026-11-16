@@ -19,7 +19,11 @@ interface ArchiveContainerProps {
   now?: () => Date;
 }
 
-export function ArchiveContainer({ client, deviceId, now = () => new Date() }: ArchiveContainerProps) {
+export function ArchiveContainer({
+  client,
+  deviceId,
+  now = () => new Date(),
+}: ArchiveContainerProps) {
   // buildHeatmapCells assumes UTC-midnight-aligned bounds; normalize before calling it
   // or users west of UTC get off-by-one day cells.
   const [{ start, end }] = useState(() => utcRangeEndingAt(now(), HEATMAP_DAYS));
@@ -28,7 +32,9 @@ export function ArchiveContainer({ client, deviceId, now = () => new Date() }: A
   const selectedReel = useReel(client, deviceId, selectedDate);
   const signedUrl = useSignedUrl(
     client,
-    selectedReel.kind === 'ready' && selectedReel.reel.s3Key ? buildReelSignedUrlRequest(selectedReel.reel.s3Key) : null,
+    selectedReel.kind === 'ready' && selectedReel.reel.s3Key
+      ? buildReelSignedUrlRequest(selectedReel.reel.s3Key)
+      : null,
   );
 
   if (reelsState.kind === 'loading') {
@@ -86,7 +92,12 @@ export function ArchiveContainer({ client, deviceId, now = () => new Date() }: A
 }
 
 const styles = StyleSheet.create({
-  message: { flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' },
+  message: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   playerWrap: { flex: 1, backgroundColor: colors.background },
   backWrap: { padding: spacing.md },
   muted: { color: colors.textMuted, fontSize: 16, textAlign: 'center' },

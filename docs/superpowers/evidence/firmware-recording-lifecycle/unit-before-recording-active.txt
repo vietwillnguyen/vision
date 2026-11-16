@@ -1,0 +1,12 @@
+E       assert [0] == [1]
+E         
+E         At index 0 diff: 0 != 1
+E         Use -v to get more diff
+E       assert True is False
+E       assert True is False
+E       IndexError: list index out of range
+FAILED tests/test_daemon.py::test_loop_reports_recording_active_before_the_first_segment
+FAILED tests/test_daemon.py::test_stop_reports_recording_inactive_as_the_final_status
+FAILED tests/test_daemon.py::test_battery_halt_reports_recording_inactive_after_the_drain
+FAILED tests/test_daemon.py::test_capture_failure_reports_recording_inactive_and_still_raises
+4 failed, 15 passed in 6.31s

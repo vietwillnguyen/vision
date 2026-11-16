@@ -1,0 +1,5 @@
+# git: 75590aa fix(pipeline): score silent segments instead of failing the device day (pipeline code before the duration fix; harness from caf35c5)
+ERROR pipeline.orchestrator nightly run failed for device 6f79513a-b518-4d6a-9f60-61945c6af47f
+    raise RuntimeError(
+RuntimeError: ffmpeg exited with code 234: ble-libglslang --enable-libgme --enable-libgsm --enable-libharfbuzz --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspe
+[out#0/mp4 @ 0x59d437bd7e40] Output file does not contain any stream

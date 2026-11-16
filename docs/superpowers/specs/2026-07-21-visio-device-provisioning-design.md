@@ -9,7 +9,7 @@ This spec covers two components that close both gaps: an idempotent device-provi
 
 ## Goals
 
-- One idempotent script that takes a freshly flashed Raspberry Pi OS Lite (Bookworm) image to a state where `visio-recorder` can run, safe to re-run after an SD re-flash, OS update, or to repair drift.
+- One idempotent script that takes a freshly flashed Raspberry Pi OS Lite image (trixie / Debian 13, the OS verified on the device during bring-up; Bookworm remains supported by the script) to a state where `visio-recorder` can run, safe to re-run after an SD re-flash, OS update, or to repair drift.
 - A firmware-level preflight check that fails fast with a clear diagnostic when the runtime environment is missing something the daemon needs, instead of failing opaquely partway through startup.
 - Resolve the NetworkManager-keyfile-write permission gap (`wifi_onboard.py`'s `write_nm_keyfile` writes into a root-owned directory) and the likely-related `rpi_ws281x` root/DMA requirement, both currently unaddressed by the existing `User=pi` unit.
 - Run without a PiJuice HAT physically present: the PiJuice Zero pHAT specified in the hardware BOM is currently blocked on availability. Bring-up proceeds on a generic USB power bank instead, so neither the setup script nor the preflight check may treat missing battery hardware as fatal.

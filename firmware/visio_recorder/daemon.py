@@ -4,7 +4,7 @@ import queue
 import signal
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -33,8 +33,10 @@ from visio_recorder.recording_loop import (
     DiskStatsReader,
     ShutilDiskStatsReader,
     StatusClient,
+    build_device_status,
     flush_pending,
     on_segment_complete,
+    recover_orphaned_segments,
 )
 from visio_recorder.supabase_clients import build_supabase_clients
 from visio_recorder.uploader import StorageClient
@@ -133,6 +135,34 @@ class LoopDeps:
     segments_uploaded_at_start: int = 0
 
 
+def _push_recording_status(
+    deps: LoopDeps, segments_uploaded_today: int, recording_active: bool
+) -> None:
+    """Tell the app whether the device is recording, without ever raising.
+
+    Called from the main thread only while the worker is idle (before the
+    first segment, after the drain), so it never races the worker's own
+    per-segment upserts. A failure is logged and swallowed: at shutdown the
+    network is often already gone, and neither a clean stop nor the start of
+    recording may depend on reaching Supabase.
+    """
+    try:
+        status = build_device_status(
+            device_id=deps.device_id,
+            battery_pct=read_battery_status(deps.battery_reader).pct,
+            disk_stats_reader=deps.disk_stats_reader,
+            data_dir=deps.data_dir,
+            queue_dir=deps.queue_dir,
+            segments_uploaded_today=segments_uploaded_today,
+            recording_active=recording_active,
+        )
+        deps.status_client.upsert_device_status(asdict(status))
+    except Exception:
+        _logger.exception(
+            "could not report recording_active=%s to device_status", recording_active
+        )
+
+
 def run_recording_loop(
     deps: LoopDeps,
     stop: threading.Event,
@@ -146,8 +176,15 @@ def run_recording_loop(
     the queue via a ``None`` sentinel before joining the worker; on halt, the
     CRITICAL LED is applied after the drain so it is the final LED state and
     cannot be overwritten by the drained segments' LED restores.
+
+    ``device_status.recording_active`` is pushed True before the first capture
+    and False once the loop has exited for any reason (stop, halt, or a
+    capture failure escaping), after the drain so the final row carries the
+    final counts. Per-segment upserts in between report True.
     """
     work: queue.Queue[Path | None] = queue.Queue()
+    # Written only by the worker; read by the main thread only after join().
+    uploaded_today = [deps.segments_uploaded_at_start]
 
     def worker() -> None:
         segments_uploaded_today = deps.segments_uploaded_at_start
@@ -178,6 +215,7 @@ def run_recording_loop(
                 )
                 continue
             segments_uploaded_today = result.segments_uploaded_today
+            uploaded_today[0] = segments_uploaded_today
             if result.upload_ok:
                 consecutive_failures = 0
             else:
@@ -188,6 +226,11 @@ def run_recording_loop(
                 if consecutive_failures >= UPLOAD_FAILURES_TO_CRITICAL:
                     apply_led_state(deps.led_driver, LedState.CRITICAL)
 
+    _push_recording_status(
+        deps,
+        segments_uploaded_today=deps.segments_uploaded_at_start,
+        recording_active=True,
+    )
     worker_thread = threading.Thread(target=worker)
     worker_thread.start()
     halted = False
@@ -210,6 +253,9 @@ def run_recording_loop(
     finally:
         work.put(None)
         worker_thread.join()
+        _push_recording_status(
+            deps, segments_uploaded_today=uploaded_today[0], recording_active=False
+        )
     if halted:
         apply_led_state(deps.led_driver, LedState.CRITICAL)
 
@@ -275,7 +321,17 @@ def main() -> int:
         register_device(clients.registration, device_id, _DEVICE_NAME)
         registered_marker_path.touch()
 
+    command_runner = SubprocessCommandRunner()
+    # Boot drain: flush what the queue already holds, recover captures an
+    # unclean stop left in data_dir, then flush again so the recovered ones go
+    # up before recording starts. Both drains seed the same uploaded counter.
     segments_uploaded_at_start = flush_pending(queue_dir, clients.storage, device_id)
+    if recover_orphaned_segments(
+        config.data_dir, queue_dir, command_runner, config.framerate
+    ):
+        segments_uploaded_at_start += flush_pending(
+            queue_dir, clients.storage, device_id
+        )
 
     stop = threading.Event()
 
@@ -297,7 +353,7 @@ def main() -> int:
     )
 
     deps = LoopDeps(
-        command_runner=SubprocessCommandRunner(),
+        command_runner=command_runner,
         storage_client=clients.storage,
         status_client=clients.status,
         led_driver=led_driver,

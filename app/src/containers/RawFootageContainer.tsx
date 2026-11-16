@@ -20,7 +20,11 @@ interface RawFootageContainerProps {
   now?: () => Date;
 }
 
-export function RawFootageContainer({ client, deviceId, now = () => new Date() }: RawFootageContainerProps) {
+export function RawFootageContainer({
+  client,
+  deviceId,
+  now = () => new Date(),
+}: RawFootageContainerProps) {
   const [dayStart] = useState(() => toUtcMidnight(now()));
   const { state, setUserFeedback } = useSegments(client, deviceId, dayStart.toISOString());
   const [selected, setSelected] = useState<Segment | null>(null);
@@ -107,7 +111,12 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, padding: spacing.md },
   title: { color: colors.text, fontSize: 20, fontWeight: '600', marginBottom: spacing.md },
   previewWrap: { marginTop: spacing.md },
-  message: { flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' },
+  message: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   muted: { color: colors.textMuted, fontSize: 16 },
   error: { color: colors.danger, fontSize: 16 },
 });

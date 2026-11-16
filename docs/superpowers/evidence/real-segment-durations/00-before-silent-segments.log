@@ -1,0 +1,4 @@
+ERROR pipeline.orchestrator nightly run failed for device f31db72c-fca7-4d38-90fd-e39776632184
+    raise RuntimeError(
+RuntimeError: ffmpeg exited with code 234: encl --enable-opengl --disable-sndio --enable-libvpl --disable-libmfx --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-ladspa --enable-libbluray --enable-libjack --enable-libpulse --enable-librabbitmq --enable-librist --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libx264 --enable-libzmq --enable-libzvbi --enable-lv2 --enable-sdl2 --enable-libplacebo --enable-librav1e --enable-pocketsphinx --enable-librsvg --enable-libjxl --enable-shared
+[out#0/wav @ 0x5a68834dc8c0] Output file does not contain any stream

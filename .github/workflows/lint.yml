@@ -19,7 +19,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check shellcheck is available
         # Preinstalled on the ubuntu-latest runner image; install as a fallback
         # so a runner image change fails loudly here rather than silently
@@ -37,6 +37,7 @@ jobs:
         # ones here - `git ls-files | xargs -r awk 'FNR==1 && /^#!.*sh/'` lists them.
         run: |
           shellcheck --severity=style \
+            docs/superpowers/evidence/dependabot-triage/seed-screens.sh \
             firmware/scripts/setup-device.sh \
             scripts/gen-db-types.sh \
             scripts/hooks/pre-commit \
@@ -55,11 +56,12 @@ jobs:
       run:
         working-directory: ${{ matrix.package }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
-          # Device target is Python 3.11 on Raspberry Pi OS Bookworm, same as
-          # tests.yml - lint on the floor the code has to run on.
+          # Python 3.11 is the floor all three packages declare, same as
+          # tests.yml - lint on the oldest interpreter the code must support.
+          # The device itself runs Raspberry Pi OS trixie (Python 3.13).
           python-version: "3.11"
           enable-cache: true
       - name: Ruff lint
@@ -76,8 +78,8 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -91,5 +93,7 @@ jobs:
           NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 60000
       - name: ESLint
         run: npm run lint
+      - name: Prettier
+        run: npm run format:check
       - name: Type-check
         run: npm run typecheck

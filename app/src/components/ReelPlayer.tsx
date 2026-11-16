@@ -32,7 +32,12 @@ export function ReelPlayer({ videoUri, title, onShare }: ReelPlayerProps) {
         </View>
       )}
       <View style={styles.buttonWrap}>
-        <Button title="Share" color={colors.accent} accessibilityLabel="Share reel" onPress={onShare} />
+        <Button
+          title="Share"
+          color={colors.accent}
+          accessibilityLabel="Share reel"
+          onPress={onShare}
+        />
       </View>
     </View>
   );

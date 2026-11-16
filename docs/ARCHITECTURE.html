@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 999393902e3d36c3362bbb34a5d6d91ccb474961e53a638ecf1f8cad5159f2be  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 047fb25f0873259616300e0600e41365fefd3071f47137589070d42fb255cc27  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
-<!-- source-sha256: 42c4fb31d70a1d679c34a83513ba16c5fcbf7f1e0ce4ac09271a711eede083ea  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-08-06 (spec-sync, upload retry contract) -->
+<!-- source-sha256: 3384171423a5e28b5483328948b6aaa2803701e4f3cbeadace21f6dfbe4da8fc  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
+<!-- regenerated-at: 2026-11-17 (merge of main into PR #26: preflight + battery source before boot drain/orphan recovery; size-checked upload retry) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -181,14 +181,19 @@ flowchart TD
 
   <section id="firmware" class="space-y-4">
     <h2 class="text-2xl font-bold">Firmware Daemon — <code>visio-recorder</code></h2>
-    <p class="text-base-content/70 max-w-3xl">As-built via the Epic 5 daemon-glue plan (issue #7, PR #15). Single Python systemd service, <code>main()</code> composes already-unit-tested parts.</p>
+    <p class="text-base-content/70 max-w-3xl">As-built via the Epic 5 daemon-glue plan (issue #7, PR #15). Single Python systemd service, <code>main()</code> composes already-unit-tested parts. Runs on Raspberry Pi OS Lite trixie (Debian 13, 64-bit headless), verified on the device during provisioning bring-up; the spec originally targeted Bookworm. The firmware's Python floor stays 3.11 while trixie ships 3.13.</p>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold mb-2">Startup composition</h3>
         <pre class="mermaid">
 flowchart TD
-  A["systemd starts visio-recorder<br/>EnvironmentFile=/etc/visio-recorder.env"] --> B{"battery below 10%?"}
+  A["systemd starts visio-recorder<br/>EnvironmentFile=/etc/visio-recorder.env"] --> P0{"ExecStartPre: visio_recorder.preflight<br/>any block-severity failure?"}
+  P0 -- yes --> P1["unit fails to start<br/>(systemd retries)"]
+  P0 -- no --> P2{"main(): preflight.run_checks again<br/>any block-severity failure?"}
+  P2 -- yes --> P3["exit 1"]
+  P2 -- no --> BR["battery reader from VISIO_BATTERY_SOURCE<br/>(pijuice | none)"]
+  BR --> B{"battery below 10%?"}
   B -- yes --> B1["CRITICAL LED, exit 0"]
   B -- no --> C{"session.json exists?"}
   C -- "no (first boot)" --> D["QR onboarding: WiFi NM keyfile<br/>+ Supabase auth, up to 60 attempts"]
@@ -202,8 +207,11 @@ flowchart TD
   F -- no --> G["register_device, then touch marker"]
   F -- yes --> H
   G --> H["flush_pending queue"]
-  H --> I0["start flag-upload worker,<br/>register GPIO 17 flag-button listener"]
-  I0 --> I["run_recording_loop"]
+  H --> R["recover_orphaned_segments<br/>(mux + queue leftover .h264/.mp4;<br/>keep non-empty captures on mux failure)"]
+  R -- "recovered any" --> H2["flush_pending again"]
+  R -- none --> I0
+  H2 --> I0["start flag-upload worker,<br/>register GPIO 17 flag-button listener"]
+  I0 --> I["run_recording_loop<br/>(seeded with both flushes' upload count;<br/>upsert recording_active=true first)"]
         </pre>
       </div>
       <div class="card bg-base-100 shadow p-4">
@@ -217,7 +225,8 @@ flowchart TD
   W -- "any success" --> RESET["reset failure counter"]
   W -- "any success" --> BACKLOG["flush_pending:<br/>drain the queue backlog"]
   M -- "battery halt or stop signal" --> DRAIN["drain queue, join() worker"]
-  DRAIN --> HALT["apply CRITICAL after worker fully joins"]
+  DRAIN --> OFF["upsert recording_active=false<br/>(any exit path; never raises)"]
+  OFF --> HALT["apply CRITICAL after worker fully joins (halt only)"]
         </pre>
       </div>
     </div>
@@ -227,8 +236,9 @@ flowchart TD
       <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per 5-minute segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
         <li>Upload retry has no continuous while-running loop, no connectivity watcher and no polling - a failed segment stays queued until a <em>drain</em> reaches it: the next <em>successful</em> segment upload, which flushes the whole queue because that success is itself the connectivity signal, or the next process start. A daytime WiFi gap therefore self-heals on the first segment after the network returns instead of stranding its segments until the next boot.</li>
-        <li>Uploads are idempotent (<span class="font-mono text-xs bg-base-200 rounded px-1">x-upsert</span>) and every drain's unlink tolerates an already-gone file - a file is unlinked only <em>after</em> its upload returns, so a power cut in that window, or the flag-upload worker walking the same queue directory, must not poison the retry.</li>
+        <li>Uploads are idempotent without overwriting: the storage adapter looks the object up first, counts an existing object of the local file's byte size as already uploaded, and refuses one of a different size (keys are second-resolution local timestamps that can repeat), leaving that file queued. Every drain's unlink tolerates an already-gone file - a file is unlinked only <em>after</em> its upload returns, so a power cut in that window, or the flag-upload worker walking the same queue directory, must not poison the retry.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
+        <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
       </ul>
     </div>
@@ -279,7 +289,7 @@ flowchart TD
       <li class="step step-primary">Scene (Claude Haiku)</li>
       <li class="step step-primary">Composite score</li>
       <li class="step step-primary">Highlight select</li>
-      <li class="step step-primary">FFmpeg assembly</li>
+      <li class="step step-primary">FFmpeg assembly (15 s clip per segment)</li>
       <li class="step step-primary">Push delivery</li>
     </ul>
     <div class="card bg-base-100 shadow p-4">
@@ -291,6 +301,29 @@ score = base_score * 1.5  (if manually flagged)
     </div>
     <div class="alert alert-info alert-soft text-sm" role="alert">
       <span><strong>Trigger (as-built):</strong> the pipeline runs as the <span class="font-mono text-xs bg-base-200 rounded px-1">nightly-reel</span> GitHub Actions workflow - nightly cron at 19:00 UTC (02:00 device-local ICT), plus <span class="font-mono text-xs bg-base-200 rounded px-1">workflow_dispatch</span> with an optional <span class="font-mono text-xs bg-base-200 rounded px-1">day</span> input for manual runs. Supabase Edge Functions were ruled out (pipeline is Python + FFmpeg; Edge Functions run Deno), and the spec's pending-segment-count threshold trigger is not implemented. Keys a run cannot process land in <span class="font-mono text-xs bg-base-200 rounded px-1">pipeline_dlq</span> for nightly retry; after 5 attempts the key is escalated and the device owner is notified via push.</span>
+    </div>
+    <div class="card bg-base-100 shadow p-4 space-y-2">
+      <h3 class="font-semibold text-sm">Segment duration contract</h3>
+      <p class="text-xs text-base-content/70">A segment's length is a property of its file, never of the recording config: the firmware's 5-minute length is only an upper bound (stop press, crash, dead battery). Prerequisite for start/stop recording.</p>
+      <ul class="list-disc list-inside text-xs space-y-1">
+        <li><strong>Firmware</strong> names the segment after its capture start and muxes it with the capture framerate, so the MP4's container duration is real. It reports duration nowhere else.</li>
+        <li><strong>Pipeline</strong> downloads and <span class="font-mono">ffprobe</span>s every segment before matching flag markers. No measurable duration &rarr; <span class="font-mono">pipeline_dlq</span> <span class="font-mono">rejected</span>; a failed download fails the device day for retry.</li>
+      </ul>
+      <div class="overflow-x-auto rounded-box border border-base-content/10">
+        <table class="table table-xs">
+          <thead><tr><th>Consumer</th><th>Rule</th></tr></thead>
+          <tbody>
+            <tr><td>Flag-marker window</td><td><span class="font-mono">[recorded_at, recorded_at + duration)</span>; a marker in the gap after a short segment is <span class="font-mono">unmatched</span></td></tr>
+            <tr><td>Clip extraction</td><td><span class="font-mono">min(15 s, duration)</span>, centred at <span class="font-mono">(duration - clip) / 2</span>, always inside the file</td></tr>
+            <tr><td>Vision frames</td><td>3 frames spread over the real duration (<span class="font-mono">fps=3/&lt;duration&gt;</span>)</td></tr>
+            <tr><td><span class="font-mono">segments.duration_sec</span></td><td>whole seconds, rounded up (one-second markers stay covered); rewritten on re-run</td></tr>
+            <tr><td><span class="font-mono">reels.duration_sec</span></td><td>probed from the assembled reel, nearest second; &gt;1 s off the clip total is logged as a dropped clip</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="alert alert-success alert-soft text-sm" role="alert">
+      <span><strong>Silent segments scored, not failed.</strong> The pendant records video only and <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg</span> refuses to extract audio from a file with no audio stream, which failed every real device day in Stage 1. A segment with no audio stream now scores as silence without a Whisper call.</span>
     </div>
   </section>
 

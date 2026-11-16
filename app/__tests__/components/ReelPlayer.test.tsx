@@ -13,7 +13,9 @@ jest.mock('expo-video', () => {
 
 describe('ReelPlayer', () => {
   it('renders the video view with an accessibility label when a uri is ready', () => {
-    render(<ReelPlayer videoUri="https://signed/reel.mp4" title="Today's Reel" onShare={jest.fn()} />);
+    render(
+      <ReelPlayer videoUri="https://signed/reel.mp4" title="Today's Reel" onShare={jest.fn()} />,
+    );
     expect(screen.getByTestId('video-view')).toBeTruthy();
     expect(screen.getByLabelText('Reel video player')).toBeTruthy();
   });
@@ -26,7 +28,9 @@ describe('ReelPlayer', () => {
 
   it('invokes onShare from the labeled share button', () => {
     const onShare = jest.fn();
-    render(<ReelPlayer videoUri="https://signed/reel.mp4" title="Today's Reel" onShare={onShare} />);
+    render(
+      <ReelPlayer videoUri="https://signed/reel.mp4" title="Today's Reel" onShare={onShare} />,
+    );
     fireEvent.press(screen.getByLabelText('Share reel'));
     expect(onShare).toHaveBeenCalled();
   });

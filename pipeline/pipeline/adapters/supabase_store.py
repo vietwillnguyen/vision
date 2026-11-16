@@ -112,6 +112,7 @@ class SupabaseStore:
             if row["s3_key"] in existing_keys:
                 self._client.table("segments").update(
                     {
+                        "duration_sec": row["duration_sec"],
                         "composite_score": row["composite_score"],
                         "manually_flagged": row["manually_flagged"],
                     }
