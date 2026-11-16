@@ -1,8 +1,12 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
+import type { VisionClient } from '../lib/supabase';
 import type { Reel } from '../types';
+import { parseReelStyle } from '../types';
+import type { Tables } from '../generated/database';
 import { useResetOnInputChange } from './useResetOnInputChange';
+
+type ReelRow = Tables<'reels'>;
 
 export type ReelState =
   | { kind: 'loading' }
@@ -15,7 +19,7 @@ export type ReelsState =
   | { kind: 'error'; message: string }
   | { kind: 'ready'; reels: Reel[] };
 
-export function useReel(client: SupabaseClient, deviceId: string, date: string | null): ReelState {
+export function useReel(client: VisionClient, deviceId: string, date: string | null): ReelState {
   const [state, setState] = useState<ReelState>({ kind: date ? 'loading' : 'none' });
 
   useResetOnInputChange([client, deviceId, date], () =>
@@ -36,7 +40,7 @@ export function useReel(client: SupabaseClient, deviceId: string, date: string |
       .order('created_at', { ascending: false })
       .limit(1)
       .then(
-        ({ data, error }: { data: Record<string, unknown>[] | null; error: { message: string } | null }) => {
+        ({ data, error }) => {
           if (!isMounted) return;
           if (error || !data) {
             setState({ kind: 'error', message: error?.message ?? 'reel fetch failed' });
@@ -60,7 +64,7 @@ export function useReel(client: SupabaseClient, deviceId: string, date: string |
 }
 
 export function useReelsInRange(
-  client: SupabaseClient,
+  client: VisionClient,
   deviceId: string,
   startDate: string,
   endDate: string,
@@ -81,7 +85,7 @@ export function useReelsInRange(
       .gte('date', startDate)
       .lte('date', endDate)
       .then(
-        ({ data, error }: { data: Record<string, unknown>[] | null; error: { message: string } | null }) => {
+        ({ data, error }) => {
           if (!isMounted) return;
           if (error || !data) {
             setState({ kind: 'error', message: error?.message ?? 'reels fetch failed' });
@@ -102,12 +106,12 @@ export function useReelsInRange(
   return state;
 }
 
-function mapReelRow(row: Record<string, unknown>): Reel {
+function mapReelRow(row: ReelRow): Reel {
   return {
-    id: row.id as string,
-    date: row.date as string,
-    s3Key: row.s3_key as string,
-    durationSec: row.duration_sec as number,
-    style: row.style as Reel['style'],
+    id: row.id,
+    date: row.date,
+    s3Key: row.s3_key,
+    durationSec: row.duration_sec,
+    style: parseReelStyle(row.style),
   };
 }

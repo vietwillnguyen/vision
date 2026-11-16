@@ -1,4 +1,3 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import React, { useMemo, useState } from 'react';
 import { Alert, Share, StyleSheet, Text, View } from 'react-native';
 
@@ -13,9 +12,10 @@ import { buildSegmentSignedUrlRequest } from '../logic/segmentExport';
 import { buildTimelineSlots, type TimelineSlot } from '../logic/timeline';
 import { colors, spacing } from '../theme';
 import type { Segment } from '../types';
+import type { VisionClient } from '../lib/supabase';
 
 interface RawFootageContainerProps {
-  client: SupabaseClient;
+  client: VisionClient;
   deviceId: string;
   now?: () => Date;
 }

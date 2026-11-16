@@ -1,8 +1,12 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { useCallback, useEffect, useState } from 'react';
 
+import type { VisionClient } from '../lib/supabase';
 import type { Segment } from '../types';
+import { parseUserFeedback } from '../types';
+import type { Tables } from '../generated/database';
 import { useResetOnInputChange } from './useResetOnInputChange';
+
+type SegmentRow = Tables<'segments'>;
 
 export type SegmentsState =
   | { kind: 'loading' }
@@ -12,7 +16,7 @@ export type SegmentsState =
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function useSegments(
-  client: SupabaseClient,
+  client: VisionClient,
   deviceId: string,
   dayStartIso: string,
 ): {
@@ -35,7 +39,7 @@ export function useSegments(
       .lt('recorded_at', dayEndIso)
       .order('recorded_at', { ascending: true })
       .then(
-        ({ data, error }: { data: Record<string, unknown>[] | null; error: { message: string } | null }) => {
+        ({ data, error }) => {
           if (!isMounted) return;
           if (error || !data) {
             setState({ kind: 'error', message: error?.message ?? 'segments fetch failed' });
@@ -91,13 +95,13 @@ export function useSegments(
   return { state, setUserFeedback };
 }
 
-function mapSegmentRow(row: Record<string, unknown>): Segment {
+function mapSegmentRow(row: SegmentRow): Segment {
   return {
-    id: row.id as string,
-    recordedAt: row.recorded_at as string,
-    durationSec: row.duration_sec as number,
-    s3Key: row.s3_key as string,
-    manuallyFlagged: row.manually_flagged as boolean,
-    userFeedback: (row.user_feedback as Segment['userFeedback']) ?? null,
+    id: row.id,
+    recordedAt: row.recorded_at,
+    durationSec: row.duration_sec,
+    s3Key: row.s3_key,
+    manuallyFlagged: row.manually_flagged,
+    userFeedback: parseUserFeedback(row.user_feedback),
   };
 }

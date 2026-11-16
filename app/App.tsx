@@ -1,6 +1,5 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { StatusBar } from 'expo-status-bar';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -14,10 +13,11 @@ import { useAuth } from './src/hooks/useAuth';
 import { useDevice } from './src/hooks/useDevice';
 import { supabase } from './src/lib/supabase';
 import { colors } from './src/theme';
+import type { VisionClient } from './src/lib/supabase';
 
 const Tab = createBottomTabNavigator();
 
-export function AppRoot({ client }: { client: SupabaseClient }) {
+export function AppRoot({ client }: { client: VisionClient }) {
   const { state, signIn } = useAuth(client);
 
   if (state.kind === 'loading') {
@@ -43,7 +43,7 @@ export function AppRoot({ client }: { client: SupabaseClient }) {
   return <SignedInApp client={client} />;
 }
 
-function SignedInApp({ client }: { client: SupabaseClient }) {
+function SignedInApp({ client }: { client: VisionClient }) {
   const device = useDevice(client);
 
   if (device.kind === 'loading') {

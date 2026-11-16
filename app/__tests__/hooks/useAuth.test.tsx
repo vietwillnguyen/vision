@@ -1,7 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
-import type { Session, SupabaseClient } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
 
 import { useAuth } from '../../src/hooks/useAuth';
+import type { VisionClient } from '../../src/lib/supabase';
 
 const SESSION = { access_token: 'tok', user: { id: 'u1' } } as unknown as Session;
 
@@ -19,7 +20,7 @@ function fakeAuthClient(initialSession: Session | null) {
       signInWithPassword,
       signOut,
     },
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
   return {
     client,
     signInWithPassword,
@@ -36,7 +37,7 @@ function fakeAuthClientWithFailingSession(error: Error) {
       signInWithPassword: jest.fn(),
       signOut: jest.fn().mockResolvedValue({ error: null }),
     },
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
   return { client };
 }
 

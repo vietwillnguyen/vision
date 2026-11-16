@@ -28,9 +28,11 @@ app/                 -- Epic 3: React Native (Expo) mobile companion app
   src/screens/       -- presentational screens (props in, JSX out)
   src/components/    -- presentational components (timeline, segment preview, reel player)
   src/theme.ts       -- shared dark theme for StyleSheet styling
+  src/generated/     -- generated Supabase schema types (`npm run gen:types`)
+  src/types.ts       -- hand-written camelCase domain types the rows map into
   __tests__/         -- Jest suites run via `npm test`
 integration/         -- Epic 5: cross-service integration suite (Python package)
-  tests/             -- pytest suites running firmware + pipeline + app's real code
+  tests/             -- pytest suites running firmware's and pipeline's real code
                         against each other, and against a live local Supabase
 docs/
   superpowers/
@@ -66,7 +68,7 @@ Each workflow's own `on:` block is the authoritative branch list, and two of the
 `tests.yml` and `hooks.yml` instead carry an explicit temporary entry per unmerged feature branch that has PRs stacked on it, each commented in place with the condition for removing it, so a stacked PR is not left with no suites and no manifest check at all.
 
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 (the Raspberry Pi OS Bookworm device target); `--locked` enforces the committed `uv.lock`.
-The app job runs `npm ci`, `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
+The app job runs `npm ci`, a regeneration check on the committed database types (see [Generated database types](#generated-database-types)), `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
 The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the nine suites in [`supabase/tests/database/`](supabase/tests/database).
 It is a step inside that job rather than a job of its own because the suites finish in about a second, so a dedicated job would spend a third `supabase start` to save nothing, and because a new job would have to be added as a required status check in branch protection before it actually gated anything, whereas a step inherits the existing job's protection immediately.
@@ -107,7 +109,7 @@ The `shellcheck` job in [`lint.yml`](.github/workflows/lint.yml) holds the file 
 
 The shared database contract every other subsystem codes against:
 
-- Tables: `devices`, `device_status`, `segments`, `reels`, `score_weights` (score weight defaults 0.4/0.3/0.2), and (added post-Epic-0 for issue #5) `pipeline_dlq`, the nightly pipeline's service_role-only dead-letter queue; `reels` is unique on `(device_id, date)` so same-day pipeline re-runs upsert.
+- Tables: `devices`, `device_status`, `segments`, `reels`, `score_weights` (score weight defaults 0.4/0/0.2 - audio is 0 until the firmware records any, see the scoring bullet below), and (added post-Epic-0 for issue #5) `pipeline_dlq`, the nightly pipeline's service_role-only dead-letter queue; `reels` is unique on `(device_id, date)` so same-day pipeline re-runs upsert.
 - `devices.push_token` (nullable) stores the mobile app's Expo push token for nightly reel notifications.
 - Row-level security on every table: rows are visible only to the owning user (`auth.uid()` matched directly or via the owning device's `user_id`).
 - Private `segments` and `reels` storage buckets with owner-scoped object policies keyed on the `{device_id}/` path prefix.
@@ -122,6 +124,8 @@ supabase start      # start the local stack
 supabase db reset   # recreate the database from migrations
 supabase test db    # run the pgTAP test suites
 ```
+
+Any migration that changes the `public` schema must be followed by a regeneration of the committed schema artifacts - see [Generated database types](#generated-database-types); CI fails on drift.
 
 The stack `supabase start` boots is trimmed: Studio, analytics, the edge runtime, and vector storage are disabled in [`supabase/config.toml`](supabase/config.toml), each with an inline comment recording why it is unused here.
 Flip `[studio]` back on locally if you want the table editor.
@@ -167,7 +171,10 @@ The unit-tested core of the nightly job that turns a day's segments into a highl
 Every stage is a pure function or takes an injectable client `Protocol`, so the test suite never calls a real LLM, FFmpeg, or Expo:
 
 - Ingestion (`pipeline/ingestion.py`): builds `segments` rows from storage object keys (`YYYYMMDD_HHMMSS.mp4`) and applies manual flag markers (`FLAG_YYYYMMDD_HHMMSS.marker`). Unparseable or out-of-device-prefix keys are returned as rejects, and markers matching no segment window as unmatched, for DLQ-style retry by the orchestrator.
-- Scoring (`pipeline/scoring/`): audio activity from transcription features, motion intensity from frame diffs (low-motion segments skip vision scoring as a cost gate), and scene novelty from a vision LLM routed through LiteLLM (Claude Haiku default, `json_schema` structured outputs). Combined by the composite formula: weighted sum (default weights 0.4/0.3/0.2), times 1.5 when manually flagged.
+- Scoring (`pipeline/scoring/`): audio activity from transcription features, motion intensity from frame diffs (low-motion segments skip vision scoring as a cost gate), and scene novelty from a vision LLM routed through LiteLLM (Claude Haiku default, `json_schema` structured outputs). Combined by the composite formula: weighted sum (default weights 0.4/0/0.2), times 1.5 when manually flagged.
+  The audio weight is deliberately 0, overriding the design spec's 0.3: the firmware records no audio (`rpicam-vid` with no ALSA source), so the transcription term is either a constant or Whisper hallucination noise.
+  Restore it to 0.3 in `pipeline/models.py` and a new migration together when `vision-audio-capture` lands a microphone.
+  Transcription still runs at weight 0 - the orchestrator extracts audio and calls the transcriber before scoring - so zeroing the weight does not yet save that cost.
 - Selection (`pipeline/selection/`): fills a 90s target with 15s clips, always includes manually flagged segments, and never places two same-location clips back to back.
 - Assembly (`pipeline/assembly/`): builds the FFmpeg trim and concat commands (720p, optional vintage filter).
 - Delivery (`pipeline/delivery/`): Expo push notification when the reel is ready.
@@ -189,7 +196,7 @@ uv run --extra dev pytest   # run the unit test suite
 
 The React Native (Expo, TypeScript) app: a bottom tab navigator (`@react-navigation/bottom-tabs`) composing Today's Reel, Raw Footage, Device, and Archive behind real Supabase Auth (sign-in, session restore, and `@react-native-async-storage/async-storage` session persistence), backed by `src/logic/` calculation, `src/hooks/` data fetching, and `src/containers/` wiring the two together to presentational screens/components.
 
-- Strict layering: `src/logic/` is pure TypeScript with zero React imports; hooks take an injected `SupabaseClient` as their first parameter (tested with a fake client, never a real network call, and never imported as a module-level singleton outside `App.tsx` and `src/lib/supabase.ts`); `src/containers/` wire hooks to presentational screens/components.
+- Strict layering: `src/logic/` is pure TypeScript with zero React imports; hooks take an injected `VisionClient` (the schema-typed `SupabaseClient<Database>`, see [Generated database types](#generated-database-types)) as their first parameter (tested with a fake client, never a real network call, and never imported as a module-level singleton outside `App.tsx` and `src/lib/supabase.ts`); `src/containers/` wire hooks to presentational screens/components.
 - Video playback uses `expo-video` (registered as a config plugin in `app.json`), not the deprecated `expo-av`; timeline thumbnails are generated and cached per-segment via `expo-video-thumbnails`.
 - `useDeviceStatus` exposes a discriminated `loading | error | ready` state and a `subscribe()` status callback so realtime channel errors (`CHANNEL_ERROR`/`TIMED_OUT`/`CLOSED`) surface as a stale banner instead of silently-stale data.
 - Archive heat-map ranges are normalized to UTC midnight via `src/logic/dates.ts` (30-day inclusive range), avoiding the off-by-one the original plan's Handoff section warned about for users west of UTC.
@@ -211,9 +218,26 @@ npx expo start --web  # preview in a browser (layout/styling only - no native vi
 
 Lint and type-check commands are in [Lint, format, and type-check](#lint-format-and-type-check).
 
+### Generated database types
+
+`app/src/generated/database.ts` is generated by `supabase gen types typescript` and committed.
+`src/lib/supabase.ts` builds the client as `createClient<Database>(...)`, so every `.from(...).select(...)` in the app resolves to the real column list - names and nullability included - and a query the schema cannot answer is a compile error rather than a runtime surprise.
+
+Generated snake_case row shapes stop at the data-access edge: the hooks map them into the hand-written camelCase domain types in `src/types.ts` (`Segment`, `Reel`, `DeviceStatus`), so no component or hook signature mentions a column name.
+
+Regenerate after any migration:
+
+```bash
+cd app && npm run gen:types    # wraps scripts/gen-db-types.sh; needs Docker and psql
+```
+
+That one command writes both generated artifacts from a live local Supabase instance: the TypeScript types above, and `integration/tests/fixtures/public_schema.json`, the `information_schema` dump the Python row-shape contract test reads (generated TypeScript does nothing for `pipeline/`).
+It starts and stops the stack itself, or reuses a running one after applying any migrations that stack is missing.
+The `app` job in [`tests.yml`](.github/workflows/tests.yml) re-runs it against the instance it has already started and fails on any diff, so a migration cannot land without a regeneration.
+
 ## Cross-service integration suite (Epic 5)
 
-A fourth Python package whose tests run each subsystem's *real* code against the others, rather than against each subsystem's private fakes: firmware's marker/segment writers against pipeline's parsers, pipeline's real row shapes against the migrations and the app's `mapReelRow()`, and pipeline's real `SupabaseStore` plus firmware's real uploader against a live local Supabase instance for the RLS and storage-ingestion handoffs.
+A fourth Python package whose tests run each subsystem's *real* code against the others, rather than against each subsystem's private fakes: firmware's marker/segment writers against pipeline's parsers, pipeline's real row shapes against the generated schema fixture, and pipeline's real `SupabaseStore` plus firmware's real uploader against a live local Supabase instance for the RLS and storage-ingestion handoffs.
 Tests that need a live instance skip themselves when the `SUPABASE_*` env vars are unset, so the suite is runnable without Docker.
 `.github/workflows/tests.yml`'s `integration` job starts a real Supabase instance, so those tests actually run (not skip) on every PR.
 
