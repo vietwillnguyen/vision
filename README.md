@@ -134,7 +134,9 @@ The manual flag marker (`FLAG_YYYYMMDD_HHMMSS.marker`, `flag_button.py`) is wire
 Every hardware or network boundary (PiJuice, GPIO, WS2812B LEDs, `ffmpeg`/`rpicam-vid`, Supabase) is a small `Protocol` with a fake used in tests; `daemon.py` is the only module that wires real implementations together.
 On boot it runs the battery/LED startup sequence, scans a QR code to onboard WiFi (writing a NetworkManager keyfile) and Supabase auth on first boot, activates the NetworkManager connection (`nmcli connection reload` + `up`, retried best-effort on restart boots), registers the device, flushes any queued uploads left over from a previous run, recovers captures an unclean stop left behind, then starts the per-segment `rpicam-vid` capture loop with the flag-button listener and a background upload worker with real disk-usage stats.
 Configuration is read from environment variables via the systemd unit's `EnvironmentFile=/etc/visio-recorder.env`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR`, `VISIO_SEGMENT_DURATION_MS`, `VISIO_FRAMERATE`.
-Device prerequisites beyond this project's `uv.lock`: `apt install zbar-tools` for QR decoding, plus the `pijuice`, `rpi_ws281x`, and `gpiozero` system packages for the battery, LED, and flag-button drivers on the Pi.
+Device prerequisites beyond this project's `uv.lock`: `apt install zbar-tools` for QR decoding, plus the `pijuice`, `python3-spidev`, and `python3-gpiozero` system packages for the battery, LED, and flag-button drivers on the Pi.
+The status LED is a WS2812B driven over SPI0 MOSI (GPIO 10), so the device needs `dtparam=spi=on` and `core_freq_fixed=1` in `/boot/firmware/config.txt`, and the daemon's user needs the `spi` group; GPIO 18-21 stay free for an I2S microphone.
+The pendant spec's "GPIO Pin Map" and "LED driver" sections have the wiring and the SPI timing.
 
 ### Local development
 

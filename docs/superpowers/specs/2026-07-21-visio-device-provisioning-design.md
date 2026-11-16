@@ -116,7 +116,64 @@ This also surfaces and fixes a latent bug: the current unit's `ExecStart=/usr/bi
 
 ## Open Questions / Future Work
 
-- Whether `rpi_ws281x` genuinely requires root on this specific board/kernel combo, or would work via `spidev` under a non-root user, is being deferred rather than investigated — running as root (this spec's decision) makes the question moot for now, but worth revisiting if the device's threat model ever changes (e.g., if it grows a network-facing control surface).
+- ~~Whether `rpi_ws281x` genuinely requires root on this specific board/kernel combo, or would work via `spidev` under a non-root user~~ - resolved by the LED SPI rewire: the firmware no longer uses `rpi_ws281x`; see "LED SPI rewire follow-ups for PR #26" below.
 - The setup script does not handle the reboot itself; a follow-up manual step (or a documented `sudo reboot` in the script's final summary output) is still needed the first time interfaces are enabled.
 - Selecting and wiring the real battery hardware (PiSugar 2/3, a generic I2C-fuel-gauge UPS HAT, or a hand-built TP4056/IP5306 + MAX17048 combo - see "Battery hardware: deferred" above) is separate future work: a new `BatteryReader` driver plus a new `VISIO_BATTERY_SOURCE` value. Not scoped here.
 - The hardware BOM documents (`2026-07-04-visio-pendant-design.md`, `2026-07-04-visio-hardware.md`) still specify PiJuice as the power management line item; they carry a pointer note to this spec but haven't been rewritten, since the eventual replacement isn't chosen yet.
+
+## LED SPI rewire follow-ups for PR #26
+
+The firmware now drives the WS2812B status LED over SPI0 MOSI (GPIO 10) with py-spidev instead of `rpi_ws281x` PWM/DMA on GPIO 18 (pendant spec, "GPIO Pin Map" and "LED driver").
+This spec's PR #26 (draft, unmerged) still provisions and checks for `rpi_ws281x`, so it needs the changes below when it is next rebased.
+They were deliberately not made in the rewire PR, which leaves the unit and `setup-device.sh` to #26.
+
+### Required for the LED to work
+
+1. **`setup-device.sh` apt step:** add `python3-spidev` to the `apt-get install` line (Debian trixie ships it, 3.6-1, arm64; prebuilt, nothing compiles on the device).
+2. **`setup-device.sh` code step:** delete `RPI_WS281X_SPEC`, the `rpi_ws281x` import probe, the build-dependency install, the `uv pip install` of `rpi-ws281x`, the `ws281x_missing` summary flag and its comments.
+   With it goes the only on-device compile, and with that the build toolchain the step installs.
+   The venv keeps `--system-site-packages`, which is how the daemon already imports apt-installed `gpiozero` and will import `spidev`.
+3. **`setup-device.sh` interfaces step:** enable SPI the same way I2C is enabled - `raspi-config nonint get_spi`, and `raspi-config nonint do_spi 0` only when it is off, marking a reboot as required.
+4. **`setup-device.sh` interfaces step:** ensure `core_freq_fixed=1` is present in `/boot/firmware/config.txt` (idempotent append under `[all]`), marking a reboot as required when it was added.
+   Without it the Zero 2W's core clock scales between 250 and 400 MHz while `spi-bcm2835` keeps the rate it cached at probe, which can shift the SPI clock by up to 1.6x and corrupt colours.
+   Raspberry Pi recommends this flag over pinning `core_freq` directly; it holds the higher 400 MHz rate, so it does not cost H.264 encode headroom.
+5. **`preflight.py`:** replace the `rpi_ws281x` importable check with `spidev` importable (block), and add `/dev/spidev0.0` exists and is writable by the daemon's user (block - it fails when SPI is off or the user lacks the `spi` group).
+   Optionally warn when `vcgencmd get_config core_freq_fixed` is not `1`.
+6. **Docs in #26:** replace `rpi_ws281x` with `python3-spidev` wherever the prerequisites are listed.
+
+### Now possible: drop root
+
+The "Permission model change" above ran the daemon as root for two reasons, and the rewire removes one of them (`/dev/mem`).
+The other, NetworkManager, needs a firmware change as well as configuration, so de-rooting is a separate follow-up rather than part of #26's LED changes:
+
+7. **Service user:** create a system user (for example `visio`, `useradd --system --home-dir /var/lib/visio-recorder --shell /usr/sbin/nologin`) in groups `video` (camera and `rpicam-*`), `gpio` (flag button via `/dev/gpiochip*`), `i2c` (`/dev/i2c-1` for the PiJuice or replacement fuel gauge) and `spi` (`/dev/spidev0.0`).
+   Raspberry Pi OS's udev rules (`raspberrypi-sys-mods`, `99-com.rules`) give `spidev`, `i2c-dev` and `*gpiomem*` devices to those groups with mode 0660.
+   `chown -R visio: /var/lib/visio-recorder`, and make `/etc/visio-recorder.env` `root:visio` mode 0640.
+8. **Unit:** add `User=visio` and `Group=visio` (plus `SupplementaryGroups=video gpio i2c spi` so the groups apply even if the account's membership drifts), keep `ExecStartPre` and `ExecStart` as they are.
+9. **NetworkManager - firmware change first:** a polkit rule alone cannot de-root the current onboarding code.
+   `wifi_onboard.write_nm_keyfile` writes into the root-only `/etc/NetworkManager/system-connections/`, and NetworkManager refuses keyfiles that are not owned by root ("File owner ... is insecure", `nms-keyfile-utils.c`), so a non-root daemon cannot author a keyfile NetworkManager will load.
+   `nmcli connection reload` (D-Bus `ReloadConnections`) is denied to every non-root caller by NetworkManager's own D-Bus policy (`org.freedesktop.NetworkManager.conf`), which polkit never sees.
+   So onboarding has to create the profile through NetworkManager instead: `nmcli connection add type wifi con-name visio ifname wlan0 ssid <ssid> wifi-sec.key-mgmt wpa-psk wifi-sec.psk <psk>` (or `connection modify` when `visio` exists), which NetworkManager writes as a root-owned keyfile itself, then `nmcli connection up visio`.
+   The "keyfile exists" re-onboarding check becomes "connection `visio` exists".
+10. **Polkit rule** for the new calls, in `/etc/polkit-1/rules.d/50-visio-recorder.rules`:
+
+    ```js
+    polkit.addRule(function (action, subject) {
+      if (subject.user === "visio" &&
+          (action.id === "org.freedesktop.NetworkManager.settings.modify.system" ||
+           action.id === "org.freedesktop.NetworkManager.network-control")) {
+        return polkit.Result.YES;
+      }
+    });
+    ```
+
+    `settings.modify.system` covers adding and modifying the system connection, `network-control` covers `connection up`.
+
+### Needs the physical device
+
+- Move the LED data wire from GPIO 18 (header pin 12) to GPIO 10 (header pin 19).
+- Visually check each colour after provisioning: green (recording), blue (uploading), yellow (low battery), red (critical).
+- Confirm the WS2812B latches 3.3 V SPI data reliably.
+  The datasheet's input-high threshold is 0.7 x VDD, 3.5 V at a 5 V supply, which a 3.3 V GPIO does not meet on paper; this was equally true of the PWM wiring, so it is not new, but it has never been bench-tested.
+  If colours flicker or come out wrong, the options are a 74AHCT125 (or SN74LVC1T45) level shifter on the data line, or powering the LED from 3.3 V (then 0.7 x VDD is 2.3 V, though 3.3 V is below the datasheet's 3.5 V minimum supply, so that too needs a bench check).
+- Confirm `vcgencmd measure_clock core` reads 400 MHz both idle and while `rpicam-vid` is encoding, with `core_freq_fixed=1` set.

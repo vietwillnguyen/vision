@@ -1,0 +1,41 @@
+SPI frames written: 17, overlapping: 0
+
+| t (s) | event |
+|---|---|
+|  0.001 | boot: startup sequence |
+|  0.002 | LED -> green (0, 255, 0) [504 B] |
+|  0.003 | capture 1 starts (20261116_090000.h264) |
+|  0.173 | capture 2 starts (20261116_090500.h264) |
+|  0.238 | LED -> blue (0, 0, 255) [504 B] |
+|  0.239 | segment upload 1 ok (11366 bytes) |
+|  0.240 | LED -> green (0, 255, 0) [504 B] |
+|  0.355 | flag button pressed |
+|  0.355 | flag marker uploaded (FLAG_20261116_211830.marker) |
+|  0.355 | capture 3 starts (20261116_091000.h264) |
+|  0.419 | LED -> blue (0, 0, 255) [504 B] |
+|  0.419 | segment upload 2 FAILS (network down) |
+|  0.420 | LED -> green (0, 255, 0) [504 B] |
+|  0.519 | capture 4 starts (20261116_091500.h264) |
+|  0.581 | LED -> blue (0, 0, 255) [504 B] |
+|  0.581 | segment upload 3 FAILS (network down) |
+|  0.582 | LED -> green (0, 255, 0) [504 B] |
+|  0.698 | capture 5 starts (20261116_092000.h264) |
+|  0.760 | LED -> blue (0, 0, 255) [504 B] |
+|  0.760 | segment upload 4 FAILS (network down) |
+|  0.761 | LED -> green (0, 255, 0) [504 B] |
+|  0.761 | LED -> red (255, 0, 0) [504 B] |
+|  0.860 | capture 6 starts (20261116_092500.h264) |
+|  0.931 | LED -> blue (0, 0, 255) [504 B] |
+|  0.931 | segment upload 5 ok (11366 bytes) |
+|  0.931 | battery drops to 15% (low) |
+|  0.932 | LED -> green (0, 255, 0) [504 B] |
+|  1.032 | capture 7 starts (20261116_093000.h264) |
+|  1.103 | LED -> yellow (255, 255, 0) [504 B] |
+|  1.103 | segment upload 6 ok (11366 bytes) |
+|  1.104 | LED -> yellow (255, 255, 0) [504 B] |
+|  1.209 | battery drops to 5% (halt threshold) |
+|  1.269 | LED -> yellow (255, 255, 0) [504 B] |
+|  1.269 | segment upload 7 ok (11366 bytes) |
+|  1.270 | LED -> yellow (255, 255, 0) [504 B] |
+|  1.271 | LED -> red (255, 0, 0) [504 B] |
+|  1.271 | recording loop exited (battery halt) |

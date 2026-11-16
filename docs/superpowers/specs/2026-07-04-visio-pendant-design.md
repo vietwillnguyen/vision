@@ -74,7 +74,7 @@ The device records passively all day, uploads footage to the cloud over home WiF
 | Power management | PiJuice Zero pHAT | $18 |
 | Battery | 3000mAh LiPo (PiJuice compatible) | $12 |
 | Storage | 128GB microSD (Class 10) | $12 |
-| Status indicator | WS2812B single NeoPixel | $1 |
+| Status indicator | WS2812B single NeoPixel (data on GPIO 10, SPI0 MOSI) | $1 |
 | User input | 6mm tactile SMD button | $0.50 |
 | Enclosure | 3D printed pendant shell + lanyard loop | ~$3 filament |
 | Misc | Ribbon cable, headers, JST connectors | $5 |
@@ -96,6 +96,26 @@ The device records passively all day, uploads footage to the cloud over home WiF
 - Camera Module 3 Wide: ~0.3W.
 - Total continuous draw: ~1.5W.
 - 3000mAh @ 3.7V = 11.1Wh → ~7.4 hours real-world.
+
+### GPIO Pin Map
+
+BCM numbering on the Pi Zero 2W's 40-pin header.
+
+| GPIO | Header pin | Function | Notes |
+|---|---|---|---|
+| 2, 3 | 3, 5 | I2C1 SDA/SCL | PiJuice (or a replacement fuel gauge) |
+| 7, 8 | 26, 24 | SPI0 CE1/CE0 | Claimed by `dtparam=spi=on`, nothing connected; `dtoverlay=spi0-1cs` or `spi0-0cs` frees them if ever needed |
+| 9, 11 | 21, 23 | SPI0 MISO/SCLK | Claimed by `dtparam=spi=on`, nothing connected |
+| **10** | **19** | **SPI0 MOSI - WS2812B data** | The status LED, driven over SPI (see "LED driver" below) |
+| 17 | 11 | Flag button | To ground, internal pull-up |
+| **18, 19, 20** | **12, 35, 38** | **Reserved: I2S microphone** | PCM_CLK (BCLK), PCM_FS (LRCLK), PCM_DIN, for the audio-capture work |
+| 21 | 40 | Reserved: PCM_DOUT | Claimed by the I2S pin group even though a microphone only needs DIN |
+
+Do not enable SPI1: its chip selects are GPIO 18 (CE0) and GPIO 17 (CE1), which would collide with the I2S clock and the flag button.
+
+**As-built deviation (LED SPI rewire, 2026-11):** the LED data line moved from GPIO 18 (PWM0, `rpi_ws281x`) to GPIO 10 (SPI0 MOSI).
+PWM0 on GPIO 18 collided with the I2S bit clock, and `rpi_ws281x` needed `/dev/mem` for its PWM/DMA engine, which was the only thing forcing the daemon to run as root.
+Pin facts are from Raspberry Pi's documentation: SPI0 MOSI is GPIO 10 on header pin 19 and SPI0 is enabled with `dtparam=spi=on` ([SPI](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#spi-overview)); GPIO 18/19/20/21 carry PCM clock, frame sync, data in and data out, and GPIO 18 and 17 double as SPI1 CE0/CE1 ([GPIO](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#gpio)); the Zero 2W device tree's `i2s_pins` group is `<18 19 20 21>` (`bcm2710-rpi-zero-2-w.dts`).
 
 ### Vintage Camera Note
 
@@ -161,6 +181,20 @@ If the immediate upload fails, the marker stays in the upload queue and the next
 | Uploading | Pulsing blue |
 | Low battery (<20%) | Pulsing yellow |
 | Critical battery / error | Red flash |
+
+**LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour.
+`Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).
+Each WS2812B bit becomes one SPI byte at a 6.4 MHz request: `0xE0` (3 high, 5 low) for a 0 and `0xF8` (5 high, 3 low) for a 1, sent green, red, blue, most significant bit first, between two 240-byte all-zero resets (300 us latch).
+The BCM2835 SPI block runs at core clock / an even divider that the kernel rounds up, so both of the Zero 2W's core clocks (400 MHz / 64 and 250 MHz / 40) produce 6.25 MHz: 480 ns / 800 ns for a 0 and 800 ns / 480 ns for a 1, each at least 70 ns inside the datasheet's +/-150 ns windows around 400/850 and 800/450 ns.
+Every byte ends low, so any inter-byte gap only lengthens a low phase.
+The full derivation lives in `firmware/visio_recorder/ws2812_spi.py`.
+
+The device needs three things for this driver:
+- `dtparam=spi=on` in `/boot/firmware/config.txt` (SPI0 is off by default).
+- `core_freq_fixed=1` in the same file. The Zero 2W's core clock otherwise scales between 250 and 400 MHz ([`core_freq_min`](https://www.raspberrypi.com/documentation/computers/config_txt.html#overclocking-options)), while `spi-bcm2835` caches the core clock rate once at probe time, so a scaled clock would shift the real SPI rate by up to 1.6x and turn 0 bits into 1s. Raspberry Pi documents this flag as the way to keep peripherals that use the core clock at a consistent speed; it holds the higher 400 MHz rate, so it does not throttle the H.264 encode the way the older `core_freq=250` workaround would.
+- The service user in the `spi` group, which owns `/dev/spidev*` through Raspberry Pi OS's udev rules.
+
+The provisioning script and systemd unit are being changed in PR #26, which has not merged; the changes it needs for this driver are listed in [`2026-07-21-visio-device-provisioning-design.md`](2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26).
 
 ### WiFi Onboarding
 
