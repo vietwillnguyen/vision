@@ -284,10 +284,11 @@ def main() -> int:
         registered_marker_path.touch()
 
     command_runner = SubprocessCommandRunner()
-    recover_orphaned_segments(
-        config.data_dir, queue_dir, command_runner, config.framerate
-    )
     flush_pending(queue_dir, clients.storage, device_id)
+    if recover_orphaned_segments(
+        config.data_dir, queue_dir, command_runner, config.framerate
+    ):
+        flush_pending(queue_dir, clients.storage, device_id)
 
     stop = threading.Event()
 

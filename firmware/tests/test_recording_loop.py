@@ -267,7 +267,7 @@ def test_flush_pending_leaves_failing_files_queued_and_continues(tmp_path):
 
 
 class _MuxFailingRunner(FakeCommandRunner):
-    """Fails the ffmpeg mux for one named input, like a zero-byte capture."""
+    """Fails the ffmpeg mux for one named input."""
 
     def __init__(self, failing_input: str) -> None:
         super().__init__()
@@ -330,9 +330,10 @@ def test_recover_orphaned_segments_queues_a_finished_mp4_left_in_data_dir(tmp_pa
     assert runner.calls == []
 
 
-def test_recover_orphaned_segments_deletes_an_unmuxable_capture(tmp_path):
-    # A capture killed before writing a single frame cannot be muxed; keeping
-    # it would retry and leak forever. The other orphan is still recovered.
+def test_recover_orphaned_segments_deletes_an_empty_unmuxable_capture(tmp_path):
+    # A zero-byte capture (killed before its first frame) cannot be muxed and
+    # holds no footage; keeping it would retry and leak forever. The other
+    # orphan is still recovered.
     data_dir = tmp_path / "data"
     queue_dir = data_dir / "queue"
     data_dir.mkdir()
@@ -350,6 +351,35 @@ def test_recover_orphaned_segments_deletes_an_unmuxable_capture(tmp_path):
     assert [p.name for p in recovered] == ["20260803_120501.mp4"]
     assert [p.name for p in list_pending(queue_dir)] == ["20260803_120501.mp4"]
     assert sorted(p.name for p in data_dir.iterdir()) == ["queue"]
+
+
+def test_recover_orphaned_segments_keeps_a_non_empty_capture_whose_mux_fails(
+    tmp_path,
+):
+    # A mux can fail transiently (e.g. a full SD card at boot); a non-empty
+    # capture is real footage, so it stays for the next boot while its partial
+    # .mp4 is removed to free space. The other orphan is still recovered.
+    data_dir = tmp_path / "data"
+    queue_dir = data_dir / "queue"
+    data_dir.mkdir()
+    (data_dir / "20260803_120001.h264").write_bytes(b"real footage")
+    (data_dir / "20260803_120001.mp4").write_bytes(b"trunc")
+    (data_dir / "20260803_120501.h264").write_bytes(b"ok")
+
+    recovered = recover_orphaned_segments(
+        data_dir,
+        queue_dir,
+        _MuxFailingRunner("20260803_120001.h264"),
+        framerate=30,
+    )
+
+    assert [p.name for p in recovered] == ["20260803_120501.mp4"]
+    assert [p.name for p in list_pending(queue_dir)] == ["20260803_120501.mp4"]
+    assert sorted(p.name for p in data_dir.iterdir()) == [
+        "20260803_120001.h264",
+        "queue",
+    ]
+    assert (data_dir / "20260803_120001.h264").read_bytes() == b"real footage"
 
 
 def test_recover_orphaned_segments_leaves_device_state_files_alone(tmp_path):

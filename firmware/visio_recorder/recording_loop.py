@@ -107,8 +107,11 @@ def recover_orphaned_segments(
     - a ``.mp4`` alone (crash between unlinking the ``.h264`` and enqueueing):
       the mux finished, so queue it as is.
 
-    A capture ffmpeg cannot mux (e.g. killed before its first frame) is
-    deleted, since keeping it would only leak the space this sweep reclaims.
+    When the mux fails, its partial ``.mp4`` is always removed to free space.
+    The ``.h264`` is deleted only when it is zero bytes (provably no footage,
+    e.g. killed before its first frame); a non-empty capture may have failed
+    for a transient reason such as a full disk, so it is kept for the next
+    boot and the remaining orphans are still processed.
     Returns the queued paths, oldest first.
     """
     recovered: list[Path] = []
@@ -117,11 +120,17 @@ def recover_orphaned_segments(
         try:
             mp4_path = mux_segment(command_runner, h264_path, framerate)
         except Exception:
-            _logger.exception(
-                "could not mux orphaned capture %s; deleting it", h264_path
-            )
             mp4_path.unlink(missing_ok=True)
-            h264_path.unlink()
+            if h264_path.stat().st_size == 0:
+                _logger.exception(
+                    "could not mux empty orphaned capture %s; deleting it", h264_path
+                )
+                h264_path.unlink()
+            else:
+                _logger.exception(
+                    "could not mux orphaned capture %s; keeping it for the next boot",
+                    h264_path,
+                )
             continue
         h264_path.unlink()
         recovered.append(enqueue(queue_dir, mp4_path))
