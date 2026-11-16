@@ -1,0 +1,5 @@
+# Full jest suite (live-Supabase suite excluded), cold transform cache, default parallelism, base b809807 (app/ identical to c5a923c).
+# Babel transforms logged by trace/tracing-transformer.js, attributed to the test running in that worker at the time.
+# 'after' = this branch, with jest.preload.js.
+modules transformed inside a running test: 1, 21 ms of Babel CPU
+      21 ms  AppRoot shows the four tabs when signed in with a device

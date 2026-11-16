@@ -1,0 +1,47 @@
+host: 16 cpus, 16 busy-loop hogs, jest maxWorkers default (cpus-1), extra jest args: -c <origin/main app/jest.config.js>
+run 1: FAIL | Tests:       5 failed, 124 passed, 129 total | slowest test 24254 ms
+        ✕ plays today's reel through a signed url (20217 ms)
+        Unable to find an element with testID: video-view
+      ✕ wires useDeviceStatus into DeviceScreen (20100 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ renders 30 UTC-midnight-aligned cells ending today (21141 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ builds a QR payload with exactly the fields firmware expects (24254 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+run 2: FAIL | Tests:       5 failed, 124 passed, 129 total | slowest test 25911 ms
+      ✕ wires useDeviceStatus into DeviceScreen (21494 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ plays today's reel through a signed url (21455 ms)
+        Unable to find an element with testID: video-view
+        ✕ renders 30 UTC-midnight-aligned cells ending today (22955 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ builds a QR payload with exactly the fields firmware expects (25911 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+run 3: FAIL | Tests:       5 failed, 124 passed, 129 total | slowest test 23448 ms
+        ✕ plays today's reel through a signed url (17588 ms)
+        Unable to find an element with testID: video-view
+      ✕ wires useDeviceStatus into DeviceScreen (18920 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ renders 30 UTC-midnight-aligned cells ending today (20064 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ builds a QR payload with exactly the fields firmware expects (23448 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+run 4: FAIL | Tests:       5 failed, 124 passed, 129 total | slowest test 23291 ms
+        ✕ plays today's reel through a signed url (17706 ms)
+        Unable to find an element with testID: video-view
+      ✕ wires useDeviceStatus into DeviceScreen (18248 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ renders 30 UTC-midnight-aligned cells ending today (18338 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ builds a QR payload with exactly the fields firmware expects (23291 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+run 5: FAIL | Tests:       5 failed, 124 passed, 129 total | slowest test 23637 ms
+      ✕ wires useDeviceStatus into DeviceScreen (20407 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ plays today's reel through a signed url (20104 ms)
+        Unable to find an element with testID: video-view
+        ✕ renders 30 UTC-midnight-aligned cells ending today (20518 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+        ✕ builds a QR payload with exactly the fields firmware expects (23637 ms)
+        thrown: "Exceeded timeout of 15000 ms for a test.
+result: 0/5 runs passed
