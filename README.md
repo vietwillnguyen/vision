@@ -143,6 +143,115 @@ uv sync --extra dev   # install dependencies from uv.lock
 uv run pytest         # run the test suite
 ```
 
+### Device access over Tailscale
+
+A provisioned pendant is a mobile device: over one day it joins a home router, a travel router, and cafe WiFi, so its LAN address is a new DHCP lease to hunt for every time and any address written down goes stale.
+[Tailscale](https://tailscale.com/) gives the Pi one name and one address that follow it across all of them, so the same `ssh` command keeps working no matter which network it is currently on.
+The device runs Raspberry Pi OS trixie (Debian 13); every command below assumes that.
+
+Install Tailscale on the device *after* provisioning has completed - it needs a working network connection first, and the login step needs a browser once:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --hostname <device-hostname>
+```
+
+`tailscale up` prints a login URL; open it in a browser on any machine (the Pi is headless) to authenticate the device into the tailnet.
+That is a one-time step - the installer enables `tailscaled` as a system service and the node key survives reboots.
+
+#### SSH over the tailnet
+
+Two mechanisms, not mutually exclusive:
+
+- **Tailscale SSH** - `sudo tailscale set --ssh` (or pass `--ssh` to the initial `tailscale up`).
+  `tailscaled` then answers SSH on the tailnet interface itself and authorizes by tailnet identity, so no key has to exist on the device.
+  Access is governed by the tailnet's ACL policy, which needs an `ssh` rule covering the device before connections are accepted.
+- **Ordinary key-based SSH** - unchanged, just reached over the tailnet address.
+  Raspberry Pi OS Lite ships `sshd` but leaves it disabled unless the imager enabled it, so this path assumes SSH was turned on at flash time in the imager's advanced options, with the workstation's public key installed in `~<user>/.ssh/authorized_keys`.
+  On an image flashed without it, use Tailscale SSH instead - `tailscaled` answers on the tailnet interface whether or not `sshd` is running.
+
+Use key auth (or Tailscale SSH) and keep password authentication off - a pendant that roams onto untrusted networks should never accept a password.
+Prove the login that has to carry you afterwards *before* changing anything, because once the drop-in below takes effect a missing key means no way back in over SSH.
+The hazard is real: the Raspberry Pi imager offers a password and a public key independently, so an image flashed with a password and no key is an ordinary case, and turning passwords off on one locks the account out at the next login.
+From the workstation - already on the same tailnet, which is what makes `<device-hostname>` resolve at all; see "Connecting from a workstation" below - in a second terminal, pinned to public key so no interactive method can make the test pass on its behalf:
+
+```bash
+ssh -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes <user>@<device-hostname>
+```
+
+If that does not succeed, do not write the drop-in at all, and read which failure it is before fixing anything.
+`Could not resolve hostname` is not an authentication failure - the workstation is not on the tailnet yet, or MagicDNS is off - so settle that first.
+`Connection refused` on a name that does resolve is not an authentication failure either - MagicDNS answers whether or not a daemon is listening - so this is the Lite image above with `sshd` never enabled: turn SSH on at the device or use Tailscale SSH, since no key helps a daemon that is not running.
+A hang or timeout rather than a refusal points at reachability instead: MagicDNS resolves from the netmap, which carries nodes registered in the tailnet but not currently online, so a pendant that is asleep, off, or off the network still resolves and simply never answers - `tailscale status` lists it as offline rather than omitting it, and reachability has to be settled before touching `sshd` at all.
+A connection that is accepted and a login that is then refused is the missing-key case: install the workstation's public key into `~<user>/.ssh/authorized_keys` (`~<user>/.ssh` mode 0700, `authorized_keys` 0600), or enable Tailscale SSH.
+Whichever it is, come back only once a public-key or Tailscale SSH login has actually succeeded.
+On the Tailscale SSH path the equivalent proof is that a plain `ssh <user>@<device-hostname>` over the tailnet is answered by `tailscaled`.
+
+With that login proven, pin the setting off.
+It starts on: OpenSSH's built-in default for `PasswordAuthentication` is `yes` and the main `sshd_config` ships that line commented out, so a stock image answers `sudo sshd -T | grep -i passwordauthentication` with `passwordauthentication yes`.
+`/etc/ssh/sshd_config` pulls in `/etc/ssh/sshd_config.d/` with an `Include /etc/ssh/sshd_config.d/*.conf` near the top of the file, so use a drop-in there rather than editing the main file.
+Unlike `sysctl.d` or `apt.conf.d`, `sshd_config` keeps the *first* value obtained for each keyword and the include glob expands in lexical order, so the name has to sort ahead of anything already in that directory that sets the keyword - a `99-` prefix would be read after such a file and sit inert, while `01-` wins whatever else the directory happens to hold:
+
+```bash
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
+  | sudo tee /etc/ssh/sshd_config.d/01-visio-no-passwords.conf
+```
+
+Syntax-check it, then confirm what the files on disk now resolve to:
+
+```bash
+sudo sshd -t                                      # silent on success
+sudo sshd -T | grep -i passwordauthentication     # expect: passwordauthentication no
+```
+
+`sshd -T` parses the config files from disk rather than querying the running process, so it proves the drop-in is included and that no earlier-sorting file beat it to the keyword - not that the live daemon has loaded it.
+The `sshd` already listening keeps the config it started with, so apply the change by rebooting the device (`sudo reboot`), which starts a fresh `sshd` under whichever unit - `ssh.service` or `ssh.socket` - the host uses, with no need to tell the two apart.
+
+Then check the live daemon from the workstation with a password-only attempt, which must be refused:
+
+```bash
+ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no <user>@<device-hostname>
+# expect: Permission denied (publickey).
+```
+
+On the Tailscale SSH path `tailscaled` answers this connection instead of `sshd`, so the test does not exercise the drop-in there.
+
+#### Connecting from a workstation
+
+Install Tailscale on the workstation and log it into the same tailnet, then:
+
+```bash
+tailscale status                # lists tailnet nodes; the pendant appears under its hostname
+ssh <user>@<device-hostname>
+```
+
+With MagicDNS enabled (the default), both the short hostname and `<device-hostname>.<tailnet>.ts.net` resolve directly, so the `100.x.y.z` address in `tailscale status` is never needed by hand.
+
+#### Raspberry Pi Connect as the fallback
+
+When the tailnet is unreachable - `tailscaled` wedged, the device on a network that blocks it - [Raspberry Pi Connect](https://www.raspberrypi.com/documentation/services/connect.html) provides a browser shell out of band.
+Set it up while the device is still reachable, right after `tailscale up` succeeds: the steps below need a shell on the device, which is exactly what is gone once the fallback is wanted.
+
+```bash
+sudo apt update && sudo apt install rpi-connect-lite   # headless variant: remote shell, no screen sharing
+rpi-connect on                                         # as <user>, not root
+rpi-connect signin                                     # prints a link to associate the device
+sudo loginctl enable-linger <user>
+```
+
+The lingering step is the non-obvious one: `rpi-connect` is a *user* systemd service, and systemd tears a user manager down when that user's last session ends, so without it the device stops answering as soon as the setup session closes and never comes back at boot.
+`enable-linger` is what starts the user manager at boot and keeps it running with nobody logged in.
+
+#### Troubleshooting
+
+- **Device absent from `tailscale status`.** Get a shell via Raspberry Pi Connect and check the daemon: `sudo systemctl status tailscaled`, `sudo journalctl -u tailscaled -n 50`.
+  If it is running but logged out, re-run `sudo tailscale up` with the same flags used originally - including `--ssh` if Tailscale SSH was enabled that way, since `tailscale up` applies the whole preference set rather than only the flags named - and complete the browser login.
+  Also confirm the node was not expired or removed in the tailnet admin console - key expiry looks identical to a dead device from the workstation side.
+- **Key rejected.** With Tailscale SSH, keys are irrelevant and a rejection is an ACL gap - check that the tailnet policy grants the connecting user an `ssh` rule to the device, and that `<user>` names an account that actually exists on the Pi.
+  With ordinary SSH, `ssh -v <user>@<device-hostname>` shows which key was offered; verify `~<user>/.ssh` is mode 0700 and `authorized_keys` 0600, since `sshd` ignores group- or world-writable files without saying so on the client.
+- **Device reachable but not recording.** The tailnet says nothing about the daemon.
+  On the device, `systemctl status visio-recorder` and `journalctl -u visio-recorder -n 100` show why it stopped.
+
 ## Cloud AI pipeline (Epic 2)
 
 The unit-tested core of the nightly job that turns a day's segments into a highlight reel.
