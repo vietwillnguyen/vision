@@ -28,7 +28,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: e35b9750f2c45e05deaf8dcb07c54d16a78369e9e86594cba864ec4be0ff0771  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: f28ebd11d7dcad56c6e0111dc548a460d955d94d24b0626536e5c528ac294e1c  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: d5f68258ffaa14aa554bb172ea1ee40648eb3bebe48b06a76076effb2ad57f9c  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-07-23 (spec-sync, main divergence merge) -->
@@ -202,7 +202,10 @@ flowchart TD
   F -- no --> G["register_device, then touch marker"]
   F -- yes --> H
   G --> H["flush_pending queue"]
-  H --> I0["start flag-upload worker,<br/>register GPIO 17 flag-button listener"]
+  H --> R["recover_orphaned_segments<br/>(mux + queue leftover .h264/.mp4;<br/>keep non-empty captures on mux failure)"]
+  R -- "recovered any" --> H2["flush_pending again"]
+  R -- none --> I0
+  H2 --> I0["start flag-upload worker,<br/>register GPIO 17 flag-button listener"]
   I0 --> I["run_recording_loop"]
         </pre>
       </div>
@@ -216,7 +219,8 @@ flowchart TD
   W -- "3 consecutive failures" --> CRIT["CRITICAL LED"]
   W -- "any success" --> RESET["reset failure counter"]
   M -- "battery halt or stop signal" --> DRAIN["drain queue, join() worker"]
-  DRAIN --> HALT["apply CRITICAL after worker fully joins"]
+  DRAIN --> OFF["upsert recording_active=false<br/>(any exit path; never raises)"]
+  OFF --> HALT["apply CRITICAL after worker fully joins (halt only)"]
         </pre>
       </div>
     </div>
@@ -227,6 +231,7 @@ flowchart TD
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per 5-minute segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
         <li>Upload retry is <em>startup-flush only</em> — no continuous while-running retry loop. A failed segment stays queued until the next process start.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
+        <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
       </ul>
     </div>
