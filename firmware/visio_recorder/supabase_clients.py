@@ -30,47 +30,48 @@ class SupabaseStorage:
         ``x-upsert: false``, and that is kept: object keys are second-resolution
         naive local timestamps, which can repeat across a DST fall-back or a Pi
         without an RTC restarting before NTP sync, so an overwrite could destroy
-        an earlier, different segment. Instead a duplicate is treated as already
-        uploaded only when the stored object has the local file's byte size - a
+        an earlier, different segment.
+
+        Instead the stored object is looked up before uploading. An existing
+        object with the local file's byte size counts as already uploaded - a
         cheap identity check for H.264 segments, and exact for flag markers,
-        which are empty files whose name is their whole content. A different
-        size, or a failed lookup, re-raises so the file stays queued. Storage
-        can reject a large duplicate before reading its whole body, which
-        leaves the gateway's upstream connection unusable: the next storage
-        request sent on it (the size lookup) stalls until the client timeout,
-        and the one after that is served normally. So a failed lookup is tried
-        once more before giving up.
+        which are empty files whose name is their whole content - so a retried
+        ~170 MB segment is never sent over WiFi again just to be rejected. An
+        existing object of another size raises ``FileExistsError``, and a failed
+        lookup or upload raises too, so the file stays queued for the next boot.
+        Checking first also avoids the duplicate path entirely: storage answers
+        a large duplicate before reading its body, which leaves the gateway
+        connection stalled for the next request.
 
         storage3's default ``content-type: text/plain`` mislabels every
         segment, so it is set explicitly. Passing the open file rather than
         ``f.read()`` lets httpx stream a ~170 MB segment in chunks instead of
         holding it (and multipart copies of it) in a 512 MB Pi Zero 2W's memory.
         """
-        content_type = _CONTENT_TYPES.get(local_path.suffix, _DEFAULT_CONTENT_TYPE)
         bucket_api = self._client.storage.from_(bucket)
-        try:
-            with open(local_path, "rb") as f:
-                bucket_api.upload(object_path, f, {"content-type": content_type})
-        except StorageApiError as err:
-            if not _is_duplicate(err):
-                raise
-            try:
-                try:
-                    stored_size = _stored_size(bucket_api, object_path)
-                except Exception:
-                    stored_size = _stored_size(bucket_api, object_path)
-            except Exception:
-                raise err from None
-            if stored_size != local_path.stat().st_size:
-                raise
-
-
-def _is_duplicate(err: StorageApiError) -> bool:
-    return str(err.status) == "409" or err.code == "Duplicate"
+        stored_size = _stored_size(bucket_api, object_path)
+        if stored_size is not None:
+            local_size = local_path.stat().st_size
+            if stored_size == local_size:
+                return
+            raise FileExistsError(
+                f"{bucket}/{object_path} already stores {stored_size} bytes; "
+                f"refusing to replace it with {local_path} ({local_size} bytes)"
+            )
+        content_type = _CONTENT_TYPES.get(local_path.suffix, _DEFAULT_CONTENT_TYPE)
+        with open(local_path, "rb") as f:
+            bucket_api.upload(object_path, f, {"content-type": content_type})
 
 
 def _stored_size(bucket_api: Any, object_path: str) -> int | None:
-    size = bucket_api.info(object_path).get("size")
+    """Byte size of the stored object, or None when there is no such object."""
+    try:
+        info = bucket_api.info(object_path)
+    except StorageApiError as err:
+        if str(err.status) == "404" or err.code == "not_found":
+            return None
+        raise
+    size = info.get("size")
     if size is not None:
         return int(size)
     folder, _, name = object_path.rpartition("/")

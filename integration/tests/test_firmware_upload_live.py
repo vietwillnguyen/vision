@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from storage3.exceptions import StorageApiError
 from supabase import Client, create_client
 
 from visio_recorder.recording_loop import flush_pending
@@ -91,8 +90,8 @@ def test_next_boot_flush_clears_a_segment_that_already_reached_storage(
     # Power cut between upload and unlink: the object is in storage, but the
     # file is still in the queue. The next boot's flush_pending must clear it
     # rather than fail on a duplicate forever.
-    # Segment-sized, because storage rejects a large duplicate before reading
-    # its whole body; a tiny file would not exercise the connection that leaves.
+    # Segment-sized, so a regression that re-sends the body and hits storage's
+    # early duplicate rejection (which stalls the gateway connection) shows up.
     queue_dir = tmp_path / "queue"
     segment = tmp_path / "20260714_090000.mp4"
     segment.write_bytes(os.urandom(8 * 1024 * 1024))
@@ -121,7 +120,7 @@ def test_a_different_file_under_an_existing_key_is_refused_not_overwritten(
     storage = SupabaseStorage(owner.client)
     upload_segment(storage, owner.device_id, earlier)
 
-    with pytest.raises(StorageApiError):
+    with pytest.raises(FileExistsError):
         upload_segment(storage, owner.device_id, later)
 
     assert _object_metadata(owner, earlier.name)["size"] == len(b"earlier segment")
