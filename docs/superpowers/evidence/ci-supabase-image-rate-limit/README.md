@@ -37,7 +37,7 @@ For comparison, the passing pre-fix integration run spent 82s in `supabase start
 
 In every job of both attempts:
 
-- the cache key `supabase-images-Linux-X64-cli2.109.0-<manifest hash>` is reported as `Cache not found` then `Cache saved` (cold) or `Cache restored from key` (warm);
+- the cache key `supabase-images-Linux-X64-cli2.109.0-<manifest hash>` is reported as `Cache not found` (cold) or `Cache restored from key` (warm), and the cold save step reports `Cache saved` in the integration job and `Unable to reserve cache` in the app job, which lost the save race;
 - the block step probes the Docker daemon and gets `dial tcp 0.0.0.0:443: connect: connection refused` for public.ecr.aws, ghcr.io and docker.io, before `supabase start` runs;
 - no `Pulling from` or `Unable to find image` line appears after that, and `start`, `test db` and `gen types` all succeed, so nothing contacted a registry;
 - `supabase-images.sh verify` reports `all 7 running container images are in the manifest`.
