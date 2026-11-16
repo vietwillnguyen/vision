@@ -69,7 +69,12 @@ mkdir -p "$(dirname "$types_out")"
   printf '%s\n' "$generated"
 } > "$types_out"
 
+db_url=""
 eval "$(supabase status -o env | sed -n 's/^DB_URL=/db_url=/p')"
+if [ -z "$db_url" ]; then
+  echo "gen-db-types: supabase status -o env printed no DB_URL" >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "$fixture_out")"
 psql "$db_url" --no-psqlrc --quiet --tuples-only --no-align \

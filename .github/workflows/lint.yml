@@ -38,6 +38,7 @@ jobs:
         run: |
           shellcheck --severity=style \
             firmware/scripts/setup-device.sh \
+            scripts/gen-db-types.sh \
             scripts/hooks/pre-commit \
             scripts/hooks/tests/test-pre-commit.sh
 
