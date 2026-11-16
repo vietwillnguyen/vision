@@ -79,6 +79,18 @@ describe('AppRoot', () => {
     expect(screen.getByText('Archive', { exact: false })).toBeTruthy();
   });
 
+  it('gives every tab a real icon instead of the missing-icon glyph', async () => {
+    render(<AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />);
+    await waitFor(() => expect(screen.getByText("Today's Reel")).toBeTruthy());
+    // Without a tabBarIcon, bottom-tabs falls back to a text glyph (U+23F7)
+    // that web system fonts lack, so it renders as an empty box.
+    expect(screen.queryAllByText('⏷')).toHaveLength(0);
+    for (const id of ['today', 'raw', 'device', 'archive']) {
+      // bottom-tabs renders each icon twice (active + inactive) to cross-fade.
+      expect(screen.getAllByTestId(`tab-icon-${id}`).length).toBeGreaterThan(0);
+    }
+  });
+
   it('explains when the account has no device', async () => {
     render(<AppRoot client={fakeClient(SESSION, [])} />);
     await waitFor(() =>

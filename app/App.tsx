@@ -6,6 +6,12 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { ArchiveContainer } from './src/containers/ArchiveContainer';
 import { AuthContainer } from './src/containers/AuthContainer';
+import {
+  ArchiveIcon,
+  DeviceIcon,
+  RawFootageIcon,
+  TodayReelIcon,
+} from './src/components/TabIcons';
 import { DeviceStack } from './src/navigation/DeviceStack';
 import { RawFootageContainer } from './src/containers/RawFootageContainer';
 import { TodayReelContainer } from './src/containers/TodayReelContainer';
@@ -81,16 +87,16 @@ function SignedInApp({ client }: { client: VisionClient }) {
           tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.background },
         }}
       >
-        <Tab.Screen name="Today's Reel">
+        <Tab.Screen name="Today's Reel" options={{ tabBarIcon: TodayReelIcon }}>
           {() => <TodayReelContainer client={client} deviceId={deviceId} />}
         </Tab.Screen>
-        <Tab.Screen name="Raw Footage">
+        <Tab.Screen name="Raw Footage" options={{ tabBarIcon: RawFootageIcon }}>
           {() => <RawFootageContainer client={client} deviceId={deviceId} />}
         </Tab.Screen>
-        <Tab.Screen name="Device">
+        <Tab.Screen name="Device" options={{ tabBarIcon: DeviceIcon }}>
           {() => <DeviceStack client={client} deviceId={deviceId} />}
         </Tab.Screen>
-        <Tab.Screen name="Archive">
+        <Tab.Screen name="Archive" options={{ tabBarIcon: ArchiveIcon }}>
           {() => <ArchiveContainer client={client} deviceId={deviceId} />}
         </Tab.Screen>
       </Tab.Navigator>
