@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react-native';
 import type { Session } from '@supabase/supabase-js';
 import React from 'react';
+import { StyleSheet } from 'react-native';
 
 import { AppRoot } from '../App';
 import type { VisionClient } from '../src/lib/supabase';
@@ -89,6 +90,20 @@ describe('AppRoot', () => {
       // bottom-tabs renders each icon twice (active + inactive) to cross-fade.
       expect(screen.getAllByTestId(`tab-icon-${id}`).length).toBeGreaterThan(0);
     }
+  });
+
+  it('keeps the bottom-tab label from shrinking under the icon', async () => {
+    render(<AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />);
+    await waitFor(() => expect(screen.getByText("Today's Reel")).toBeTruthy());
+    // On web the default 48px bar leaves 38px for a 28px icon wrapper plus the
+    // label, so flex-shrink squeezed the label to 10px and its
+    // `overflow: hidden` cut off descenders ("y", "g"). An explicit line height
+    // gives descenders room even when the font's own line box is too short.
+    const label = screen.getByText('Raw Footage');
+    expect(StyleSheet.flatten(label.props.style)).toMatchObject({
+      flexShrink: 0,
+      lineHeight: 14,
+    });
   });
 
   it('explains when the account has no device', async () => {
