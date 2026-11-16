@@ -1,9 +1,13 @@
 # shellcheck shell=bash
 # Usage: bash simulate-preflight.sh <path-to-firmware-dir-with-synced-venv>
-# Run the real visio-preflight console script twice on a non-Pi host:
+# Run the real visio-preflight console script four times on a non-Pi host:
 # 1) bare host (no Pi hardware) - must block honestly, exit 1
 # 2) hardware simulated: stub rpicam/zbarimg/nmcli binaries on PATH and stub
 #    rpi_ws281x/gpiozero modules on PYTHONPATH - must pass, exit 0
+# 3) simulated Pi with the camera ribbon unplugged (rpicam-hello lists no
+#    cameras) - must block, exit 1
+# 4) simulated Pi with VISIO_BATTERY_SOURCE=pijuice and no HAT - battery
+#    checks warn only, exit 0
 set -u
 FW=$1; SIM=$(mktemp -d)
 cd /  # prove the entry point resolves from any working directory
