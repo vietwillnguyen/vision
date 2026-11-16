@@ -64,27 +64,22 @@ updates:
     # These versions are owned by the Expo SDK, not by semver: each SDK release
     # pins the react, react-native and native-module versions its prebuilt
     # native code was compiled against, and `npx expo install --check` flags any
-    # drift. A minor bump of any of them (react 19.2 -> 19.3, react-native
-    # 0.86 -> 0.88) is an SDK upgrade in disguise, so Dependabot only proposes
-    # patches here and SDK upgrades go through `npx expo install --fix`.
+    # drift. Packages the SDK pins to an exact version are fully ignored, since
+    # even a patch bump drifts from the pin; they only move via
+    # `npx expo install --fix`. Packages the SDK pins to a tilde range still get
+    # patch bumps, but a minor bump of any of them is an SDK upgrade in disguise.
     ignore:
       - dependency-name: "react"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "react-dom"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "react-test-renderer"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
-      - dependency-name: "@types/react"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "react-native"
+      - dependency-name: "react-native-svg"
+      - dependency-name: "@react-native-async-storage/async-storage"
+      - dependency-name: "@types/react"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "react-native-screens"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "react-native-safe-area-context"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
-      - dependency-name: "react-native-svg"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
-      - dependency-name: "@react-native-async-storage/async-storage"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "expo*"
         update-types: ["version-update:semver-major"]
