@@ -174,6 +174,9 @@ The other, NetworkManager, needs a firmware change as well as configuration, so 
 - Move the LED data wire from GPIO 18 (header pin 12) to GPIO 10 (header pin 19).
 - Visually check each colour after provisioning: green (recording), blue (uploading), yellow (low battery), red (critical).
 - Confirm the WS2812B latches 3.3 V SPI data reliably.
-  The datasheet's input-high threshold is 0.7 x VDD, 3.5 V at a 5 V supply, which a 3.3 V GPIO does not meet on paper; this was equally true of the PWM wiring, so it is not new, but it has never been bench-tested.
-  If colours flicker or come out wrong, the options are a 74AHCT125 (or SN74LVC1T45) level shifter on the data line, or powering the LED from 3.3 V (then 0.7 x VDD is 2.3 V, though 3.3 V is below the datasheet's 3.5 V minimum supply, so that too needs a bench check).
+  The WS2812B-V5 input-high threshold is 0.63 x VDD, 3.15 V at a 5 V supply, so a 3.3 V GPIO meets the datasheet with only 150 mV of margin (legacy pre-V5 parts needed 0.7 x VDD, 3.5 V); this was equally true of the PWM wiring, so it is not new, but it has never been bench-tested.
+  If colours flicker or come out wrong, add a 74AHCT125 (or SN74LVC1T45) level shifter on the data line.
+  Powering the LED from 3.3 V is not an option, because the V5 minimum supply is 3.7 V.
+- Confirm which WS2812B revision is fitted.
+  The SPI encoding targets the WS2812B-V5 timing windows; a legacy pre-V5 part sees its T1H 10 ns short and its T1L 40 ns long, so check its colours on the bench or swap it for a V5 part.
 - Confirm `vcgencmd measure_clock core` reads 400 MHz both idle and while `rpicam-vid` is encoding, with `core_freq_fixed=1` set.

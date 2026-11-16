@@ -1,6 +1,6 @@
 """The SPI WS2812B driver, checked byte-for-byte and against LED timing.
 
-Expected streams are spelled out literally (0xE0 = a WS2812B 0 bit, 0xF8 = a
+Expected streams are spelled out literally (0xC0 = a WS2812B 0 bit, 0xF0 = a
 1 bit, 240 zero bytes = the reset either side) rather than computed with the
 encoder under test, and ``ws2812_waveform`` re-derives the colour from the
 datasheet timing windows independently of both.
@@ -16,8 +16,8 @@ from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.led import LedPattern, LedState, apply_led_state
 from visio_recorder.ws2812_spi import SPI_SPEED_HZ, encode_frame
 
-ZERO = 0xE0
-ONE = 0xF8
+ZERO = 0xC0
+ONE = 0xF0
 RESET = bytes(240)
 
 
@@ -86,7 +86,7 @@ def test_channels_go_green_red_blue_most_significant_bit_first():
     driver, spi = _driver()
     driver.set((0x12, 0x34, 0x56), LedPattern.SOLID)
     assert spi.writes == [_frame(_channel(0x34), _channel(0x12), _channel(0x56))]
-    assert _channel(0x34) == bytes([ZERO, ZERO, ONE, ONE, ZERO, ONE, ZERO, ZERO])
+    assert _channel(0x34) == bytes([0xC0, 0xC0, 0xF0, 0xF0, 0xC0, 0xF0, 0xC0, 0xC0])
     assert decode_frame(spi.writes[0], EFFECTIVE_HZ) == [(0x12, 0x34, 0x56)]
 
 
@@ -103,11 +103,11 @@ def test_patterns_render_solid_on_a_single_pixel():
 def test_bit_timings_sit_inside_the_datasheet_windows():
     frame = encode_frame([(0, 255, 0)])
     pulses = to_pulses(frame, EFFECTIVE_HZ)
-    # 160 ns per SPI bit at 6.25 MHz: a 1 is 5 high + 3 low, a 0 is 3 + 5.
-    assert pulses[0].high_ns == pytest.approx(800)
-    assert pulses[0].low_ns == pytest.approx(480)
-    assert pulses[8].high_ns == pytest.approx(480)
-    assert pulses[8].low_ns == pytest.approx(800)
+    # 160 ns per SPI bit at 6.25 MHz: a 1 is 4 high + 4 low, a 0 is 2 + 6.
+    assert pulses[0].high_ns == pytest.approx(640)
+    assert pulses[0].low_ns == pytest.approx(640)
+    assert pulses[8].high_ns == pytest.approx(320)
+    assert pulses[8].low_ns == pytest.approx(960)
 
 
 def test_frame_is_framed_by_resets_of_at_least_280_us_at_the_fastest_clock():
@@ -127,7 +127,7 @@ def test_a_drifted_core_clock_breaks_the_encoding():
     # Why setup must pin the core clock (core_freq_fixed=1): spi-bcm2835
     # caches the core clock at probe, so if the cached 400 MHz drops to
     # 250 MHz under dynamic scaling the real SPI clock falls to 3.9 MHz and
-    # every 0 bit stretches into a 1.
+    # a 0 bit's high stretches to 512 ns, outside its 220-380 ns window.
     frame = encode_frame([(0, 255, 0)])
     with pytest.raises(WaveformError):
         decode_frame(frame, 250e6 / 64)

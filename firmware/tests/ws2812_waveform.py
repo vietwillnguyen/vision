@@ -7,18 +7,17 @@ sees at a given SPI clock, splits it into high/low pulse pairs, and accepts a
 pulse pair only when both halves land inside the datasheet window for a 0 bit
 or a 1 bit. Anything else raises ``WaveformError``.
 
-Datasheet timing (Worldsemi WS2812B, every value +/-150 ns): T0H 400 ns, T0L
-850 ns, T1H 800 ns, T1L 450 ns. Reset/latch is a low period of at least
-280 us (WS2812B-V5 and later; the original part latched after 50 us).
+Datasheet timing (Worldsemi WS2812B-V5/W): T0H 220-380 ns, T0L 580-1000 ns,
+T1H 580-1000 ns, T1L 580-1000 ns. Reset/latch is a low period of at least
+280 us.
 """
 
 from dataclasses import dataclass
 
-TOLERANCE_NS = 150.0
-T0H_NS = 400.0
-T0L_NS = 850.0
-T1H_NS = 800.0
-T1L_NS = 450.0
+T0H_NS = (220.0, 380.0)
+T0L_NS = (580.0, 1000.0)
+T1H_NS = (580.0, 1000.0)
+T1L_NS = (580.0, 1000.0)
 RESET_NS = 280_000.0
 
 
@@ -32,8 +31,8 @@ class Pulse:
     low_ns: float
 
 
-def _within(value: float, nominal: float) -> bool:
-    return nominal - TOLERANCE_NS <= value <= nominal + TOLERANCE_NS
+def _within(value: float, window: tuple[float, float]) -> bool:
+    return window[0] <= value <= window[1]
 
 
 def to_pulses(frame: bytes, spi_hz: float) -> list[Pulse]:
