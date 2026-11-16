@@ -29,8 +29,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          # Device target is Python 3.11 on Raspberry Pi OS Bookworm, same as
-          # tests.yml - lint on the floor the code has to run on.
+          # Python 3.11 is the floor all three packages declare, same as
+          # tests.yml - lint on the oldest interpreter the code must support.
+          # The device itself runs Raspberry Pi OS trixie (Python 3.13).
           python-version: "3.11"
           enable-cache: true
       - name: Ruff lint
