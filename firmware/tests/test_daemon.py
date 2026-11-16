@@ -126,7 +126,8 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
         "device-abc/20260704_120001.mp4",
         "device-abc/20260704_120002.mp4",
     ]
-    assert len(status.upserts) == 3
+    # One upsert per segment, bracketed by the loop's start and exit reports.
+    assert [u["segments_uploaded_today"] for u in status.upserts] == [0, 1, 2, 3, 3]
 
 
 def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
@@ -276,10 +277,11 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
     stop = threading.Event()
     led = FakeLedDriver()
     storage = FakeStorageClient()
-    # The status upsert raises on the first segment only; the worker must
-    # log and continue rather than dying, so segments 2 and 3 still get
-    # muxed, uploaded, and their status reported.
-    status = ScriptedStatusClient(fail_on_attempts={1})
+    # The status upsert raises on the first segment only (attempt 1 is the
+    # loop's start report); the worker must log and continue rather than
+    # dying, so segments 2 and 3 still get muxed, uploaded, and their status
+    # reported.
+    status = ScriptedStatusClient(fail_on_attempts={2})
 
     runner = FakeCommandRunner(
         on_record=lambda count: stop.set() if count >= 3 else None
@@ -306,7 +308,13 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
     # uploaded and their status reported, proving the worker kept running.
     assert "device-abc/20260704_120001.mp4" in storage.uploaded
     assert "device-abc/20260704_120002.mp4" in storage.uploaded
-    assert len(status.upserts) == 2
+    # Start report, segments 2 and 3, exit report.
+    assert [u["recording_active"] for u in status.upserts] == [
+        True,
+        True,
+        True,
+        False,
+    ]
 
 
 def test_setting_stop_exits_after_in_flight_cycle_and_joins_worker(tmp_path):
@@ -367,3 +375,128 @@ def test_critical_battery_halts_and_shows_critical_led():
     assert result.proceed is False
     assert result.battery_pct == 5
     assert led.calls == [((255, 0, 0), LedPattern.FLASHING)]
+
+
+def test_loop_reports_recording_active_before_the_first_segment(tmp_path):
+    # Without this the app keeps whatever the last run left (after a halt or
+    # stop: Paused) for a whole segment after recording has resumed.
+    stop = threading.Event()
+    status = FakeStatusClient()
+    upserts_before_first_capture: list[int] = []
+
+    def on_record(count: int) -> None:
+        if count == 1:
+            upserts_before_first_capture.append(len(status.upserts))
+        stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=on_record),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        status_client=status,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    assert upserts_before_first_capture == [1]
+    assert status.upserts[0]["recording_active"] is True
+    assert status.upserts[0]["segments_uploaded_today"] == 0
+
+
+def test_stop_reports_recording_inactive_as_the_final_status(tmp_path):
+    # The app renders Paused off recording_active=False, but nothing ever sent
+    # it: after the daemon stopped, the Device tab said Recording forever.
+    stop = threading.Event()
+    status = FakeStatusClient()
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(
+            on_record=lambda count: stop.set() if count >= 2 else None
+        ),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        status_client=status,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    final = status.upserts[-1]
+    assert final["recording_active"] is False
+    assert final["segments_uploaded_today"] == 2
+    assert final["segments_pending"] == 0
+    assert final["battery_pct"] == 85
+    assert [u["recording_active"] for u in status.upserts] == [
+        True,
+        True,
+        True,
+        False,
+    ]
+
+
+def test_battery_halt_reports_recording_inactive_after_the_drain(tmp_path):
+    stop = threading.Event()
+    status = FakeStatusClient()
+    led = FakeLedDriver()
+    battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(
+            on_record=lambda count: battery.trigger_halt() if count >= 1 else None
+        ),
+        battery_reader=battery,
+        led_driver=led,
+        status_client=status,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    assert status.upserts[-1]["recording_active"] is False
+    assert status.upserts[-1]["battery_pct"] == 5
+    assert led.calls[-1] == CRITICAL_LED
+
+
+def test_capture_failure_reports_recording_inactive_and_still_raises(tmp_path):
+    class FailingCapture(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid":
+                raise RuntimeError("camera not detected")
+            super().run(args)
+
+    status = FakeStatusClient()
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FailingCapture(),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        status_client=status,
+    )
+
+    with pytest.raises(RuntimeError, match="camera not detected"):
+        run_recording_loop(deps, threading.Event())
+
+    assert status.upserts[-1]["recording_active"] is False
+
+
+def test_status_push_failures_at_start_and_exit_never_stop_the_daemon(tmp_path):
+    # Shutdown often happens with the network already gone; the final push
+    # must not turn a clean stop into a crash, and a failed first push must
+    # not keep the device from recording.
+    class AlwaysFailingStatus:
+        def upsert_device_status(self, status: dict) -> None:
+            raise RuntimeError("network down")
+
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=lambda count: stop.set()),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        status_client=AlwaysFailingStatus(),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    assert storage.uploaded == ["device-abc/20260704_120000.mp4"]

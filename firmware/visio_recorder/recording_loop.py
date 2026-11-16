@@ -67,6 +67,80 @@ def next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState:
     return LedState.RECORDING
 
 
+def build_device_status(
+    *,
+    device_id: str,
+    battery_pct: int,
+    disk_stats_reader: DiskStatsReader,
+    data_dir: Path,
+    queue_dir: Path,
+    segments_uploaded_today: int,
+    recording_active: bool,
+) -> DeviceStatus:
+    stats = disk_stats_reader.usage(data_dir)
+    return DeviceStatus(
+        device_id=device_id,
+        battery_pct=battery_pct,
+        storage_used_gb=stats.used_gb,
+        storage_free_gb=stats.free_gb,
+        segments_pending=len(list_pending(queue_dir)),
+        segments_uploaded_today=segments_uploaded_today,
+        recording_active=recording_active,
+        updated_at=datetime.now(UTC).isoformat(),
+    )
+
+
+def recover_orphaned_segments(
+    data_dir: Path, queue_dir: Path, command_runner: CommandRunner, framerate: int
+) -> list[Path]:
+    """Queue segments an unclean stop left behind in ``data_dir``.
+
+    Run once at boot, before recording starts, so no capture is in flight.
+    ``flush_pending`` only scans ``queue_dir``, so without this a capture cut
+    short (rpicam-vid killed, power lost, daemon crash) stayed in ``data_dir``
+    forever: never muxed, never uploaded, never deleted. Three leftovers are
+    possible, from the stages of ``on_segment_complete``:
+
+    - a ``.h264`` alone (capture or mux never started): mux it and queue it;
+    - a ``.h264`` plus a ``.mp4`` (mux interrupted): the ``.mp4`` may be
+      truncated, so rebuild it from the ``.h264`` (ffmpeg ``-y`` overwrites);
+    - a ``.mp4`` alone (crash between unlinking the ``.h264`` and enqueueing):
+      the mux finished, so queue it as is.
+
+    When the mux fails, its partial ``.mp4`` is always removed to free space.
+    The ``.h264`` is deleted only when it is zero bytes (provably no footage,
+    e.g. killed before its first frame); a non-empty capture may have failed
+    for a transient reason such as a full disk, so it is kept for the next
+    boot and the remaining orphans are still processed.
+    Returns the queued paths, oldest first.
+    """
+    recovered: list[Path] = []
+    for h264_path in sorted(data_dir.glob("*.h264")):
+        mp4_path = h264_path.with_suffix(".mp4")
+        try:
+            mp4_path = mux_segment(command_runner, h264_path, framerate)
+        except Exception:
+            mp4_path.unlink(missing_ok=True)
+            if h264_path.stat().st_size == 0:
+                _logger.exception(
+                    "could not mux empty orphaned capture %s; deleting it", h264_path
+                )
+                h264_path.unlink()
+            else:
+                _logger.exception(
+                    "could not mux orphaned capture %s; keeping it for the next boot",
+                    h264_path,
+                )
+            continue
+        h264_path.unlink()
+        recovered.append(enqueue(queue_dir, mp4_path))
+    for mp4_path in sorted(data_dir.glob("*.mp4")):
+        recovered.append(enqueue(queue_dir, mp4_path))
+    for path in recovered:
+        _logger.warning("recovered orphaned segment %s", path.name)
+    return sorted(recovered, key=lambda p: p.name)
+
+
 def flush_pending(
     queue_dir: Path, storage_client: StorageClient, device_id: str
 ) -> int:
@@ -117,16 +191,14 @@ def on_segment_complete(
         led_driver, next_led_state(battery_status.is_low, is_uploading=False)
     )
 
-    stats = disk_stats_reader.usage(data_dir)
-    status = DeviceStatus(
+    status = build_device_status(
         device_id=device_id,
         battery_pct=battery_status.pct,
-        storage_used_gb=stats.used_gb,
-        storage_free_gb=stats.free_gb,
-        segments_pending=len(list_pending(queue_dir)),
+        disk_stats_reader=disk_stats_reader,
+        data_dir=data_dir,
+        queue_dir=queue_dir,
         segments_uploaded_today=segments_uploaded_today,
         recording_active=True,
-        updated_at=datetime.now(UTC).isoformat(),
     )
     status_client.upsert_device_status(asdict(status))
 
