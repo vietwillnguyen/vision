@@ -1,0 +1,198 @@
+daemon defaults: video=VideoSettings(width=1280, height=720, framerate=30, bitrate_bps=4000000) audio=AudioSettings(device='visio_mic', bitrate_bps=64000, samplerate=48000, channels=1) segment_duration_ms=60000
+with-mic: ALSA config sim-visio-mic.conf
+  resolve_audio -> AudioSettings(device='visio_mic', bitrate_bps=64000, samplerate=48000, channels=1)
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec libav --libav-format mpegts --libav-audio --audio-source alsa --audio-device visio_mic --audio-channels 1 --audio-samplerate 48000 --audio-codec aac --audio-bitrate 64000 -n -o $SCRATCH/audio-day/with-mic/20261116_100000.ts
+mic-drops-out: ALSA config sim-visio-mic.conf
+  resolve_audio -> AudioSettings(device='visio_mic', bitrate_bps=64000, samplerate=48000, channels=1)
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec libav --libav-format mpegts --libav-audio --audio-source alsa --audio-device visio_mic --audio-channels 1 --audio-samplerate 48000 --audio-codec aac --audio-bitrate 64000 -n -o $SCRATCH/audio-day/mic-drops-out/20261116_100000.ts
+  (microphone unplugged)
+rpicam-vid (sim): visio_mic is gone
+rpicam-vid (sim): cannot open audio device visio_mic
+ERROR visio_recorder.daemon audio+video capture failed; recording video only for the rest of this run
+Traceback (most recent call last):
+  File "/home/viet/worktrees/feat-audio-capture/integration/.venv/lib/python3.14/site-packages/visio_recorder/daemon.py", line 330, in run_recording_loop
+    h264_path = record_segment(
+        deps.command_runner,
+    ...<4 lines>...
+        audio,
+    )
+  File "/home/viet/worktrees/feat-audio-capture/integration/.venv/lib/python3.14/site-packages/visio_recorder/capture.py", line 147, in record_segment
+    runner.run(build_rpicam_command(output_path, duration_ms, video, audio))
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/viet/worktrees/feat-audio-capture/integration/../docs/superpowers/evidence/audio-capture/e2e_audio_day.py", line 92, in run
+    super().run(args)
+    ~~~~~~~~~~~^^^^^^
+  File "/home/viet/worktrees/feat-audio-capture/integration/.venv/lib/python3.14/site-packages/visio_recorder/muxer.py", line 12, in run
+    subprocess.run(args, check=True)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/viet/.local/share/uv/python/cpython-3.14.2-linux-x86_64-gnu/lib/python3.14/subprocess.py", line 577, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['rpicam-vid', '-t', '60000', '--width', '1280', '--height', '720', '--framerate', '30', '--bitrate', '4000000', '--codec', 'libav', '--libav-format', 'mpegts', '--libav-audio', '--audio-source', 'alsa', '--audio-device', 'visio_mic', '--audio-channels', '1', '--audio-samplerate', '48000', '--audio-codec', 'aac', '--audio-bitrate', '64000', '-n', '-o', '$SCRATCH/audio-day/mic-drops-out/20261116_100202.ts']' returned non-zero exit status 1.
+ALSA lib confmisc.c:165:(snd_config_get_card) Cannot get card index for adau7002
+[alsa @ 0x62613eea7080] cannot open audio device visio_mic (No such device)
+[in#0 @ 0x62613eea6f80] Error opening input: Input/output error
+Error opening input file visio_mic.
+Error opening input files: Input/output error
+WARNING visio_recorder.daemon ALSA capture device 'visio_mic' did not open; recording video only. Check the I2S microphone wiring and the dtoverlay/asound.conf setup (README, firmware section), or set VISIO_AUDIO=off to silence this warning
+no-mic: ALSA config visio-mic.conf
+  resolve_audio -> None
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o $SCRATCH/audio-day/no-mic/20261116_100000.h264
+{
+  "with-mic": {
+    "resolved_audio": "AudioSettings(device='visio_mic', bitrate_bps=64000, samplerate=48000, channels=1)",
+    "uploaded": {
+      "20261116_100000.mp4": 30247664,
+      "20261116_100101.mp4": 30244907,
+      "20261116_100202.mp4": 30248387,
+      "20261116_100303.mp4": 30245111
+    },
+    "sample_streams": [
+      "h264|video|1280|720",
+      "aac|audio|48000|1"
+    ],
+    "left_in_queue": [],
+    "device_status": [
+      {
+        "recording_active": false,
+        "audio_active": true,
+        "segments_uploaded_today": 4
+      }
+    ]
+  },
+  "mic-drops-out": {
+    "resolved_audio": "AudioSettings(device='visio_mic', bitrate_bps=64000, samplerate=48000, channels=1)",
+    "uploaded": {
+      "20261116_100000.mp4": 30240852,
+      "20261116_100101.mp4": 30249263,
+      "20261116_100303.mp4": 29977548,
+      "20261116_100404.mp4": 29982401
+    },
+    "sample_streams": [
+      "h264|video|1280|720",
+      "aac|audio|48000|1"
+    ],
+    "left_in_queue": [],
+    "device_status": [
+      {
+        "recording_active": false,
+        "audio_active": false,
+        "segments_uploaded_today": 4
+      }
+    ]
+  },
+  "no-mic": {
+    "resolved_audio": "None",
+    "uploaded": {
+      "20261116_100000.mp4": 29983793,
+      "20261116_100101.mp4": 29976773,
+      "20261116_100202.mp4": 29982995,
+      "20261116_100303.mp4": 29982787
+    },
+    "sample_streams": [
+      "h264|video|1280|720"
+    ],
+    "left_in_queue": [],
+    "device_status": [
+      {
+        "recording_active": false,
+        "audio_active": false,
+        "segments_uploaded_today": 4
+      }
+    ]
+  },
+  "pipeline": {
+    "devices_processed": 3,
+    "devices_failed": 0,
+    "transcriptions": {
+      "3f0d04fa-6f66-4715-95f7-17bf470b93e2/20261116_100000": {
+        "speech_presence_ratio": 1.0,
+        "silence_ratio": 0.0,
+        "has_exclamation": false
+      },
+      "3f0d04fa-6f66-4715-95f7-17bf470b93e2/20261116_100101": {
+        "speech_presence_ratio": 1.0,
+        "silence_ratio": 0.0,
+        "has_exclamation": false
+      },
+      "4ff6527f-4a45-4f36-a6e7-c00a64e15323/20261116_100000": {
+        "speech_presence_ratio": 1.0,
+        "silence_ratio": 0.0,
+        "has_exclamation": false
+      },
+      "4ff6527f-4a45-4f36-a6e7-c00a64e15323/20261116_100101": {
+        "speech_presence_ratio": 1.0,
+        "silence_ratio": 0.0,
+        "has_exclamation": false
+      },
+      "4ff6527f-4a45-4f36-a6e7-c00a64e15323/20261116_100202": {
+        "speech_presence_ratio": 1.0,
+        "silence_ratio": 0.0,
+        "has_exclamation": false
+      },
+      "4ff6527f-4a45-4f36-a6e7-c00a64e15323/20261116_100303": {
+        "speech_presence_ratio": 1.0,
+        "silence_ratio": 0.0,
+        "has_exclamation": false
+      }
+    },
+    "with-mic": {
+      "segments": {
+        "20261116_100000.mp4": 0.5612,
+        "20261116_100101.mp4": 0.6012,
+        "20261116_100202.mp4": 0.6412,
+        "20261116_100303.mp4": 0.5611
+      },
+      "reel_row": {
+        "s3_key": "4ff6527f-4a45-4f36-a6e7-c00a64e15323/20261116.mp4",
+        "duration_sec": 60
+      },
+      "reel_streams": [
+        "h264|video|1280|720",
+        "aac|audio|48000|1"
+      ],
+      "reel_audio": {
+        "first_s": 0.0,
+        "last_s": 60.019,
+        "largest_gap_s": 0.021
+      }
+    },
+    "mic-drops-out": {
+      "segments": {
+        "20261116_100000.mp4": 0.5612,
+        "20261116_100101.mp4": 0.6011,
+        "20261116_100303.mp4": 0.2614,
+        "20261116_100404.mp4": 0.3013
+      },
+      "reel_row": {
+        "s3_key": "3f0d04fa-6f66-4715-95f7-17bf470b93e2/20261116.mp4",
+        "duration_sec": 45
+      },
+      "reel_streams": [
+        "h264|video|1280|720",
+        "aac|audio|48000|1"
+      ],
+      "reel_audio": {
+        "first_s": 0.0,
+        "last_s": 45.019,
+        "largest_gap_s": 0.021
+      }
+    },
+    "no-mic": {
+      "segments": {
+        "20261116_100000.mp4": 0.2614,
+        "20261116_100101.mp4": 0.3013,
+        "20261116_100202.mp4": 0.3413,
+        "20261116_100303.mp4": 0.2613
+      },
+      "reel_row": {
+        "s3_key": "a263ba94-a69c-456f-a89c-e9f3682739f6/20261116.mp4",
+        "duration_sec": 60
+      },
+      "reel_streams": [
+        "h264|video|1280|720"
+      ],
+      "reel_audio": null
+    }
+  }
+}

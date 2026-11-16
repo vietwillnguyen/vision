@@ -38,7 +38,8 @@ The device records passively all day, uploads footage to the cloud over home WiF
 ```
 [Pendant Hardware]
   RPi Zero 2W + Camera Module 3 Wide + PiJuice pHAT + 3000mAh LiPo
-  Records H.264 720p/30fps at 4 Mbps in rolling segments sized to fit the 50 MiB upload limit (1 minute by default).
+  Records H.264 720p/30fps at 4 Mbps, plus an I2S MEMS microphone track when one is fitted,
+  in rolling segments sized to fit the 50 MiB upload limit (1 minute by default).
   LED indicates recording / uploading state.
 
       | home WiFi, continuous background upload
@@ -75,11 +76,12 @@ The device records passively all day, uploads footage to the cloud over home WiF
 | Battery | 3000mAh LiPo (PiJuice compatible) | $12 |
 | Storage | 128GB microSD (Class 10) | $12 |
 | Status indicator | WS2812B single NeoPixel | $1 |
+| Microphone | INMP441 I2S MEMS microphone breakout | $3 |
 | User input | 6mm tactile SMD button | $0.50 |
 | Enclosure | 3D printed pendant shell + lanyard loop | ~$3 filament |
 | Misc | Ribbon cable, headers, JST connectors | $5 |
-| **Total (standard camera)** | | **~$91.50** |
-| **Total (vintage camera)** | | **~$74.50** |
+| **Total (standard camera)** | | **~$94.50** |
+| **Total (vintage camera)** | | **~$77.50** |
 
 > **Status note (2026-07-21):** the PiJuice Zero pHAT is currently blocked on availability. Bring-up is proceeding on a generic USB power bank instead; see [`2026-07-21-visio-device-provisioning-design.md`](2026-07-21-visio-device-provisioning-design.md) for the firmware-side handling and researched replacement candidates (PiSugar 2/3, generic I2C-fuel-gauge UPS HATs, or a hand-built TP4056/IP5306 + MAX17048 combo).
 
@@ -142,6 +144,63 @@ A single Python systemd service manages the full device lifecycle.
 - The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop - a failed upload's file stays queued and the *next process startup's* flush (step 5 above) is the retry mechanism.
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
 - On successful upload, local file is deleted to free SD space.
+
+### Audio Capture (as-built)
+
+**Decision (2026-11-16):** option A of the audio-capture design handoff, an INMP441 I2S MEMS microphone on the Pi's PCM pins, chosen over Bluetooth (shared 2.4 GHz radio with the continuous WiFi upload, HSP/HFP narrowband, reconnection failure modes) and USB (the Zero 2W's only data port).
+
+**Capture.** When a microphone is available, each segment is one `rpicam-vid` invocation that records audio and video together through rpicam-apps' libav backend, so the tracks share one clock and need no sync correction:
+
+```
+rpicam-vid -t <ms> --width 1280 --height 720 --framerate 30 --bitrate 4000000 \
+  --codec libav --libav-format mpegts --libav-audio --audio-source alsa \
+  --audio-device visio_mic --audio-channels 1 --audio-samplerate 48000 \
+  --audio-codec aac --audio-bitrate 64000 -n -o YYYYMMDD_HHMMSS.ts
+```
+
+The flags and their defaults were checked against rpicam-apps v1.15.0 (`core/video_options.hpp`, `encoder/libav_encoder.cpp`): `--audio-source` defaults to `pulse`, which Raspberry Pi OS Lite does not run, so `alsa` is explicit; the libav video codec defaults to `h264_v4l2m2m`, the same hardware encoder, and `--bitrate` still applies to it.
+MPEG-TS rather than MP4 because a transport stream is still readable when the capture is killed mid-segment (MP4 writes its index last), so orphan recovery remuxes a leftover `.ts` exactly like a leftover `.h264`.
+The daemon remuxes it to MP4 with `ffmpeg -i X.ts -map 0 -c copy X.mp4`.
+64 kbps mono AAC at 48 kHz is ample for speech; the segment-size budget reserves 128 kbps (`VISIO_AUDIO_BITRATE` up to that changes nothing).
+
+**Fallback.** At startup the daemon opens `VISIO_AUDIO_DEVICE` (default `visio_mic`) the way rpicam-vid will, with a 0.2 s `ffmpeg -f alsa` capture.
+If it does not open (microphone not wired, overlay or ALSA config missing), the daemon logs a warning and records video only, exactly as before; the pendant always records.
+If an audio capture fails mid-run, the loop records video only for the rest of the run, and the partial `.ts` is recovered at the next boot.
+`device_status.audio_active` reports which way it went: on the loop's start and stop upserts, and per segment for the segment just uploaded.
+`VISIO_AUDIO=off` disables audio and the probe.
+
+**Device setup** (not yet in `firmware/scripts/setup-device.sh`, which is in draft PR #26; listed there as a follow-up):
+
+1. Wire the INMP441 (sources: Raspberry Pi's [GPIO pin functions table](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html) for the PCM pins; the `adau7002-simple` overlay in raspberrypi/linux `rpi-6.12.y`):
+
+   | INMP441 pin | Pi GPIO | Header pin | Function |
+   |---|---|---|---|
+   | SCK | GPIO 18 | 12 | PCM clock (BCLK) |
+   | WS | GPIO 19 | 35 | PCM frame sync (LRCLK) |
+   | SD | GPIO 20 | 38 | PCM data in (DIN) |
+   | L/R | GND | 39 | selects the left slot |
+   | VDD | 3V3 | 1 or 17 | power |
+   | GND | GND | 6, 9, 14, 20, 25, 30, 34 or 39 | ground |
+
+2. Add `dtoverlay=adau7002-simple` to `/boot/firmware/config.txt` and reboot.
+   The overlay makes the Pi the I2S clock producer and registers a capture-only card named `adau7002` (2 channels, S16_LE to S32_LE, 8-96 kHz); the INMP441 needs no driver because it only shifts samples out on the Pi's clocks.
+   `googlevoicehat-soundcard` also works with I2S MEMS microphones but drives GPIO 16 as an amplifier enable, so it is not used.
+3. Install `firmware/alsa/visio-mic.conf` as `/etc/asound.conf`.
+   It defines `visio_mic`: the card's native stereo S32_LE at 48 kHz, keeping only the left slot (the INMP441 leaves the right one empty), rather than averaging speech with silence.
+4. Check with `arecord -D visio_mic -f S16_LE -r 48000 -c 1 -d 5 test.wav`, then restart `visio-recorder` and confirm `audio_active` is true.
+
+**GPIO 18 is shared with the status LED today.** `rpi_ws281x` drives the WS2812B on GPIO 18 through PWM0; I2S needs GPIO 18 for BCLK.
+The LED moves to SPI0 MOSI (GPIO 10, header pin 19) in PR #85 (`feat/led-spi-rewire`), which also removes the daemon's `/dev/mem` requirement.
+The two changes are a pair: wire the microphone only on a pendant running the SPI LED firmware.
+
+**Bench measurements needed before buying or soldering** (handoff section 4, question 2, plus what follows from it), on a Pi Zero 2W with the Camera Module 3 and an INMP441:
+
+- CPU and memory of `rpicam-vid --codec libav` with audio at 1280x720, 30 fps, 4 Mbps over at least 10 minutes: `top`/`pidstat -u -r -p <pid> 5` for per-core CPU and RSS, against the 512 MB budget, and whether any frames are dropped (`--framerate 30` holds; frame count in the MP4 equals 30 x duration).
+- The same with the uploader and the flag-button worker running, since the upload worker remuxes and sends the previous segment while the next records.
+- A/V sync over a full segment (clap test at start and end), and whether `--av-sync` needs a non-zero offset.
+- Real segment size with audio (expect about 30.5 MB per 60 s) and the encoder's overshoot on a high-motion walk.
+- Microphone level through `visio_mic`: the INMP441's 24-bit samples in a 32-bit slot are quiet; decide whether a `softvol` gain stage is needed for Whisper on speech from the wearer, muffled by clothing.
+- Startup latency added by the libav backend, which widens the restart gap between segments (the pipeline tolerates up to 3 s).
 
 ### Segment Size Contract
 
@@ -210,9 +269,10 @@ After each segment is processed, whether the upload succeeds or fails, the daemo
 ```
 battery_pct, storage_used_gb, storage_free_gb,
 segments_pending, segments_uploaded_today, recording_active,
-segments_rejected, updated_at
+segments_rejected, audio_active, updated_at
 ```
 
+`audio_active` says whether the pendant is recording its microphone (see Audio Capture).
 `segments_rejected` is the number of segments the firmware gave up uploading because they are over the storage size limit and could not be split (see Segment Size Contract).
 
 The mobile app subscribes to this row via Supabase Realtime for live status without polling.
@@ -261,8 +321,8 @@ Where the measured length is used:
 
 Flag markers have one-second resolution (`FLAG_YYYYMMDD_HHMMSS`), so the in-memory window uses the exact measured float and the stored integer rounds up rather than to nearest.
 
-**As-built finding (silent segments):** the firmware records video only, and `ffmpeg` refuses to extract audio from a file with no audio stream, so before this was handled every real device day failed in Stage 1.
-A segment with no audio stream now scores as silence without a Whisper call.
+**As-built finding (silent segments):** the firmware recorded video only, and `ffmpeg` refuses to extract audio from a file with no audio stream, so before this was handled every real device day failed in Stage 1.
+A segment with no audio stream scores as silence without a Whisper call; with a microphone fitted that is only a pendant whose microphone is missing or failed (see Audio Capture).
 
 ### Pipeline Stages
 
@@ -270,6 +330,10 @@ A segment with no audio stream now scores as silence without a Whisper call.
 
 Each segment is transcribed via OpenAI Whisper.
 Scores extracted: speech presence ratio, laughter/exclamation detection, silence ratio.
+
+**As-built:** the `audio_weight` default was 0 while the pendant recorded no audio, and is 0.3 again now that it does (migration `20261117120000_restore_audio_weight_default.sql`, `ScoreWeights` in `pipeline/models.py`).
+A segment without an audio stream scores audio activity 0, so the term only counts for segments with a real microphone track.
+A reel that mixes both (a day the microphone dropped out) gives every clip an audio track, silence for video-only clips, because the concat demuxer otherwise takes its stream layout from the first clip: a video-only first clip dropped the whole reel's audio, and a video-only clip later left a gap that players close up, playing later clips' sound over earlier pictures.
 
 **Stage 2 - Motion Analysis (FFmpeg, no API cost)**
 
