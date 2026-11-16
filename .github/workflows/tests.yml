@@ -21,7 +21,8 @@ env:
   #
   # Bumping it also means updating .github/supabase-images.txt, the images that
   # version boots: CI serves them from a cache and blocks public.ecr.aws and
-  # its ghcr.io fallback, so a stale list fails loudly rather than pulling.
+  # its ghcr.io and Docker Hub fallbacks, so a stale list fails loudly rather
+  # than pulling.
   SUPABASE_CLI_VERSION: "2.109.0"
   # With [experimental.pgdelta] enabled in supabase/config.toml (kept for
   # developers' `db diff`), `supabase start` runs a one-off edge-runtime
