@@ -303,6 +303,8 @@ def test_marker_after_a_short_segment_flags_the_restarted_segment():
 
 
 def test_marker_in_the_gap_after_a_short_segment_is_unmatched():
+    # Well past the restart-gap tolerance: recording was stopped, not
+    # restarting, so there is no footage the press could be about.
     segments, _ = build_segments_from_object_keys(
         ["device-abc/20260704_120500.mp4"],
         device_id="device-abc",
@@ -311,12 +313,68 @@ def test_marker_in_the_gap_after_a_short_segment_is_unmatched():
 
     _, _, unmatched = apply_flag_markers(
         segments,
-        ["device-abc/FLAG_20260704_120540.marker"],
+        ["device-abc/FLAG_20260704_120550.marker"],
         device_id="device-abc",
     )
 
-    assert unmatched == ["device-abc/FLAG_20260704_120540.marker"]
+    assert unmatched == ["device-abc/FLAG_20260704_120550.marker"]
     assert segments[0].manually_flagged is False
+
+
+def _back_to_back_minute_segments():
+    # rpicam-vid runs once per segment, so consecutive captures are separated
+    # by a ~1-2 s restart gap: 08:31:01 + 60 s ends at 08:32:01, and the next
+    # capture is stamped 08:32:02.
+    segments, _ = build_segments_from_object_keys(
+        ["device-abc/20261116_083101.mp4", "device-abc/20261116_083202.mp4"],
+        device_id="device-abc",
+        measure_duration_sec=lambda _key: 59.9994,
+    )
+    return segments
+
+
+def test_marker_in_the_restart_gap_flags_the_segment_that_just_ended():
+    segments = _back_to_back_minute_segments()
+
+    _, _, unmatched = apply_flag_markers(
+        segments,
+        ["device-abc/FLAG_20261116_083201.marker"],
+        device_id="device-abc",
+    )
+
+    assert unmatched == []
+    assert [s.manually_flagged for s in segments] == [True, False]
+
+
+def test_marker_on_a_segments_first_second_flags_that_segment_not_the_gap():
+    segments = _back_to_back_minute_segments()
+
+    _, _, unmatched = apply_flag_markers(
+        segments,
+        ["device-abc/FLAG_20261116_083202.marker"],
+        device_id="device-abc",
+    )
+
+    assert unmatched == []
+    assert [s.manually_flagged for s in segments] == [False, True]
+
+
+@pytest.mark.parametrize(("second", "matched"), [(3, True), (4, False)])
+def test_restart_gap_tolerance_ends_three_seconds_after_a_segment(second, matched):
+    segments, _ = build_segments_from_object_keys(
+        ["device-abc/20261116_083000.mp4"],
+        device_id="device-abc",
+        measure_duration_sec=lambda _key: 60.0,
+    )
+
+    _, _, unmatched = apply_flag_markers(
+        segments,
+        [f"device-abc/FLAG_20261116_08310{second - 1}.marker"],
+        device_id="device-abc",
+    )
+
+    assert segments[0].manually_flagged is matched
+    assert (unmatched == []) is matched
 
 
 def test_marker_in_the_last_partial_second_of_a_segment_matches_it():

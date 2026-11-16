@@ -631,6 +631,35 @@ class TestDlqPolicy:
         assert store.escalated_dlq == []
         assert push.sent == []
 
+    def test_retried_restart_gap_marker_flags_the_persisted_segment_before_it(
+        self, tmp_path
+    ):
+        marker = "dev-1/FLAG_20260713_090100.marker"
+        store = FakeStore(
+            devices=[DEVICE],
+            pending_dlq={"dev-1": [DlqEntry(key=marker, kind="unmatched", attempts=1)]},
+            segment_rows={
+                "dev-1": [
+                    {
+                        "s3_key": "dev-1/20260713_090000.mp4",
+                        "recorded_at": "2026-07-13T09:00:00",
+                        "duration_sec": 60,
+                    },
+                    {
+                        "s3_key": "dev-1/20260713_090102.mp4",
+                        "recorded_at": "2026-07-13T09:01:02",
+                        "duration_sec": 60,
+                    },
+                ]
+            },
+        )
+        deps = make_deps(store, tmp_path)
+
+        run_nightly(deps, DAY)
+
+        assert store.flagged_segments == ["dev-1/20260713_090000.mp4"]
+        assert ("dev-1", marker) in store.resolved_dlq
+
     def test_escalation_is_not_marked_when_push_delivery_fails(self, tmp_path):
         marker = "dev-1/FLAG_20260713_090100.marker"
         store = FakeStore(

@@ -50,8 +50,8 @@ from pipeline.delivery.notifier import (
 from pipeline.ingestion import (
     apply_flag_markers,
     build_segments_from_object_keys,
+    match_marker,
     parse_flag_marker_filename,
-    segment_window_end,
     stored_duration_sec,
 )
 from pipeline.models import ScoreWeights, Segment
@@ -218,13 +218,21 @@ def _flag_persisted_segment(
     store: PipelineStore, device_id: str, marker_key: str
 ) -> bool:
     flag_at = parse_flag_marker_filename(marker_key.split("/")[-1])
-    for row in store.list_segment_rows(device_id, flag_at.date()):
-        recorded_at = datetime.fromisoformat(row["recorded_at"]).replace(tzinfo=None)
-        window_end = segment_window_end(recorded_at, row["duration_sec"])
-        if recorded_at <= flag_at < window_end:
-            store.flag_segment(row["s3_key"])
-            return True
-    return False
+    rows = store.list_segment_rows(device_id, flag_at.date())
+    index = match_marker(
+        [
+            (
+                datetime.fromisoformat(row["recorded_at"]).replace(tzinfo=None),
+                row["duration_sec"],
+            )
+            for row in rows
+        ],
+        flag_at,
+    )
+    if index is None:
+        return False
+    store.flag_segment(rows[index]["s3_key"])
+    return True
 
 
 def _process_device_segments(
