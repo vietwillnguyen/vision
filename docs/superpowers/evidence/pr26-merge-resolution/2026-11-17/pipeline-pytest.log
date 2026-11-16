@@ -1,0 +1,27 @@
+$ (cd pipeline && uv run --locked --extra dev pytest)
+============================= test session starts ==============================
+platform linux -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: <repo>/pipeline
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.14.1
+collected 163 items
+
+tests/test_adapters.py .........................                         [ 15%]
+tests/test_audio_scoring.py ....                                         [ 17%]
+tests/test_composite_scoring.py ....                                     [ 20%]
+tests/test_ffmpeg_assembler.py ..........                                [ 26%]
+tests/test_ffmpeg_media_live.py .....                                    [ 29%]
+tests/test_highlight_selector.py .......                                 [ 33%]
+tests/test_ingestion.py ..........................                       [ 49%]
+tests/test_main.py ...                                                   [ 51%]
+tests/test_models.py ..                                                  [ 52%]
+tests/test_motion_scoring.py .....                                       [ 55%]
+tests/test_notifier.py .                                                 [ 56%]
+tests/test_orchestrator.py ..............................                [ 74%]
+tests/test_scene_scoring.py .................                            [ 85%]
+tests/test_scoring_pipeline.py ..                                        [ 86%]
+tests/test_supabase_store.py ......................                      [100%]
+
+============================= 163 passed in 12.81s =============================
+exit=0

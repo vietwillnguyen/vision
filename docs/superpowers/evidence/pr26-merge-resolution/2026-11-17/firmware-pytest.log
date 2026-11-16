@@ -1,0 +1,31 @@
+$ (cd firmware && uv run --locked --extra dev pytest)
+============================= test session starts ==============================
+platform linux -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: <repo>/firmware
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.14.1
+collected 309 items
+
+tests/test_battery.py ...                                                [  0%]
+tests/test_capture.py ....                                               [  2%]
+tests/test_daemon.py ..........................                          [ 10%]
+tests/test_device_identity.py ........                                   [ 13%]
+tests/test_drivers.py .                                                  [ 13%]
+tests/test_flag_button.py ...........                                    [ 17%]
+tests/test_led.py ....                                                   [ 18%]
+tests/test_muxer.py ...                                                  [ 19%]
+tests/test_onboarding.py .........                                       [ 22%]
+tests/test_preflight.py ................................................ [ 37%]
+...............                                                          [ 42%]
+tests/test_preflight_entrypoint.py ........                              [ 45%]
+tests/test_recording_loop.py .....................                       [ 52%]
+tests/test_setup_device.py ............................................. [ 66%]
+..................................................                       [ 82%]
+tests/test_supabase_clients.py ..............                            [ 87%]
+tests/test_upload_queue.py ....                                          [ 88%]
+tests/test_uploader.py ..                                                [ 89%]
+tests/test_wifi_onboard.py .................................             [100%]
+
+============================= 309 passed in 8.81s ==============================
+exit=0

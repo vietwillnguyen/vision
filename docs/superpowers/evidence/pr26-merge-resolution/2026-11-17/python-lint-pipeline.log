@@ -1,0 +1,21 @@
+$ (cd pipeline && uv run --locked --extra dev ruff check . && uv run --locked --extra dev ruff format --check . && uv run --locked --extra dev mypy)
+   Building visio-pipeline @ file://<repo>/pipeline
+Downloading botocore (15.6MiB)
+Downloading aiohttp (1.8MiB)
+Downloading ruff (10.1MiB)
+Downloading litellm (39.2MiB)
+Downloading ast-serialize (1.3MiB)
+Downloading mypy (14.7MiB)
+ Downloaded ast-serialize
+ Downloaded aiohttp
+      Built visio-pipeline @ file://<repo>/pipeline
+ Downloaded ruff
+ Downloaded mypy
+ Downloaded botocore
+ Downloaded litellm
+Uninstalled 17 packages in 356ms
+Installed 24 packages in 250ms
+All checks passed!
+40 files already formatted
+Success: no issues found in 39 source files
+exit=0

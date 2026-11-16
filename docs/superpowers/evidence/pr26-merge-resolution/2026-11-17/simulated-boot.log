@@ -1,0 +1,173 @@
+### ExecStartPre: python -m visio_recorder.preflight
+[INFO] install: <repo>/firmware/visio_recorder
+[OK] rpicam-vid: found on PATH
+[OK] rpicam-still: found on PATH
+[OK] zbarimg: found on PATH
+[OK] ffmpeg: found on PATH
+[OK] nmcli: found on PATH
+[OK] rpi_ws281x: importable
+[OK] gpiozero: importable
+[OK] supabase: importable
+[OK] camera: camera detected
+[OK] networkmanager: running
+[OK] data_dir: <sim>/data writable
+ExecStartPre exit=0
+
+### ExecStart: visio_recorder.daemon main() (simulated hardware)
+01:31:55.179 simulate-boot INFO planted leftovers: queue=['20261116_230000.mp4'] data_dir=['20261116_231000.h264', '20261116_232000.mp4', 'device.json', 'session.json']
+01:31:55.181 simulate-boot INFO BOOT STEP preflight.run_checks (in main): start
+01:31:55.187 simulate-boot INFO BOOT STEP preflight.run_checks (in main): done -> ['rpicam-vid', 'rpicam-still', 'zbarimg', 'ffmpeg', 'nmcli', 'rpi_ws281x', 'gpiozero', 'supabase', 'camera', 'networkmanager', 'data_dir']
+[INFO] install: <repo>/firmware/visio_recorder
+[OK] rpicam-vid: found on PATH
+[OK] rpicam-still: found on PATH
+[OK] zbarimg: found on PATH
+[OK] ffmpeg: found on PATH
+[OK] nmcli: found on PATH
+[OK] rpi_ws281x: importable
+[OK] gpiozero: importable
+[OK] supabase: importable
+[OK] camera: camera detected
+[OK] networkmanager: running
+[OK] data_dir: <sim>/data writable
+01:31:55.187 simulate-boot INFO LED -> color=(0, 255, 0) pattern=SOLID
+01:31:55.485 simulate-boot INFO BOOT STEP flush_pending: start
+01:31:55.557 simulate-boot INFO BOOT STEP flush_pending: done -> 1
+01:31:55.557 simulate-boot INFO BOOT STEP recover_orphaned_segments: start
+ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers
+  built with gcc 13 (Ubuntu 13.2.0-23ubuntu3)
+  configuration: --prefix=/usr --extra-version=3ubuntu5 --toolchain=hardened --libdir=/usr/lib/x86_64-linux-gnu --incdir=/usr/include/x86_64-linux-gnu --arch=amd64 --enable-gpl --disable-stripping --disable-omx --enable-gnutls --enable-libaom --enable-libass --enable-libbs2b --enable-libcaca --enable-libcdio --enable-libcodec2 --enable-libdav1d --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libglslang --enable-libgme --enable-libgsm --enable-libharfbuzz --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx265 --enable-libxml2 --enable-libxvid --enable-libzimg --enable-openal --enable-opencl --enable-opengl --disable-sndio --enable-libvpl --disable-libmfx --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-ladspa --enable-libbluray --enable-libjack --enable-libpulse --enable-librabbitmq --enable-librist --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libx264 --enable-libzmq --enable-libzvbi --enable-lv2 --enable-sdl2 --enable-libplacebo --enable-librav1e --enable-pocketsphinx --enable-librsvg --enable-libjxl --enable-shared
+  libavutil      58. 29.100 / 58. 29.100
+  libavcodec     60. 31.102 / 60. 31.102
+  libavformat    60. 16.100 / 60. 16.100
+  libavdevice    60.  3.100 / 60.  3.100
+  libavfilter     9. 12.100 /  9. 12.100
+  libswscale      7.  5.100 /  7.  5.100
+  libswresample   4. 12.100 /  4. 12.100
+  libpostproc    57.  3.100 / 57.  3.100
+Input #0, h264, from '<sim>/data/20261116_231000.h264':
+  Duration: N/A, bitrate: N/A
+  Stream #0:0: Video: h264 (High), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], 30 fps, 60 tbr, 1200k tbn
+Output #0, mp4, to '<sim>/data/20261116_231000.mp4':
+  Metadata:
+    encoder         : Lavf60.16.100
+  Stream #0:0: Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], q=2-31, 30 fps, 60 tbr, 1200k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (copy)
+Press [q] to stop, [?] for help
+size=       0kB time=-00:00:00.06 bitrate=  -0.0kbits/s speed=N/A    [mp4 @ 0x623c65887e80] Timestamps are unset in a packet for stream 0. This is deprecated and will stop working in the future. Fix your code to set the timestamps properly
+[mp4 @ 0x623c65887e80] pts has no value
+    Last message repeated 29 times
+[out#0/mp4 @ 0x623c657f5c40] video:7kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 16.064534%
+size=       8kB time=00:00:00.89 bitrate=  74.8kbits/s speed= 423x    
+01:31:55.661 visio_recorder.recording_loop WARNING recovered orphaned segment 20261116_231000.mp4
+01:31:55.661 visio_recorder.recording_loop WARNING recovered orphaned segment 20261116_232000.mp4
+01:31:55.661 simulate-boot INFO BOOT STEP recover_orphaned_segments: done -> ['20261116_231000.mp4', '20261116_232000.mp4']
+01:31:55.661 simulate-boot INFO BOOT STEP flush_pending: start
+01:31:55.787 simulate-boot INFO BOOT STEP flush_pending: done -> 2
+01:31:55.788 simulate-boot INFO flag button listener registered (GPIO 17 simulated)
+01:31:55.789 simulate-boot INFO BOOT STEP run_recording_loop: start
+rpicam-vid (simulated): 2s test pattern -> <sim>/data/20261117_013155.h264
+01:31:55.856 simulate-boot INFO device_status row: {'recording_active': True, 'segments_uploaded_today': 3, 'segments_pending': 0}
+rpicam-vid (simulated): 2s test pattern -> <sim>/data/20261117_013157.h264
+ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers
+  built with gcc 13 (Ubuntu 13.2.0-23ubuntu3)
+  configuration: --prefix=/usr --extra-version=3ubuntu5 --toolchain=hardened --libdir=/usr/lib/x86_64-linux-gnu --incdir=/usr/include/x86_64-linux-gnu --arch=amd64 --enable-gpl --disable-stripping --disable-omx --enable-gnutls --enable-libaom --enable-libass --enable-libbs2b --enable-libcaca --enable-libcdio --enable-libcodec2 --enable-libdav1d --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libglslang --enable-libgme --enable-libgsm --enable-libharfbuzz --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx265 --enable-libxml2 --enable-libxvid --enable-libzimg --enable-openal --enable-opencl --enable-opengl --disable-sndio --enable-libvpl --disable-libmfx --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-ladspa --enable-libbluray --enable-libjack --enable-libpulse --enable-librabbitmq --enable-librist --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libx264 --enable-libzmq --enable-libzvbi --enable-lv2 --enable-sdl2 --enable-libplacebo --enable-librav1e --enable-pocketsphinx --enable-librsvg --enable-libjxl --enable-shared
+  libavutil      58. 29.100 / 58. 29.100
+  libavcodec     60. 31.102 / 60. 31.102
+  libavformat    60. 16.100 / 60. 16.100
+  libavdevice    60.  3.100 / 60.  3.100
+  libavfilter     9. 12.100 /  9. 12.100
+  libswscale      7.  5.100 /  7.  5.100
+  libswresample   4. 12.100 /  4. 12.100
+  libpostproc    57.  3.100 / 57.  3.100
+Input #0, h264, from '<sim>/data/20261117_013155.h264':
+  Duration: N/A, bitrate: N/A
+  Stream #0:0: Video: h264 (High), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], 30 fps, 60 tbr, 1200k tbn
+Output #0, mp4, to '<sim>/data/20261117_013155.mp4':
+  Metadata:
+    encoder         : Lavf60.16.100
+  Stream #0:0: Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], q=2-31, 30 fps, 60 tbr, 1200k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (copy)
+Press [q] to stop, [?] for help
+size=       0kB time=-00:00:00.06 bitrate=  -0.0kbits/s speed=N/A    [mp4 @ 0x5c2c38bea600] Timestamps are unset in a packet for stream 0. This is deprecated and will stop working in the future. Fix your code to set the timestamps properly
+[mp4 @ 0x5c2c38bea600] pts has no value
+    Last message repeated 57 times
+[mp4 @ 0x5c2c38bea600] pts has no value
+    Last message repeated 1 times
+[out#0/mp4 @ 0x5c2c38b3cc40] video:11kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 12.835665%
+size=      13kB time=00:00:01.89 bitrate=  54.7kbits/s speed= 485x    
+01:31:57.525 simulate-boot INFO LED -> color=(0, 0, 255) pattern=PULSING
+01:31:57.608 simulate-boot INFO LED -> color=(0, 255, 0) pattern=SOLID
+01:31:57.665 simulate-boot INFO device_status row: {'recording_active': True, 'segments_uploaded_today': 4, 'segments_pending': 0}
+rpicam-vid (simulated): 2s test pattern -> <sim>/data/20261117_013159.h264
+ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers
+  built with gcc 13 (Ubuntu 13.2.0-23ubuntu3)
+  configuration: --prefix=/usr --extra-version=3ubuntu5 --toolchain=hardened --libdir=/usr/lib/x86_64-linux-gnu --incdir=/usr/include/x86_64-linux-gnu --arch=amd64 --enable-gpl --disable-stripping --disable-omx --enable-gnutls --enable-libaom --enable-libass --enable-libbs2b --enable-libcaca --enable-libcdio --enable-libcodec2 --enable-libdav1d --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libglslang --enable-libgme --enable-libgsm --enable-libharfbuzz --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx265 --enable-libxml2 --enable-libxvid --enable-libzimg --enable-openal --enable-opencl --enable-opengl --disable-sndio --enable-libvpl --disable-libmfx --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-ladspa --enable-libbluray --enable-libjack --enable-libpulse --enable-librabbitmq --enable-librist --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libx264 --enable-libzmq --enable-libzvbi --enable-lv2 --enable-sdl2 --enable-libplacebo --enable-librav1e --enable-pocketsphinx --enable-librsvg --enable-libjxl --enable-shared
+  libavutil      58. 29.100 / 58. 29.100
+  libavcodec     60. 31.102 / 60. 31.102
+  libavformat    60. 16.100 / 60. 16.100
+  libavdevice    60.  3.100 / 60.  3.100
+  libavfilter     9. 12.100 /  9. 12.100
+  libswscale      7.  5.100 /  7.  5.100
+  libswresample   4. 12.100 /  4. 12.100
+  libpostproc    57.  3.100 / 57.  3.100
+Input #0, h264, from '<sim>/data/20261117_013157.h264':
+  Duration: N/A, bitrate: N/A
+  Stream #0:0: Video: h264 (High), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], 30 fps, 60 tbr, 1200k tbn
+Output #0, mp4, to '<sim>/data/20261117_013157.mp4':
+  Metadata:
+    encoder         : Lavf60.16.100
+  Stream #0:0: Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], q=2-31, 30 fps, 60 tbr, 1200k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (copy)
+Press [q] to stop, [?] for help
+size=       0kB time=-00:00:00.06 bitrate=  -0.0kbits/s speed=N/A    [mp4 @ 0x622304730600] Timestamps are unset in a packet for stream 0. This is deprecated and will stop working in the future. Fix your code to set the timestamps properly
+[mp4 @ 0x622304730600] pts has no value
+    Last message repeated 57 times
+[mp4 @ 0x622304730600] pts has no value
+    Last message repeated 1 times
+[out#0/mp4 @ 0x622304682c40] video:11kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 12.835665%
+size=      13kB time=00:00:01.89 bitrate=  54.7kbits/s speed= 389x    
+01:31:59.162 simulate-boot INFO LED -> color=(0, 0, 255) pattern=PULSING
+01:31:59.208 simulate-boot INFO LED -> color=(0, 255, 0) pattern=SOLID
+01:31:59.246 simulate-boot INFO device_status row: {'recording_active': True, 'segments_uploaded_today': 5, 'segments_pending': 0}
+01:31:59.257 simulate-boot INFO two live segments stored (['20261117_013155.mp4', '20261117_013157.mp4']); sending SIGTERM
+ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers
+  built with gcc 13 (Ubuntu 13.2.0-23ubuntu3)
+  configuration: --prefix=/usr --extra-version=3ubuntu5 --toolchain=hardened --libdir=/usr/lib/x86_64-linux-gnu --incdir=/usr/include/x86_64-linux-gnu --arch=amd64 --enable-gpl --disable-stripping --disable-omx --enable-gnutls --enable-libaom --enable-libass --enable-libbs2b --enable-libcaca --enable-libcdio --enable-libcodec2 --enable-libdav1d --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libglslang --enable-libgme --enable-libgsm --enable-libharfbuzz --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx265 --enable-libxml2 --enable-libxvid --enable-libzimg --enable-openal --enable-opencl --enable-opengl --disable-sndio --enable-libvpl --disable-libmfx --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-ladspa --enable-libbluray --enable-libjack --enable-libpulse --enable-librabbitmq --enable-librist --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libx264 --enable-libzmq --enable-libzvbi --enable-lv2 --enable-sdl2 --enable-libplacebo --enable-librav1e --enable-pocketsphinx --enable-librsvg --enable-libjxl --enable-shared
+  libavutil      58. 29.100 / 58. 29.100
+  libavcodec     60. 31.102 / 60. 31.102
+  libavformat    60. 16.100 / 60. 16.100
+  libavdevice    60.  3.100 / 60.  3.100
+  libavfilter     9. 12.100 /  9. 12.100
+  libswscale      7.  5.100 /  7.  5.100
+  libswresample   4. 12.100 /  4. 12.100
+  libpostproc    57.  3.100 / 57.  3.100
+Input #0, h264, from '<sim>/data/20261117_013159.h264':
+  Duration: N/A, bitrate: N/A
+  Stream #0:0: Video: h264 (High), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], 30 fps, 60 tbr, 1200k tbn
+Output #0, mp4, to '<sim>/data/20261117_013159.mp4':
+  Metadata:
+    encoder         : Lavf60.16.100
+  Stream #0:0: Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], q=2-31, 30 fps, 60 tbr, 1200k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (copy)
+Press [q] to stop, [?] for help
+size=       0kB time=-00:00:00.06 bitrate=  -0.0kbits/s speed=N/A    [mp4 @ 0x5c29a2664600] Timestamps are unset in a packet for stream 0. This is deprecated and will stop working in the future. Fix your code to set the timestamps properly
+[mp4 @ 0x5c29a2664600] pts has no value
+    Last message repeated 58 times
+[mp4 @ 0x5c29a2664600] pts has no value
+[out#0/mp4 @ 0x5c29a25b6c40] video:11kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 12.835665%
+size=      13kB time=00:00:01.89 bitrate=  54.7kbits/s speed= 484x    
+01:32:00.776 simulate-boot INFO LED -> color=(0, 0, 255) pattern=PULSING
+01:32:00.822 simulate-boot INFO LED -> color=(0, 255, 0) pattern=SOLID
+01:32:00.850 simulate-boot INFO BOOT STEP run_recording_loop: done -> None
+01:32:00.938 simulate-boot INFO device_status row: {'recording_active': False, 'segments_uploaded_today': 6, 'segments_pending': 0}
+01:32:01.912 simulate-boot INFO daemon.main() returned 0
+01:32:01.912 simulate-boot INFO objects in segments/c495a6d1-0fe5-4da2-8f3d-2d49565d5f8d: ['20261116_230000.mp4', '20261116_231000.mp4', '20261116_232000.mp4', '20261117_013155.mp4', '20261117_013157.mp4', '20261117_013159.mp4']
+01:32:01.912 simulate-boot INFO final device_status: [{'device_id': 'c495a6d1-0fe5-4da2-8f3d-2d49565d5f8d', 'battery_pct': 100, 'storage_used_gb': 172.98767852783203, 'storage_free_gb': 782.6506309509277, 'segments_pending': 0, 'segments_uploaded_today': 6, 'recording_active': False, 'updated_at': '2026-11-16T18:32:00.830952+00:00'}]
+01:32:01.912 simulate-boot INFO queue after run: []
+01:32:01.913 simulate-boot INFO data_dir top level after run: ['device.json', 'device_registered', 'session.json']
+01:32:01.913 simulate-boot INFO recording_active transitions observed: [(True, 3), (True, 4), (True, 5), (False, 6)]
+ExecStart exit=0

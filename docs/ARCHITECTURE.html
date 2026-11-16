@@ -188,9 +188,9 @@ flowchart TD
         <h3 class="font-semibold mb-2">Startup composition</h3>
         <pre class="mermaid">
 flowchart TD
-  A["systemd starts visio-recorder<br/>EnvironmentFile=/etc/visio-recorder.env"] --> P0{"ExecStartPre: visio_recorder.preflight<br/>any block-severity failure?"}
+  A["systemd starts visio-recorder<br/>EnvironmentFile=/etc/visio-recorder.env"] --> P0{"ExecStartPre preflight:<br/>blocking failure?"}
   P0 -- yes --> P1["unit fails to start<br/>(systemd retries)"]
-  P0 -- no --> P2{"main(): preflight.run_checks again<br/>any block-severity failure?"}
+  P0 -- no --> P2{"main() re-runs preflight:<br/>blocking failure?"}
   P2 -- yes --> P3["exit 1"]
   P2 -- no --> BR["battery reader from VISIO_BATTERY_SOURCE<br/>(pijuice | none)"]
   BR --> B{"battery below 10%?"}

@@ -93,3 +93,69 @@ Output: [firmware-preflight-simulated-hardware.log](firmware-preflight-simulated
 
 The daemon's capture, mux, upload and flag paths run against fakes in the firmware suite, and the firmware-upload to pipeline-ingest handoff runs against live local Supabase in `integration/tests/test_storage_ingestion_live.py`.
 Nothing here replaces the physical checklist in the PR body.
+
+## 2026-11-17: second merge of origin/main (b809807)
+
+Merge commit `d2344fe` brings #68-#77 and #83 into the branch as a plain two-parent merge (no rebase, no force push).
+Since the previous merge used a real merge commit, the merge base was correct this time (`ffed638`), and git reported six conflicting files.
+Logs and scripts for this round are in [2026-11-17/](2026-11-17/).
+
+### Conflicts and resolutions
+
+| File | Branch side | Main side | Resolution |
+|---|---|---|---|
+| `firmware/visio_recorder/daemon.py` | boot drain count seeds `segments_uploaded_at_start` | #70: flush, recover orphans, flush | Both: #70's flush, recover, flush order, with both flushes summed into `segments_uploaded_at_start`. Preflight still runs first (ExecStartPre, then again at the top of `main()`), and `VISIO_BATTERY_SOURCE` still picks the battery reader. |
+| `firmware/visio_recorder/daemon.py` (semantic, no textual conflict) | worker seeds its counter from `segments_uploaded_at_start` | #70: `recording_active` start/stop pushes report a hard-coded 0 until the worker runs | The start push and the stop push now carry `segments_uploaded_at_start`, so a boot backlog (or a stop before the first segment) is not reported to the app as 0. New test `test_boot_drain_count_survives_a_stop_before_any_segment`; the existing seed test now expects `[7, 8, 8]`. Both fail with the auto-merged code. |
+| `firmware/visio_recorder/supabase_clients.py` | `x-upsert: true` makes a retried upload idempotent | #77/#83: look the object up first, same size counts as uploaded, a different size raises, never overwrite; stream the file | Main's. It solves the same power-loss retry without letting a repeated timestamp key overwrite a different segment, and streams instead of reading whole. |
+| `firmware/tests/test_supabase_clients.py` | upsert-based fake, power-loss drain test | size-aware fake with `info`/`list` | Main's file, plus the branch's end-to-end power-loss test (`test_a_retry_after_power_loss_between_upload_and_unlink_still_drains`) ported to main's fake; it now also asserts that the already-stored segment is not sent again. The branch's test pinning upsert behaviour was dropped since nothing upserts now. |
+| `AGENTS.md`, `README.md` | shellcheck gate, stacked-branch trigger notes | prettier gate, db-types drift check, trixie Python floor wording | Both, combined. |
+| `docs/ARCHITECTURE.html` | manifest for the branch's specs | manifest for main's specs | Regenerated (see below). |
+
+Also changed in the merge, without textual conflicts:
+
+- `docs/superpowers/specs/2026-07-04-visio-pendant-design.md`: the startup sequence now names the ExecStartPre/in-`main()` preflight, `VISIO_BATTERY_SOURCE`, and the seeded upload counter, and the retry bullet describes the size-checked upload instead of `x-upsert`.
+- `upload_queue.py` and `test_flag_button.py` comments that cited `x-upsert` now describe the size check.
+- `lint.yml`: the branch's shellcheck job moved to `actions/checkout@v7` like the rest of #73, and lints `docs/superpowers/evidence/dependabot-triage/seed-screens.sh`, the shebang script main added (clean).
+- `app/jest.config.js` / `jest.setup.js` auto-merged to the branch's `testTimeout: 45000` and `asyncUtilTimeout: 30000` while keeping main's node-fetch transform (#75). The higher values are still needed: on this cold-cache run two tests took 16115 ms and 15512 ms, both over main's 15000 ms `testTimeout` ([app-jest-cold-cache.log](2026-11-17/app-jest-cold-cache.log)).
+
+### ARCHITECTURE.html
+
+Regenerated per `docs/architecture-regeneration.md`.
+The startup diagram adds the ExecStartPre preflight, the in-`main()` re-check, and the battery-source reader before #70's flush, recover, flush nodes, and the recording loop node notes the seeded count and the initial `recording_active=true` push.
+The upload bullet describes the size-checked retry.
+All three manifest lines pass `sha256sum -c` ([hooks.log](2026-11-17/hooks.log)); rendered diagram: [architecture-startup-diagram.png](2026-11-17/architecture-startup-diagram.png).
+
+### Test evidence (merged tree, local Supabase CLI 2.109.0, reused running stack)
+
+| Surface | Result | Log |
+|---|---|---|
+| ruff check, ruff format --check, mypy (firmware, pipeline, integration) | clean | [firmware](2026-11-17/python-lint-firmware.log), [pipeline](2026-11-17/python-lint-pipeline.log), [integration](2026-11-17/python-lint-integration.log) |
+| firmware pytest | 309 passed | [firmware-pytest.log](2026-11-17/firmware-pytest.log) |
+| pipeline pytest | 163 passed | [pipeline-pytest.log](2026-11-17/pipeline-pytest.log) |
+| pgTAP (`supabase test db`) | 9 files, 59 tests, PASS | [pgtap.log](2026-11-17/pgtap.log) |
+| integration pytest (live Supabase) | 11 passed, 0 skipped | [integration-pytest.log](2026-11-17/integration-pytest.log) |
+| generated db types drift | no drift | [gen-db-types.log](2026-11-17/gen-db-types.log) |
+| app `tsc --noEmit`, eslint, prettier `format:check`, typecheck | all exit 0 | [app-tsc-lint-prettier.log](2026-11-17/app-tsc-lint-prettier.log) |
+| app jest, cold cache, live Supabase | 33 suites, 130 tests passed | [app-jest-cold-cache.log](2026-11-17/app-jest-cold-cache.log) |
+| app web export | exit 0 | [app-web-export.log](2026-11-17/app-web-export.log) |
+| shellcheck (lint.yml list) | clean | [shellcheck.log](2026-11-17/shellcheck.log) |
+| pre-commit hook suite + manifest | 16/16, manifest OK | [hooks.log](2026-11-17/hooks.log) |
+
+### Firmware with hardware simulated
+
+The same four [simulate-preflight.sh](simulate-preflight.sh) scenarios on the merged tree give the same outcomes: bare host exit 1, simulated Pi exit 0, no camera exit 1, pijuice without a HAT exit 0 ([log](2026-11-17/firmware-preflight-simulated-hardware.log)).
+
+[simulate-boot.sh](2026-11-17/simulate-boot.sh) boots the merged daemon the way the systemd unit does.
+It runs ExecStartPre (`python -m visio_recorder.preflight`) and starts the daemon only on exit 0.
+The daemon then uses real local Supabase (auth session, `devices`, `device_status`, `segments` bucket) and real ffmpeg muxing.
+A stub `rpicam-vid` writes a 2 s H.264 test pattern, and logging fakes stand in for the LED and flag button ([simulate-boot.py](2026-11-17/simulate-boot.py)).
+It plants one queued segment, a lone `.h264` and a lone `.mp4`, then sends SIGTERM after two live segments are stored.
+From [simulated-boot.log](2026-11-17/simulated-boot.log):
+
+1. ExecStartPre: all checks `[OK]`, exit 0; `main()` re-runs preflight, also clean.
+2. `flush_pending` uploads the queued segment (1).
+3. `recover_orphaned_segments` muxes the lone `.h264` and queues both orphans; the second `flush_pending` uploads them (2).
+4. `run_recording_loop` starts: the first `device_status` row is `recording_active: true, segments_uploaded_today: 3` (seeded by the boot drains), then 4, 5 as segments upload.
+5. After SIGTERM the final row is `recording_active: false, segments_uploaded_today: 6`, `main()` returns 0, the queue is empty, and only `device.json`, `device_registered` and `session.json` remain in the data dir.
+
+Nothing here replaces the physical checklist in the PR body.

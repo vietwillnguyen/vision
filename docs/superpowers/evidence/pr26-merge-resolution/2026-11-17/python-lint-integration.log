@@ -1,0 +1,15 @@
+$ (cd integration && uv run --locked --extra dev ruff check . && uv run --locked --extra dev ruff format --check . && uv run --locked --extra dev mypy)
+   Building visio-integration @ file://<repo>/integration
+   Building visio-pipeline @ file://<repo>/pipeline
+   Building visio-recorder @ file://<repo>/firmware
+Downloading aiohttp (1.7MiB)
+ Downloaded aiohttp
+      Built visio-integration @ file://<repo>/integration
+      Built visio-pipeline @ file://<repo>/pipeline
+      Built visio-recorder @ file://<repo>/firmware
+Uninstalled 18 packages in 291ms
+Installed 25 packages in 245ms
+All checks passed!
+7 files already formatted
+Success: no issues found in 6 source files
+exit=0
