@@ -1,6 +1,6 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
+import type { VisionClient } from '../lib/supabase';
 import { useResetOnInputChange } from './useResetOnInputChange';
 
 export type DeviceState =
@@ -9,7 +9,7 @@ export type DeviceState =
   | { kind: 'none' }
   | { kind: 'ready'; deviceId: string; name: string };
 
-export function useDevice(client: SupabaseClient): DeviceState {
+export function useDevice(client: VisionClient): DeviceState {
   const [state, setState] = useState<DeviceState>({ kind: 'loading' });
 
   useResetOnInputChange([client], () => setState({ kind: 'loading' }));
@@ -23,7 +23,7 @@ export function useDevice(client: SupabaseClient): DeviceState {
       .order('created_at', { ascending: true })
       .limit(1)
       .then(
-        ({ data, error }: { data: Record<string, unknown>[] | null; error: { message: string } | null }) => {
+        ({ data, error }) => {
           if (!isMounted) return;
           if (error) {
             setState({ kind: 'error', message: error.message });
@@ -32,8 +32,8 @@ export function useDevice(client: SupabaseClient): DeviceState {
           } else {
             setState({
               kind: 'ready',
-              deviceId: data[0].device_id as string,
-              name: data[0].name as string,
+              deviceId: data[0].device_id,
+              name: data[0].name,
             });
           }
         },

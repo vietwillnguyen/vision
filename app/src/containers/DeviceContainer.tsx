@@ -1,13 +1,13 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 
 import type { DeviceStackParamList } from '../navigation/DeviceStack';
 import { useDeviceStatus } from '../hooks/useDeviceStatus';
 import { DeviceScreen } from '../screens/DeviceScreen';
+import type { VisionClient } from '../lib/supabase';
 
 type DeviceContainerProps = NativeStackScreenProps<DeviceStackParamList, 'DeviceHome'> & {
-  client: SupabaseClient;
+  client: VisionClient;
   deviceId: string;
 };
 

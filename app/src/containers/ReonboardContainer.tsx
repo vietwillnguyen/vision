@@ -1,13 +1,13 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import React, { useState } from 'react';
 
 import type { DeviceStackParamList } from '../navigation/DeviceStack';
 import type { ReonboardStep } from '../screens/ReonboardScreen';
 import { ReonboardScreen } from '../screens/ReonboardScreen';
+import type { VisionClient } from '../lib/supabase';
 
 type ReonboardContainerProps = NativeStackScreenProps<DeviceStackParamList, 'Reonboard'> & {
-  client: SupabaseClient;
+  client: VisionClient;
 };
 
 export function ReonboardContainer({ client, navigation }: ReonboardContainerProps) {

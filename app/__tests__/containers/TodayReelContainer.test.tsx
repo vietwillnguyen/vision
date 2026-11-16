@@ -1,8 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import React from 'react';
 
 import { TodayReelContainer } from '../../src/containers/TodayReelContainer';
+import type { VisionClient } from '../../src/lib/supabase';
 
 jest.mock('expo-video', () => {
   const { View } = jest.requireActual('react-native');
@@ -34,7 +34,7 @@ function fakeClient(rows: Record<string, unknown>[]) {
         createSignedUrl: () => Promise.resolve({ data: { signedUrl: 'https://signed/reel.mp4' }, error: null }),
       }),
     },
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
 }
 
 describe('TodayReelContainer', () => {

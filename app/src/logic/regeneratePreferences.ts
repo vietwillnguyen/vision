@@ -1,5 +1,9 @@
+import { REEL_STYLES } from '../types';
+import type { ReelStyle } from '../types';
+
+export type { ReelStyle };
+
 export type TargetLengthSec = 30 | 60 | 90 | 120;
-export type ReelStyle = 'clean' | 'vintage';
 export type MoodWeighting = 'conversation-heavy' | 'action-heavy' | 'balanced';
 
 export interface RegenerateRequest {
@@ -9,7 +13,7 @@ export interface RegenerateRequest {
 }
 
 const VALID_LENGTHS: TargetLengthSec[] = [30, 60, 90, 120];
-const VALID_STYLES: ReelStyle[] = ['clean', 'vintage'];
+const VALID_STYLES: readonly ReelStyle[] = REEL_STYLES;
 const VALID_MOODS: MoodWeighting[] = ['conversation-heavy', 'action-heavy', 'balanced'];
 
 export class InvalidRegenerateRequestError extends Error {}

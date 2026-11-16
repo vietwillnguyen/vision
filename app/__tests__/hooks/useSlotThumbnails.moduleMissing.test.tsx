@@ -1,8 +1,8 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useSlotThumbnails } from '../../src/hooks/useSlotThumbnails';
 import type { TimelineSlot } from '../../src/logic/timeline';
+import type { VisionClient } from '../../src/lib/supabase';
 
 // Simulates the web platform, where Metro resolves videoThumbnails.web.ts
 // (isAvailable: false) instead of videoThumbnails.ts - distinct from a
@@ -31,7 +31,7 @@ function fakeStorageClient() {
           Promise.resolve({ data: { signedUrl: `https://signed/${path}` }, error: null }),
       }),
     },
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
 }
 
 describe('useSlotThumbnails when the platform has no video-thumbnails support', () => {

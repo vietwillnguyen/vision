@@ -43,7 +43,8 @@
     "web": "expo start --web",
     "test": "jest",
     "lint": "eslint . --max-warnings 0",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:types": "../scripts/gen-db-types.sh"
   },
   "private": true
 }

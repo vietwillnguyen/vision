@@ -1,11 +1,11 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
+import type { VisionClient } from '../lib/supabase';
 import type { SignedUrlRequest } from '../logic/segmentExport';
 import { useResetOnInputChange } from './useResetOnInputChange';
 
 export function useSignedUrl(
-  client: SupabaseClient,
+  client: VisionClient,
   request: SignedUrlRequest | null,
 ): string | null {
   const [url, setUrl] = useState<string | null>(null);

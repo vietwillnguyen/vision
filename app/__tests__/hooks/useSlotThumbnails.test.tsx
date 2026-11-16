@@ -1,10 +1,10 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import * as VideoThumbnails from 'expo-video-thumbnails';
 
 import { useSlotThumbnails } from '../../src/hooks/useSlotThumbnails';
 import type { TimelineSlot } from '../../src/logic/timeline';
+import type { VisionClient } from '../../src/lib/supabase';
 
 jest.mock('expo-video-thumbnails', () => ({
   getThumbnailAsync: jest.fn((uri: string) => Promise.resolve({ uri: `thumb:${uri}` })),
@@ -32,7 +32,7 @@ function fakeStorageClient() {
           Promise.resolve({ data: { signedUrl: `https://signed/${path}` }, error: null }),
       }),
     },
-  } as unknown as SupabaseClient;
+  } as unknown as VisionClient;
 }
 
 describe('useSlotThumbnails', () => {

@@ -1,7 +1,13 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { useDeviceStatus } from '../../src/hooks/useDeviceStatus';
+import type { VisionClient } from '../../src/lib/supabase';
+
+type RealtimePayload = {
+  eventType: string;
+  new: Record<string, unknown>;
+  old?: Record<string, unknown>;
+};
 
 function createFakeClient(
   initialRow: Record<string, unknown> | null,
@@ -9,7 +15,7 @@ function createFakeClient(
 ) {
   const registrations: {
     event: string;
-    callback: (payload: { new: Record<string, unknown> }) => void;
+    callback: (payload: RealtimePayload) => void;
   }[] = [];
   let subscribeCalled = false;
   let removeChannelCalls = 0;
@@ -37,7 +43,7 @@ function createFakeClient(
       on: (
         _type: string,
         filter: { event: string },
-        callback: (payload: { new: Record<string, unknown> }) => void,
+        callback: (payload: RealtimePayload) => void,
       ) => {
         registrations.push({ event: filter.event, callback });
         return {
@@ -54,19 +60,22 @@ function createFakeClient(
     },
   };
 
-  const deliver = (eventType: string, row: Record<string, unknown>) =>
+  const deliver = (payload: RealtimePayload) =>
     act(() => {
       for (const { event, callback } of registrations) {
-        if (event === '*' || event === eventType) {
-          callback({ new: row });
+        if (event === '*' || event === payload.eventType) {
+          callback(payload);
         }
       }
     });
 
   return {
-    client: client as unknown as SupabaseClient,
-    triggerUpdate: (row: Record<string, unknown>) => deliver('UPDATE', row),
-    triggerInsert: (row: Record<string, unknown>) => deliver('INSERT', row),
+    client: client as unknown as VisionClient,
+    triggerUpdate: (row: Record<string, unknown>) => deliver({ eventType: 'UPDATE', new: row }),
+    triggerInsert: (row: Record<string, unknown>) => deliver({ eventType: 'INSERT', new: row }),
+    // A real DELETE carries the vanished row in `old` and an empty `new`.
+    triggerDelete: (row: Record<string, unknown>) =>
+      deliver({ eventType: 'DELETE', new: {}, old: row }),
     resolveInitialFetch: () =>
       act(async () => {
         resolveInitialFetch();
@@ -160,6 +169,40 @@ describe('useDeviceStatus', () => {
     triggerInsert(ROW);
 
     expect(result.current).toMatchObject({ kind: 'ready', status: { batteryPct: 72 } });
+  });
+
+  it('keeps the last known status when the row is deleted', async () => {
+    const { client, triggerUpdate, triggerDelete } = createFakeClient(ROW);
+    const { result } = renderHook(() => useDeviceStatus(client, 'device-abc'));
+
+    await waitFor(() => expect(result.current.kind).toBe('ready'));
+    triggerUpdate({ ...ROW, battery_pct: 65 });
+
+    triggerDelete({ ...ROW, battery_pct: 65 });
+
+    // Not a row of undefineds: mapping a DELETE's empty `new` would produce one.
+    expect(result.current).toEqual({
+      kind: 'ready',
+      realtime: 'connecting',
+      status: {
+        batteryPct: 65,
+        storageUsedGb: 4.2,
+        storageFreeGb: 118,
+        segmentsPending: 1,
+        segmentsUploadedToday: 42,
+        recordingActive: true,
+      },
+    });
+  });
+
+  it('stays loading when a DELETE arrives before any status is known', async () => {
+    const { client, triggerDelete, getSubscribeCalled } = createFakeClient(null);
+    const { result } = renderHook(() => useDeviceStatus(client, 'device-abc'));
+
+    await waitFor(() => expect(getSubscribeCalled()).toBe(true));
+    triggerDelete(ROW);
+
+    expect(result.current).toEqual({ kind: 'loading' });
   });
 
   it('subscribes on mount and removes the channel on unmount', async () => {
