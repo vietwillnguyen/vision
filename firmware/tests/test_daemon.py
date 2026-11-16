@@ -730,6 +730,44 @@ def test_a_failed_audio_capture_uploads_its_partial_ts_the_same_run(
     assert list(deps.data_dir.iterdir()) == []
 
 
+def test_the_capture_after_a_failed_audio_one_waits_for_a_new_second(tmp_path):
+    # The audio capture writes some TS and dies within the second it started.
+    # The video-only retry must not reuse that second's filename, or both
+    # segments would mux and upload to the same object key.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    slept: list[float] = []
+
+    class DiesAtOnce(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+                Path(args[args.index("-o") + 1]).write_bytes(b"ts-data")
+                raise subprocess.CalledProcessError(1, args)
+            super().run(args)
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=DiesAtOnce(on_record=lambda n: stop.set()),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        audio=AudioSettings(),
+    )
+
+    run_recording_loop(
+        deps,
+        stop,
+        clock=lambda: datetime(2026, 11, 16, 9, 0, 0, 250000),
+        sleep=slept.append,
+    )
+
+    assert slept == [0.75]
+    assert storage.uploaded == [
+        "device-abc/20261116_090000.mp4",
+        "device-abc/20261116_090001.mp4",
+    ]
+
+
 def test_a_failing_video_only_capture_still_escapes_the_loop(tmp_path):
     class Killed(FakeCommandRunner):
         def run(self, args: list[str]) -> None:

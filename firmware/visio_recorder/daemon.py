@@ -4,9 +4,10 @@ import queue
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from visio_recorder.battery import BatteryReader, read_battery_status
@@ -242,6 +243,7 @@ def run_recording_loop(
     deps: LoopDeps,
     stop: threading.Event,
     clock: Callable[[], datetime] = datetime.now,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Record segments on the main thread; upload them on one background worker.
 
@@ -263,7 +265,9 @@ def run_recording_loop(
     rather than failing every segment; the failed capture's partial ``.ts``
     is queued for the worker like any capture when it holds data (a
     zero-byte one is deleted), and per-segment upserts report
-    ``audio_active`` false from the next segment on.
+    ``audio_active`` false from the next segment on. The next capture waits
+    for the following whole second if needed, so its second-resolution
+    filename never collides with the failed capture's.
     """
     work: queue.Queue[Path | None] = queue.Queue()
     # Written only by the worker; read by the main thread only after join().
@@ -320,6 +324,7 @@ def run_recording_loop(
     worker_thread = threading.Thread(target=worker)
     worker_thread.start()
     halted = False
+    not_before: datetime | None = None
     try:
         while True:
             battery_status = read_battery_status(deps.battery_reader)
@@ -329,6 +334,9 @@ def run_recording_loop(
             if stop.is_set():
                 break
             started_at = clock()
+            if not_before is not None and started_at < not_before:
+                sleep((not_before - started_at).total_seconds())
+                started_at = not_before
             try:
                 h264_path = record_segment(
                     deps.command_runner,
@@ -347,6 +355,7 @@ def run_recording_loop(
                 )
                 partial = segment_path(deps.data_dir, started_at, audio)
                 audio = None
+                not_before = started_at.replace(microsecond=0) + timedelta(seconds=1)
                 if partial.exists():
                     if partial.stat().st_size > 0:
                         work.put(partial)
