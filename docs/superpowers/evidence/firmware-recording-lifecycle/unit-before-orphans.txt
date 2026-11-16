@@ -1,0 +1,3 @@
+ImportError while importing test module '/home/viet/worktrees/fix-firmware-recording-lifecycle-defects/firmware/tests/test_recording_loop.py'.
+E   ImportError: cannot import name 'recover_orphaned_segments' from 'visio_recorder.recording_loop' (/home/viet/worktrees/fix-firmware-recording-lifecycle-defects/firmware/visio_recorder/recording_loop.py)
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!

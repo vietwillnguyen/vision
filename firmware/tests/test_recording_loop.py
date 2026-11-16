@@ -1,8 +1,14 @@
+import subprocess
+import threading
 from datetime import datetime
+from pathlib import Path
+
+import pytest
 
 from tests.fakes import (
     FailingStorageClient,
     FakeBatteryReader,
+    FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
     FakeLedDriver,
@@ -10,6 +16,7 @@ from tests.fakes import (
     FakeStorageClient,
     FakeStorageClientFailingOn,
 )
+from visio_recorder.daemon import LoopDeps, run_recording_loop
 from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
     DiskStats,
@@ -17,7 +24,9 @@ from visio_recorder.recording_loop import (
     flush_pending,
     next_led_state,
     on_segment_complete,
+    recover_orphaned_segments,
 )
+from visio_recorder.upload_queue import list_pending
 
 
 def test_next_led_state_prioritizes_low_battery_over_uploading():
@@ -255,3 +264,159 @@ def test_flush_pending_leaves_failing_files_queued_and_continues(tmp_path):
 
     assert uploaded == 1
     assert [p.name for p in tmp_path.iterdir()] == ["20260708_235000.mp4"]
+
+
+class _MuxFailingRunner(FakeCommandRunner):
+    """Fails the ffmpeg mux for one named input, like a zero-byte capture."""
+
+    def __init__(self, failing_input: str) -> None:
+        super().__init__()
+        self._failing_input = failing_input
+
+    def run(self, args: list[str]) -> None:
+        if "ffmpeg" in args and Path(args[args.index("-i") + 1]).name == (
+            self._failing_input
+        ):
+            with self._lock:
+                self.calls.append(args)
+            raise subprocess.CalledProcessError(1, args)
+        super().run(args)
+
+
+def test_recover_orphaned_segments_muxes_and_queues_a_leftover_h264(tmp_path):
+    # An unclean stop (rpicam-vid killed mid-capture) leaves the raw capture in
+    # data_dir; nothing else ever looks there, so it leaked SD space forever.
+    data_dir = tmp_path / "data"
+    queue_dir = data_dir / "queue"
+    data_dir.mkdir()
+    (data_dir / "20260803_120001.h264").write_bytes(b"partial capture")
+
+    recovered = recover_orphaned_segments(
+        data_dir, queue_dir, FakeCommandRunner(), framerate=30
+    )
+
+    assert [p.name for p in recovered] == ["20260803_120001.mp4"]
+    assert [p.name for p in list_pending(queue_dir)] == ["20260803_120001.mp4"]
+    assert (queue_dir / "20260803_120001.mp4").read_bytes() == b"partial capture"
+    assert not (data_dir / "20260803_120001.h264").exists()
+
+
+def test_recover_orphaned_segments_remuxes_over_a_half_written_mp4(tmp_path):
+    # Interrupted mid-mux: both files exist and the .mp4 may be truncated, so
+    # it is rebuilt from the .h264 rather than trusted.
+    data_dir = tmp_path / "data"
+    queue_dir = data_dir / "queue"
+    data_dir.mkdir()
+    (data_dir / "20260803_120001.h264").write_bytes(b"full capture")
+    (data_dir / "20260803_120001.mp4").write_bytes(b"trunc")
+
+    recover_orphaned_segments(data_dir, queue_dir, FakeCommandRunner(), framerate=30)
+
+    assert (queue_dir / "20260803_120001.mp4").read_bytes() == b"full capture"
+    assert sorted(p.name for p in data_dir.iterdir()) == ["queue"]
+
+
+def test_recover_orphaned_segments_queues_a_finished_mp4_left_in_data_dir(tmp_path):
+    # Crash between unlinking the .h264 and enqueueing the finished .mp4.
+    data_dir = tmp_path / "data"
+    queue_dir = data_dir / "queue"
+    data_dir.mkdir()
+    (data_dir / "20260803_120001.mp4").write_bytes(b"muxed")
+    runner = FakeCommandRunner()
+
+    recover_orphaned_segments(data_dir, queue_dir, runner, framerate=30)
+
+    assert (queue_dir / "20260803_120001.mp4").read_bytes() == b"muxed"
+    assert runner.calls == []
+
+
+def test_recover_orphaned_segments_deletes_an_unmuxable_capture(tmp_path):
+    # A capture killed before writing a single frame cannot be muxed; keeping
+    # it would retry and leak forever. The other orphan is still recovered.
+    data_dir = tmp_path / "data"
+    queue_dir = data_dir / "queue"
+    data_dir.mkdir()
+    (data_dir / "20260803_120001.h264").write_bytes(b"")
+    (data_dir / "20260803_120001.mp4").write_bytes(b"")
+    (data_dir / "20260803_120501.h264").write_bytes(b"ok")
+
+    recovered = recover_orphaned_segments(
+        data_dir,
+        queue_dir,
+        _MuxFailingRunner("20260803_120001.h264"),
+        framerate=30,
+    )
+
+    assert [p.name for p in recovered] == ["20260803_120501.mp4"]
+    assert [p.name for p in list_pending(queue_dir)] == ["20260803_120501.mp4"]
+    assert sorted(p.name for p in data_dir.iterdir()) == ["queue"]
+
+
+def test_recover_orphaned_segments_leaves_device_state_files_alone(tmp_path):
+    data_dir = tmp_path / "data"
+    queue_dir = data_dir / "queue"
+    queue_dir.mkdir(parents=True)
+    for name in ("session.json", "device.json", "device_registered"):
+        (data_dir / name).write_text("x")
+    (queue_dir / "20260803_115500.mp4").write_bytes(b"queued")
+
+    recovered = recover_orphaned_segments(
+        data_dir, queue_dir, FakeCommandRunner(), framerate=30
+    )
+
+    assert recovered == []
+    assert sorted(p.name for p in data_dir.iterdir()) == [
+        "device.json",
+        "device_registered",
+        "queue",
+        "session.json",
+    ]
+    assert [p.name for p in list_pending(queue_dir)] == ["20260803_115500.mp4"]
+
+
+def test_capture_killed_mid_segment_is_uploaded_on_the_next_boot(tmp_path):
+    # The report's probe 2, end to end through the real loop: systemd SIGTERMs
+    # rpicam-vid mid-capture, it leaves a partial .h264 and exits non-zero, and
+    # the exception escapes run_recording_loop. The next boot's recovery plus
+    # flush_pending must upload that partial segment instead of leaking it.
+    data_dir = tmp_path / "data"
+    queue_dir = data_dir / "queue"
+
+    class KilledOnSecondCapture(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid" and self.record_count == 1:
+                output = Path(args[args.index("-o") + 1])
+                output.write_bytes(b"partial frames")
+                raise subprocess.CalledProcessError(-15, args)
+            super().run(args)
+
+    storage = FakeStorageClient()
+    deps = LoopDeps(
+        command_runner=KilledOnSecondCapture(),
+        storage_client=storage,
+        status_client=FakeStatusClient(),
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=1.0, free_gb=9.0)),
+        data_dir=data_dir,
+        queue_dir=queue_dir,
+        device_id="device-abc",
+        segment_duration_ms=1000,
+        framerate=30,
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        run_recording_loop(
+            deps, threading.Event(), clock=FakeClock(datetime(2026, 8, 3, 12, 0, 0))
+        )
+    assert (data_dir / "20260803_120001.h264").exists()
+
+    recover_orphaned_segments(data_dir, queue_dir, FakeCommandRunner(), framerate=30)
+    flushed = flush_pending(queue_dir, storage, "device-abc")
+
+    assert flushed == 1
+    assert storage.uploaded == [
+        "device-abc/20260803_120000.mp4",
+        "device-abc/20260803_120001.mp4",
+    ]
+    assert sorted(p.name for p in data_dir.iterdir()) == ["queue"]
+    assert list_pending(queue_dir) == []

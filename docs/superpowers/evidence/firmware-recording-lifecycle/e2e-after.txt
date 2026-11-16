@@ -1,0 +1,12 @@
+recovered orphaned segment 20260803_120100.mp4
+systemd stop: SIGTERM to capture of 20260803_120100.h264
+daemon exited: CalledProcessError returncode=255
+device_status after the daemon exited: [{'recording_active': False, 'segments_uploaded_today': 1}]
+data_dir after exit: ['20260803_120100.h264', 'queue', 'session.json']
+--- next boot ---
+recovered: ['20260803_120100.mp4']
+flush_pending uploaded: 1
+data_dir after boot: ['queue', 'session.json']
+objects in storage: ['20260803_120000.mp4', '20260803_120100.mp4']
+  20260803_120000.mp4: 178 decodable frames
+  20260803_120100.mp4: 101 decodable frames

@@ -1,0 +1,10 @@
+systemd stop: SIGTERM to capture of 20260803_120100.h264
+daemon exited: CalledProcessError returncode=255
+device_status after the daemon exited: [{'recording_active': True, 'segments_uploaded_today': 1}]
+data_dir after exit: ['20260803_120100.h264', 'queue', 'session.json']
+--- next boot ---
+recover_orphaned_segments: not in this firmware
+flush_pending uploaded: 0
+data_dir after boot: ['20260803_120100.h264', 'queue', 'session.json']
+objects in storage: ['20260803_120000.mp4']
+  20260803_120000.mp4: 178 decodable frames
