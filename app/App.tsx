@@ -6,12 +6,7 @@ import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { ArchiveContainer } from './src/containers/ArchiveContainer';
 import { AuthContainer } from './src/containers/AuthContainer';
-import {
-  ArchiveIcon,
-  DeviceIcon,
-  RawFootageIcon,
-  TodayReelIcon,
-} from './src/components/TabIcons';
+import { ArchiveIcon, DeviceIcon, RawFootageIcon, TodayReelIcon } from './src/components/TabIcons';
 import { DeviceStack } from './src/navigation/DeviceStack';
 import { RawFootageContainer } from './src/containers/RawFootageContainer';
 import { TodayReelContainer } from './src/containers/TodayReelContainer';

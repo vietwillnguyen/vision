@@ -32,7 +32,11 @@ export function DeviceScreen({ state, onReonboardPress }: DeviceScreenProps) {
   return (
     <View style={styles.container}>
       {realtime === 'stale' ? (
-        <Text testID="stale-banner" style={styles.staleBanner} accessibilityLabel="Realtime connection lost">
+        <Text
+          testID="stale-banner"
+          style={styles.staleBanner}
+          accessibilityLabel="Realtime connection lost"
+        >
           Live updates disconnected - data may be stale
         </Text>
       ) : null}

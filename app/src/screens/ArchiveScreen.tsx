@@ -11,7 +11,11 @@ interface ArchiveScreenProps {
 
 export function ArchiveScreen({ cells, onDayPress }: ArchiveScreenProps) {
   return (
-    <ScrollView testID="archive-heatmap" style={styles.container} contentContainerStyle={styles.grid}>
+    <ScrollView
+      testID="archive-heatmap"
+      style={styles.container}
+      contentContainerStyle={styles.grid}
+    >
       {cells.map((cell) => (
         <Pressable
           key={cell.date}
@@ -20,7 +24,9 @@ export function ArchiveScreen({ cells, onDayPress }: ArchiveScreenProps) {
           onPress={() => onDayPress(cell.date)}
         >
           <View style={[styles.cell, cell.hasReel ? styles.hasReel : null]}>
-            <Text style={cell.hasReel ? styles.dotActive : styles.dot}>{cell.hasReel ? '●' : '○'}</Text>
+            <Text style={cell.hasReel ? styles.dotActive : styles.dot}>
+              {cell.hasReel ? '●' : '○'}
+            </Text>
             <Text style={styles.date}>{cell.date.slice(5)}</Text>
           </View>
         </Pressable>

@@ -13,7 +13,13 @@ interface SegmentPreviewProps {
   onClose: () => void;
 }
 
-export function SegmentPreview({ segment, videoUri, onSave, onShare, onClose }: SegmentPreviewProps) {
+export function SegmentPreview({
+  segment,
+  videoUri,
+  onSave,
+  onShare,
+  onClose,
+}: SegmentPreviewProps) {
   // Must run unconditionally before any early return (rules of hooks).
   const player = useVideoPlayer(videoUri);
 
@@ -36,9 +42,27 @@ export function SegmentPreview({ segment, videoUri, onSave, onShare, onClose }: 
           <Text style={styles.muted}>Preparing playback...</Text>
         </View>
       )}
-      <Button testID="save-button" title="Save to camera roll" color={colors.accent} accessibilityLabel="Save segment to camera roll" onPress={onSave} />
-      <Button testID="share-button" title="Share" color={colors.accent} accessibilityLabel="Share segment" onPress={onShare} />
-      <Button testID="close-button" title="Close" color={colors.textMuted} accessibilityLabel="Close preview" onPress={onClose} />
+      <Button
+        testID="save-button"
+        title="Save to camera roll"
+        color={colors.accent}
+        accessibilityLabel="Save segment to camera roll"
+        onPress={onSave}
+      />
+      <Button
+        testID="share-button"
+        title="Share"
+        color={colors.accent}
+        accessibilityLabel="Share segment"
+        onPress={onShare}
+      />
+      <Button
+        testID="close-button"
+        title="Close"
+        color={colors.textMuted}
+        accessibilityLabel="Close preview"
+        onPress={onClose}
+      />
     </View>
   );
 }
@@ -46,7 +70,13 @@ export function SegmentPreview({ segment, videoUri, onSave, onShare, onClose }: 
 const styles = StyleSheet.create({
   container: { backgroundColor: colors.surface, borderRadius: 12, padding: spacing.md },
   timestamp: { color: colors.textMuted, marginBottom: spacing.sm },
-  video: { width: '100%', aspectRatio: 16 / 9, borderRadius: 8, backgroundColor: colors.background, marginBottom: spacing.sm },
+  video: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    borderRadius: 8,
+    backgroundColor: colors.background,
+    marginBottom: spacing.sm,
+  },
   placeholder: { alignItems: 'center', justifyContent: 'center' },
   muted: { color: colors.textMuted },
 });

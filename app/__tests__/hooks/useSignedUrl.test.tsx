@@ -8,7 +8,9 @@ function fakeStorageClient(signedUrl: string | null) {
     data: signedUrl ? { signedUrl } : null,
     error: signedUrl ? null : { message: 'not found' },
   });
-  const client = { storage: { from: jest.fn(() => ({ createSignedUrl })) } } as unknown as VisionClient;
+  const client = {
+    storage: { from: jest.fn(() => ({ createSignedUrl })) },
+  } as unknown as VisionClient;
   return { client, createSignedUrl };
 }
 

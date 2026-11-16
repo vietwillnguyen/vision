@@ -22,14 +22,16 @@ function createFakeClient(
   let statusCallback: ((status: string) => void) | null = null;
 
   let resolveInitialFetch: () => void = () => {};
-  const initialFetch: Promise<{ data: Record<string, unknown> | null; error?: { code?: string; message?: string } | null }> =
-    options.initialFetchError
-      ? Promise.reject(options.initialFetchError)
-      : options.deferInitialFetch
-        ? new Promise((resolve) => {
-            resolveInitialFetch = () => resolve({ data: initialRow });
-          })
-        : Promise.resolve({ data: initialRow });
+  const initialFetch: Promise<{
+    data: Record<string, unknown> | null;
+    error?: { code?: string; message?: string } | null;
+  }> = options.initialFetchError
+    ? Promise.reject(options.initialFetchError)
+    : options.deferInitialFetch
+      ? new Promise((resolve) => {
+          resolveInitialFetch = () => resolve({ data: initialRow });
+        })
+      : Promise.resolve({ data: initialRow });
 
   const client = {
     from: () => ({

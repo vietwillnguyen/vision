@@ -31,7 +31,8 @@ function fakeClient(rows: Record<string, unknown>[]) {
     from: () => chain,
     storage: {
       from: () => ({
-        createSignedUrl: () => Promise.resolve({ data: { signedUrl: 'https://signed/reel.mp4' }, error: null }),
+        createSignedUrl: () =>
+          Promise.resolve({ data: { signedUrl: 'https://signed/reel.mp4' }, error: null }),
       }),
     },
   } as unknown as VisionClient;
