@@ -170,6 +170,11 @@
                 "has_default": true,
                 "is_nullable": false
             },
+            "audio_active": {
+                "data_type": "boolean",
+                "has_default": true,
+                "is_nullable": false
+            },
             "storage_free_gb": {
                 "data_type": "numeric",
                 "has_default": true,
