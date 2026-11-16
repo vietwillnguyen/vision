@@ -101,14 +101,6 @@ run() {
 
 # --- cases -------------------------------------------------------------------
 
-new_case "list prints manifest images without comments or blanks"
-if run list; then
-  expected=$'public.ecr.aws/supabase/postgres:17.6.1.140\npublic.ecr.aws/supabase/gotrue:v2.192.0'
-  [ "$(cat "$workdir/out")" = "$expected" ] || fail "got: $(cat "$workdir/out")"
-else
-  fail "exit $? ($(cat "$workdir/err"))"
-fi
-
 new_case "seed pulls each missing image from the GHCR mirror and tags it with the ECR name"
 if run seed; then
   for ref in public.ecr.aws/supabase/postgres:17.6.1.140 public.ecr.aws/supabase/gotrue:v2.192.0; do

@@ -47,6 +47,13 @@ runs:
       shell: bash
       run: time scripts/ci/supabase-images.sh seed
 
+    - name: Log out of GHCR
+      # Seeding was the token's only use; drop it from ~/.docker/config.json so
+      # later steps, including test code, do not inherit it.
+      if: always() && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: docker logout ghcr.io || echo "::warning::GHCR logout failed"
+
     - name: Archive Supabase images for the cache
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash

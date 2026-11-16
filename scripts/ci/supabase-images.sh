@@ -12,8 +12,8 @@
 # This script makes every image the CLI wants already present under that exact
 # name, so the CLI never pulls:
 #
-#   list          print the images in the manifest (.github/supabase-images.txt)
-#   seed          pull each missing image from Supabase's GHCR mirror
+#   seed          pull each missing image in the manifest
+#                 (.github/supabase-images.txt) from Supabase's GHCR mirror
 #                 (ghcr.io/supabase/<name>:<tag>, same image), with bounded
 #                 retries, and tag it with its public.ecr.aws name
 #   save <file>   `docker save` every manifest image into one archive
@@ -24,20 +24,18 @@
 #                 manifest does not list (a stale manifest after a CLI bump)
 #
 # Env: SUPABASE_IMAGES_MANIFEST (default .github/supabase-images.txt),
-#      SUPABASE_IMAGES_MIRROR (default ghcr.io),
 #      SUPABASE_IMAGES_RETRY_DELAYS (seconds between attempts, default "10 30").
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 manifest="${SUPABASE_IMAGES_MANIFEST:-$repo_root/.github/supabase-images.txt}"
-mirror="${SUPABASE_IMAGES_MIRROR:-ghcr.io}"
 read -r -a retry_delays <<< "${SUPABASE_IMAGES_RETRY_DELAYS:-10 30}"
 ecr_prefix="public.ecr.aws/supabase/"
 
 log() { printf 'supabase-images: %s\n' "$*" >&2; }
 
 usage() {
-  echo "usage: $0 list | seed | save <file> | load <file> | verify [project_id]" >&2
+  echo "usage: $0 seed | save <file> | load <file> | verify [project_id]" >&2
   exit 2
 }
 
@@ -81,7 +79,7 @@ seed() {
       present=$((present + 1))
       continue
     fi
-    mirror_ref="$mirror/supabase/${image#"$ecr_prefix"}"
+    mirror_ref="ghcr.io/supabase/${image#"$ecr_prefix"}"
     log "seeding $image from $mirror_ref"
     if ! pull_with_retry "$mirror_ref"; then
       log "could not pull $mirror_ref for $image"
@@ -93,7 +91,7 @@ seed() {
     docker rmi "$mirror_ref" >/dev/null
     seeded=$((seeded + 1))
   done < <(images)
-  log "seed done: $present already present, $seeded pulled from $mirror"
+  log "seed done: $present already present, $seeded pulled from ghcr.io"
 }
 
 verify() {
@@ -118,7 +116,6 @@ verify() {
 
 cmd="${1:-}"
 case "$cmd" in
-  list) images ;;
   seed) seed ;;
   save)
     [ $# -eq 2 ] || usage
