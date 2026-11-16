@@ -73,7 +73,7 @@ def _stored_size(bucket_api: Any, object_path: str) -> int | None:
     if size is not None:
         return int(size)
     folder, _, name = object_path.rpartition("/")
-    for item in bucket_api.list(folder):
+    for item in bucket_api.list(folder, {"search": name, "limit": 100}):
         if item.get("name") == name:
             return int(item["metadata"]["size"])
     return None

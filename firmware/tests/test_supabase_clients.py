@@ -61,12 +61,25 @@ class FakeStorageBucket:
             info["size"] = len(self._objects[(self._bucket, path)])
         return info
 
-    def list(self, folder: str) -> list[dict]:
+    def list(self, folder: str, options: dict | None = None) -> list[dict]:
+        # Like the storage API: names sorted ascending, filtered by a name
+        # prefix search, and capped at one page (storage3's default limit 100).
+        options = options or {}
         prefix = f"{folder}/"
+        search = options.get("search", "")
+        names = sorted(
+            path[len(prefix) :]
+            for (bucket, path) in self._objects
+            if bucket == self._bucket
+            and path.startswith(prefix)
+            and path[len(prefix) :].startswith(search)
+        )
         return [
-            {"name": path[len(prefix) :], "metadata": {"size": len(data)}}
-            for (bucket, path), data in self._objects.items()
-            if bucket == self._bucket and path.startswith(prefix)
+            {
+                "name": name,
+                "metadata": {"size": len(self._objects[(self._bucket, prefix + name)])},
+            }
+            for name in names[: options.get("limit", 100)]
         ]
 
 
@@ -213,6 +226,20 @@ def test_storage_adapter_retry_of_an_already_stored_file_succeeds(
     assert fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] == (
         b"payload"
     )
+
+
+def test_storage_adapter_retry_finds_the_stored_size_past_the_first_list_page(
+    tmp_path,
+):
+    # A device folder passes 100 objects within about a day; the list fallback
+    # must target the one key rather than read the first page of the folder.
+    fake, storage = _storage_with_existing(tmp_path, b"payload", info_has_size=False)
+    for i in range(150):
+        fake.storage.objects[("segments", f"device-abc/20260101_{i:06d}.mp4")] = b""
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"payload")
+
+    storage.upload("segments", "device-abc/20260709_080000.mp4", local)
 
 
 def test_storage_adapter_refuses_a_different_file_under_an_existing_key(tmp_path):
