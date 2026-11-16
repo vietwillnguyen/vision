@@ -34,6 +34,10 @@ jobs:
           # Python 3.11 is the declared floor; the device runs trixie (Python 3.13). Test on the floor.
           python-version: "3.11"
           enable-cache: true
+      - name: Install ffmpeg
+        # tests/test_upload_limit.py splits a real muxed segment with ffmpeg
+        # -c copy and probes the parts; without ffmpeg it would skip.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Run pytest
         run: uv run --locked --extra dev pytest
 
@@ -66,6 +70,10 @@ jobs:
         with:
           python-version: "3.11"
           enable-cache: true
+      - name: Install ffmpeg
+        # tests/test_firmware_upload_live.py splits a real oversized segment
+        # before uploading it to the size-capped bucket; without ffmpeg it skips.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: supabase/setup-cli@v3
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}

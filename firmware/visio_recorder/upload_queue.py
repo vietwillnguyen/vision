@@ -12,7 +12,11 @@ def enqueue(queue_dir: Path, source_path: Path) -> Path:
 def list_pending(queue_dir: Path) -> list[Path]:
     if not queue_dir.exists():
         return []
-    return sorted(queue_dir.iterdir(), key=lambda p: p.name)
+    # Skips the hidden scratch directory a split works in (upload_limit.py).
+    return sorted(
+        (p for p in queue_dir.iterdir() if p.is_file() and not p.name.startswith(".")),
+        key=lambda p: p.name,
+    )
 
 
 def mark_uploaded(path: Path) -> None:

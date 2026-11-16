@@ -15,7 +15,9 @@ from tests.fakes import (
     ScriptedStatusClient,
     ScriptedStorageClient,
     TriggerableBatteryReader,
+    unlimited_upload_limit,
 )
+from visio_recorder.capture import VideoSettings
 from visio_recorder.daemon import (
     LoopDeps,
     load_config,
@@ -36,8 +38,12 @@ def test_load_config_reads_all_values_from_env():
         "SUPABASE_URL": "https://example.supabase.co",
         "SUPABASE_ANON_KEY": "anon-key-123",
         "VISIO_DATA_DIR": "/data/visio",
-        "VISIO_SEGMENT_DURATION_MS": "60000",
+        "VISIO_SEGMENT_DURATION_MS": "30000",
+        "VISIO_VIDEO_WIDTH": "1920",
+        "VISIO_VIDEO_HEIGHT": "1080",
         "VISIO_FRAMERATE": "24",
+        "VISIO_VIDEO_BITRATE": "6000000",
+        "VISIO_MAX_UPLOAD_BYTES": "524288000",
     }
 
     config = load_config(env)
@@ -45,8 +51,11 @@ def test_load_config_reads_all_values_from_env():
     assert config.supabase_url == "https://example.supabase.co"
     assert config.supabase_anon_key == "anon-key-123"
     assert config.data_dir == Path("/data/visio")
-    assert config.segment_duration_ms == 60000
-    assert config.framerate == 24
+    assert config.segment_duration_ms == 30000
+    assert config.video == VideoSettings(
+        width=1920, height=1080, framerate=24, bitrate_bps=6_000_000
+    )
+    assert config.max_upload_bytes == 524_288_000
 
 
 def test_load_config_applies_defaults_when_optional_keys_absent():
@@ -58,8 +67,45 @@ def test_load_config_applies_defaults_when_optional_keys_absent():
     config = load_config(env)
 
     assert config.data_dir == Path("/var/lib/visio-recorder")
-    assert config.segment_duration_ms == 300000
-    assert config.framerate == 30
+    # 720p30 at 4 Mbps in one-minute segments under the hosted 50 MiB limit.
+    assert config.video == VideoSettings(
+        width=1280, height=720, framerate=30, bitrate_bps=4_000_000
+    )
+    assert config.max_upload_bytes == 52_428_800
+    assert config.segment_duration_ms == 60_000
+
+
+def test_load_config_derives_the_segment_length_from_the_configured_bitrate():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_VIDEO_BITRATE": "2000000",
+    }
+
+    assert load_config(env).segment_duration_ms == 120_000
+
+
+def test_load_config_derives_a_longer_segment_under_a_raised_upload_limit():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_MAX_UPLOAD_BYTES": str(100 * 1024 * 1024),
+    }
+
+    assert load_config(env).segment_duration_ms == 130_000
+
+
+def test_load_config_warns_about_an_explicit_duration_predicted_to_overflow(caplog):
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_SEGMENT_DURATION_MS": "300000",
+    }
+
+    config = load_config(env)
+
+    assert config.segment_duration_ms == 300_000
+    assert "will be split before upload" in caplog.text
 
 
 def test_load_config_missing_supabase_url_raises_value_error_naming_it():
@@ -96,7 +142,8 @@ def _make_deps(
         queue_dir=tmp_path / "queue",
         device_id="device-abc",
         segment_duration_ms=1000,
-        framerate=30,
+        video=VideoSettings(),
+        upload_limit=unlimited_upload_limit(),
     )
 
 

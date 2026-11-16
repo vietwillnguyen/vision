@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from visio_recorder.battery import BatteryReader, read_battery_status
-from visio_recorder.capture import record_segment
+from visio_recorder.capture import VideoSettings, record_segment
 from visio_recorder.device_identity import load_or_create_device_id, register_device
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
@@ -36,12 +36,17 @@ from visio_recorder.recording_loop import (
     on_segment_complete,
     recover_orphaned_segments,
 )
+from visio_recorder.segment_size import (
+    DEFAULT_MAX_UPLOAD_BYTES,
+    SIZE_BUDGET_FRACTION,
+    default_segment_duration_ms,
+    predicted_segment_bytes,
+)
 from visio_recorder.supabase_clients import build_supabase_clients
+from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
 from visio_recorder.uploader import StorageClient
 
 _DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
-_DEFAULT_SEGMENT_DURATION_MS = "300000"
-_DEFAULT_FRAMERATE = "30"
 _ONBOARDING_MAX_ATTEMPTS = 60
 _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
 _NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
@@ -56,21 +61,55 @@ class DaemonConfig:
     supabase_anon_key: str
     data_dir: Path
     segment_duration_ms: int
-    framerate: int
+    video: VideoSettings
+    max_upload_bytes: int
 
 
 def load_config(env: Mapping[str, str]) -> DaemonConfig:
+    """Read the daemon's settings from its EnvironmentFile.
+
+    ``VISIO_SEGMENT_DURATION_MS`` defaults to the longest segment whose
+    predicted size at ``VISIO_VIDEO_BITRATE`` fits the size budget under
+    ``VISIO_MAX_UPLOAD_BYTES`` (one minute at the 4 Mbps default; see
+    ``visio_recorder.segment_size``). An explicit duration is honoured even
+    when it is predicted to overflow, with a warning: oversized files are
+    split before upload, so it costs splits, not footage.
+    """
     for key in ("SUPABASE_URL", "SUPABASE_ANON_KEY"):
         if key not in env:
             raise ValueError(f"missing required environment variable: {key}")
+    defaults = VideoSettings()
+    video = VideoSettings(
+        width=int(env.get("VISIO_VIDEO_WIDTH", defaults.width)),
+        height=int(env.get("VISIO_VIDEO_HEIGHT", defaults.height)),
+        framerate=int(env.get("VISIO_FRAMERATE", defaults.framerate)),
+        bitrate_bps=int(env.get("VISIO_VIDEO_BITRATE", defaults.bitrate_bps)),
+    )
+    max_upload_bytes = int(env.get("VISIO_MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES))
+    if "VISIO_SEGMENT_DURATION_MS" in env:
+        segment_duration_ms = int(env["VISIO_SEGMENT_DURATION_MS"])
+        predicted = predicted_segment_bytes(segment_duration_ms, video.bitrate_bps)
+        if predicted > max_upload_bytes * SIZE_BUDGET_FRACTION:
+            _logger.warning(
+                "VISIO_SEGMENT_DURATION_MS=%d at %d bps predicts %d-byte segments, "
+                "over the size budget for the %d-byte upload limit; oversized "
+                "segments will be split before upload",
+                segment_duration_ms,
+                video.bitrate_bps,
+                predicted,
+                max_upload_bytes,
+            )
+    else:
+        segment_duration_ms = default_segment_duration_ms(
+            max_upload_bytes, video.bitrate_bps
+        )
     return DaemonConfig(
         supabase_url=env["SUPABASE_URL"],
         supabase_anon_key=env["SUPABASE_ANON_KEY"],
         data_dir=Path(env.get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR)),
-        segment_duration_ms=int(
-            env.get("VISIO_SEGMENT_DURATION_MS", _DEFAULT_SEGMENT_DURATION_MS)
-        ),
-        framerate=int(env.get("VISIO_FRAMERATE", _DEFAULT_FRAMERATE)),
+        segment_duration_ms=segment_duration_ms,
+        video=video,
+        max_upload_bytes=max_upload_bytes,
     )
 
 
@@ -106,7 +145,8 @@ class LoopDeps:
     queue_dir: Path
     device_id: str
     segment_duration_ms: int
-    framerate: int
+    video: VideoSettings
+    upload_limit: UploadLimit
 
 
 def _push_recording_status(
@@ -178,9 +218,10 @@ def run_recording_loop(
                     battery_reader=deps.battery_reader,
                     device_id=deps.device_id,
                     segments_uploaded_today=segments_uploaded_today,
-                    framerate=deps.framerate,
+                    framerate=deps.video.framerate,
                     disk_stats_reader=deps.disk_stats_reader,
                     data_dir=deps.data_dir,
+                    upload_limit=deps.upload_limit,
                 )
             except Exception:
                 _logger.exception(
@@ -217,7 +258,7 @@ def run_recording_loop(
                 deps.data_dir,
                 clock(),
                 deps.segment_duration_ms,
-                deps.framerate,
+                deps.video,
             )
             work.put(h264_path)
     finally:
@@ -284,11 +325,25 @@ def main() -> int:
         registered_marker_path.touch()
 
     command_runner = SubprocessCommandRunner()
-    flush_pending(queue_dir, clients.storage, device_id)
+    upload_limit = UploadLimit(
+        max_bytes=config.max_upload_bytes,
+        runner=command_runner,
+        probe=FfprobeDurationProbe(),
+    )
+    _logger.info(
+        "recording %dx%d@%d fps at %d bps in %d ms segments (upload limit %d bytes)",
+        config.video.width,
+        config.video.height,
+        config.video.framerate,
+        config.video.bitrate_bps,
+        config.segment_duration_ms,
+        config.max_upload_bytes,
+    )
+    flush_pending(queue_dir, clients.storage, device_id, upload_limit)
     if recover_orphaned_segments(
-        config.data_dir, queue_dir, command_runner, config.framerate
+        config.data_dir, queue_dir, command_runner, config.video.framerate
     ):
-        flush_pending(queue_dir, clients.storage, device_id)
+        flush_pending(queue_dir, clients.storage, device_id, upload_limit)
 
     stop = threading.Event()
 
@@ -320,7 +375,8 @@ def main() -> int:
         queue_dir=queue_dir,
         device_id=device_id,
         segment_duration_ms=config.segment_duration_ms,
-        framerate=config.framerate,
+        video=config.video,
+        upload_limit=upload_limit,
     )
     try:
         run_recording_loop(deps, stop)

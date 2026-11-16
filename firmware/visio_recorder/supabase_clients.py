@@ -7,6 +7,8 @@ from typing import Any
 from storage3.exceptions import StorageApiError
 from supabase import create_client
 
+from visio_recorder.uploader import ObjectTooLargeError
+
 # Content types by suffix for everything firmware uploads. Explicit rather than
 # `mimetypes`, whose answer depends on the host's /etc/mime.types. Anything
 # unlisted (flag markers) is stored as opaque bytes.
@@ -36,7 +38,7 @@ class SupabaseStorage:
         object with the local file's byte size counts as already uploaded - a
         cheap identity check for H.264 segments, and exact for flag markers,
         which are empty files whose name is their whole content - so a retried
-        ~170 MB segment is never sent over WiFi again just to be rejected. An
+        segment is never sent over WiFi again just to be rejected. An
         existing object of another size raises ``FileExistsError``, and a failed
         lookup or upload raises too, so the file stays queued for the next boot.
         Checking first also avoids the duplicate path entirely: storage answers
@@ -45,8 +47,13 @@ class SupabaseStorage:
 
         storage3's default ``content-type: text/plain`` mislabels every
         segment, so it is set explicitly. Passing the open file rather than
-        ``f.read()`` lets httpx stream a ~170 MB segment in chunks instead of
-        holding it (and multipart copies of it) in a 512 MB Pi Zero 2W's memory.
+        ``f.read()`` lets httpx stream a segment (up to the 50 MiB upload
+        limit) in chunks instead of holding it, and multipart copies of it, in
+        a 512 MB Pi Zero 2W's memory.
+
+        A 413 from storage (object over the bucket's size limit) is raised as
+        ``ObjectTooLargeError`` so the caller splits the file instead of
+        retrying it unchanged forever; see ``visio_recorder.upload_limit``.
         """
         bucket_api = self._client.storage.from_(bucket)
         stored_size = _stored_size(bucket_api, object_path)
@@ -59,8 +66,16 @@ class SupabaseStorage:
                 f"refusing to replace it with {local_path} ({local_size} bytes)"
             )
         content_type = _CONTENT_TYPES.get(local_path.suffix, _DEFAULT_CONTENT_TYPE)
-        with open(local_path, "rb") as f:
-            bucket_api.upload(object_path, f, {"content-type": content_type})
+        try:
+            with open(local_path, "rb") as f:
+                bucket_api.upload(object_path, f, {"content-type": content_type})
+        except StorageApiError as err:
+            if str(err.status) == "413":
+                raise ObjectTooLargeError(
+                    f"{bucket}/{object_path} ({local_path.stat().st_size} bytes) "
+                    f"is over the storage size limit: {err.message}"
+                ) from err
+            raise
 
 
 def _stored_size(bucket_api: Any, object_path: str) -> int | None:
