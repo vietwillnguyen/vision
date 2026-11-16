@@ -1,0 +1,52 @@
+# app Prettier after merging main (a47f9e8) - no-visual-change evidence
+# before = origin/main a47f9e8, after = merged branch head a2a6f6c (merge + style(app) format commit); expo export --clear --platform web with EXPO_PUBLIC_SUPABASE_* pointed at local Supabase; 390x844 headless Chrome; seeded user + device + device_status row
+
+## expo export --platform web: sha256 of every exported file
+### before
+c6287694c88fce41ca5c92c87d634b78c8b0fa8ca787fd25e18ba16f322c5a90  ./_expo/static/js/web/index-5917c4c06fa697e2199c460ba4830868.js
+9adb8c5efca932e2b732b293da813bd2e31952263056bce9e2517fec0f0b6a76  ./assets/node_modules/@react-navigation/elements/lib/module/assets/back-icon-mask.0a328cd9c1afd0afe8e3b1ec5165b1b4.png
+84cf5eb3b20250f69e0e4733beb4da5f417f0682892a5ad1b5e62570753c21b1  ./assets/node_modules/@react-navigation/elements/lib/module/assets/back-icon.35ba0eaec5a4f5ed12ca16fabeae451d.png
+d03a5cd7a66ef10c5147916f9d5878b2d0a0a5ad46f405a31cd9967efaa55afd  ./assets/node_modules/@react-navigation/elements/lib/module/assets/clear-icon.c94f6478e7ae0cdd9f15de1fcb9e5e55.png
+ab5613d2ce70fa67c5926e831353664945199fc195fa6fe76c5fe3cec452e31a  ./assets/node_modules/@react-navigation/elements/lib/module/assets/clear-icon.c94f6478e7ae0cdd9f15de1fcb9e5e55@2x.png
+c4e54e6a0a7de636aa153378fbc62ea4a41695bfedf807f90df7b18ffd733f67  ./assets/node_modules/@react-navigation/elements/lib/module/assets/clear-icon.c94f6478e7ae0cdd9f15de1fcb9e5e55@3x.png
+c86bb485eee687e06c500fc4234f51a6784b4530c2ae11d0c76481110bce3105  ./assets/node_modules/@react-navigation/elements/lib/module/assets/clear-icon.c94f6478e7ae0cdd9f15de1fcb9e5e55@4x.png
+b1bc1810ca23e2c38cd76971c43591d726161061240d8b792b05757196ddb528  ./assets/node_modules/@react-navigation/elements/lib/module/assets/close-icon.808e1b1b9b53114ec2838071a7e6daa7.png
+cbdf9213e55f65c48d076acd8423b7c9aee4f1b81101ff6c95a38c4cd8a86461  ./assets/node_modules/@react-navigation/elements/lib/module/assets/close-icon.808e1b1b9b53114ec2838071a7e6daa7@2x.png
+d05c9d30d79f45a78e5585a2e7ec67c6a06a883dd9137e1d5059e8c87b33ce76  ./assets/node_modules/@react-navigation/elements/lib/module/assets/close-icon.808e1b1b9b53114ec2838071a7e6daa7@3x.png
+2325c53a73e54c438cbbc60dffdd8b513d471ba42e2f56713ef404b95e0ca1fc  ./assets/node_modules/@react-navigation/elements/lib/module/assets/close-icon.808e1b1b9b53114ec2838071a7e6daa7@4x.png
+5d075e0c287c4f4441b5b5c8fc7ea5cd27c11bb617ecea09755955bcb1889083  ./assets/node_modules/@react-navigation/elements/lib/module/assets/search-icon.286d67d3f74808a60a78d3ebf1a5fb57.png
+8184b2ca6c201c87bade03c6d01497e4cd1a416046ca8a48db0ae3c3c758fc8c  ./favicon.ico
+5ffb622a9b6e2843bbeebf6f8ada4d238b92329f44195b9d0b2584409c831680  ./index.html
+aa5f19cc84d41c0f8c70ececb2bc82e863227ea1e121632aca879eb616056991  ./metadata.json
+### after
+c6287694c88fce41ca5c92c87d634b78c8b0fa8ca787fd25e18ba16f322c5a90  ./_expo/static/js/web/index-5917c4c06fa697e2199c460ba4830868.js
+9adb8c5efca932e2b732b293da813bd2e31952263056bce9e2517fec0f0b6a76  ./assets/node_modules/@react-navigation/elements/lib/module/assets/back-icon-mask.0a328cd9c1afd0afe8e3b1ec5165b1b4.png
+84cf5eb3b20250f69e0e4733beb4da5f417f0682892a5ad1b5e62570753c21b1  ./assets/node_modules/@react-navigation/elements/lib/module/assets/back-icon.35ba0eaec5a4f5ed12ca16fabeae451d.png
+d03a5cd7a66ef10c5147916f9d5878b2d0a0a5ad46f405a31cd9967efaa55afd  ./assets/node_modules/@react-navigation/elements/lib/module/assets/clear-icon.c94f6478e7ae0cdd9f15de1fcb9e5e55.png
+ab5613d2ce70fa67c5926e831353664945199fc195fa6fe76c5fe3cec452e31a  ./assets/node_modules/@react-navigation/elements/lib/module/assets/clear-icon.c94f6478e7ae0cdd9f15de1fcb9e5e55@2x.png
+c4e54e6a0a7de636aa153378fbc62ea4a41695bfedf807f90df7b18ffd733f67  ./assets/node_modules/@react-navigation/elements/lib/module/assets/clear-icon.c94f6478e7ae0cdd9f15de1fcb9e5e55@3x.png
+c86bb485eee687e06c500fc4234f51a6784b4530c2ae11d0c76481110bce3105  ./assets/node_modules/@react-navigation/elements/lib/module/assets/clear-icon.c94f6478e7ae0cdd9f15de1fcb9e5e55@4x.png
+b1bc1810ca23e2c38cd76971c43591d726161061240d8b792b05757196ddb528  ./assets/node_modules/@react-navigation/elements/lib/module/assets/close-icon.808e1b1b9b53114ec2838071a7e6daa7.png
+cbdf9213e55f65c48d076acd8423b7c9aee4f1b81101ff6c95a38c4cd8a86461  ./assets/node_modules/@react-navigation/elements/lib/module/assets/close-icon.808e1b1b9b53114ec2838071a7e6daa7@2x.png
+d05c9d30d79f45a78e5585a2e7ec67c6a06a883dd9137e1d5059e8c87b33ce76  ./assets/node_modules/@react-navigation/elements/lib/module/assets/close-icon.808e1b1b9b53114ec2838071a7e6daa7@3x.png
+2325c53a73e54c438cbbc60dffdd8b513d471ba42e2f56713ef404b95e0ca1fc  ./assets/node_modules/@react-navigation/elements/lib/module/assets/close-icon.808e1b1b9b53114ec2838071a7e6daa7@4x.png
+5d075e0c287c4f4441b5b5c8fc7ea5cd27c11bb617ecea09755955bcb1889083  ./assets/node_modules/@react-navigation/elements/lib/module/assets/search-icon.286d67d3f74808a60a78d3ebf1a5fb57.png
+8184b2ca6c201c87bade03c6d01497e4cd1a416046ca8a48db0ae3c3c758fc8c  ./favicon.ico
+5ffb622a9b6e2843bbeebf6f8ada4d238b92329f44195b9d0b2584409c831680  ./index.html
+aa5f19cc84d41c0f8c70ececb2bc82e863227ea1e121632aca879eb616056991  ./metadata.json
+
+RESULT: all 15 exported files byte-identical
+
+## screenshot comparison (cmp)
+01-auth.png byte-identical
+02-today-reel.png byte-identical
+03-raw-footage.png byte-identical
+04-device.png byte-identical
+05-reonboard.png byte-identical
+06-archive.png byte-identical
+
+## tab bar on the merged head (#76 SVG icons, 2 per tab for the active/inactive cross-fade)
+Today's Reel svg=2
+Raw Footage svg=2
+Device svg=2
+Archive svg=2
