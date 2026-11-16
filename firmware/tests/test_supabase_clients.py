@@ -35,8 +35,6 @@ class FakeStorageBucket:
         self._uploads = uploads
         self._objects = objects
         self.info_has_size = True
-        self.lookup_hangs_after_duplicate = False
-        self._hung_lookup_pending = False
 
     def upload(self, path: str, file, file_options=None) -> None:
         # Record what supabase-py's storage3 would turn into the request: the
@@ -54,17 +52,13 @@ class FakeStorageBucket:
         )
         key = (self._bucket, path)
         if key in self._objects:
-            self._hung_lookup_pending = self.lookup_hangs_after_duplicate
             raise StorageApiError("The resource already exists", "Duplicate", "409")
         self._objects[key] = data
 
     def info(self, path: str) -> dict:
-        # Local storage behind kong answers a large duplicate before reading
-        # its body, and the next storage request then stalls until httpx's
-        # ReadTimeout; the request after that is served normally.
-        if self._hung_lookup_pending:
-            self._hung_lookup_pending = False
-            raise TimeoutError("timed out")
+        # Like the storage API: a missing object is a 404 not_found.
+        if (self._bucket, path) not in self._objects:
+            raise StorageApiError("Object not found", "not_found", 404)
         info: dict = {"name": path}
         if self.info_has_size:
             info["size"] = len(self._objects[(self._bucket, path)])
@@ -97,12 +91,10 @@ class FakeStorage:
         self._uploads = uploads
         self.objects: dict = {}
         self.info_has_size = True
-        self.lookup_hangs_after_duplicate = False
 
     def from_(self, bucket: str) -> FakeStorageBucket:
         api = FakeStorageBucket(bucket, self._uploads, self.objects)
         api.info_has_size = self.info_has_size
-        api.lookup_hangs_after_duplicate = self.lookup_hangs_after_duplicate
         return api
 
 
@@ -211,16 +203,16 @@ def test_storage_adapter_never_requests_an_overwrite(tmp_path):
     assert "upsert" not in upload["file_options"]
 
 
-def test_storage_adapter_retry_survives_a_stalled_first_size_lookup(tmp_path):
-    # Storage can answer 409 before reading a large body, and the size lookup
-    # sent next then times out. One stalled lookup must not leave an
-    # already-uploaded segment queued forever.
+def test_storage_adapter_retry_does_not_resend_an_already_stored_file(tmp_path):
+    # The size check runs before the upload, so a retried ~170 MB segment is
+    # not sent over WiFi again only to be rejected as a duplicate.
     fake, storage = _storage_with_existing(tmp_path, b"payload")
-    fake.storage.lookup_hangs_after_duplicate = True
     local = tmp_path / "20260709_080000.mp4"
     local.write_bytes(b"payload")
 
     storage.upload("segments", "device-abc/20260709_080000.mp4", local)
+
+    assert fake.uploads == []
 
 
 @pytest.mark.parametrize("info_has_size", [True, False])
@@ -262,9 +254,10 @@ def test_storage_adapter_refuses_a_different_file_under_an_existing_key(tmp_path
     local = tmp_path / "20260709_080000.mp4"
     local.write_bytes(b"later, different segment")
 
-    with pytest.raises(StorageApiError):
+    with pytest.raises(FileExistsError):
         storage.upload("segments", "device-abc/20260709_080000.mp4", local)
 
+    assert fake.uploads == []
     assert fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] == (
         b"earlier segment"
     )
