@@ -1,0 +1,28 @@
+# app Prettier adoption - no-visual-change evidence
+# before = origin/main ffed638, after = formatted branch head; expo web export, 390x844 headless Chrome, local Supabase seeded with one user + device + device_status row
+
+## expo export --platform web bundle sha256
+a79d7de6357e01b96a6b0dcfd8fff2c7d36c4018c7d0597fae38d1474a2453a5  dist-before/_expo/static/js/web/index-465b54ec4eaea197a50a5c109ac157dc.js
+a79d7de6357e01b96a6b0dcfd8fff2c7d36c4018c7d0597fae38d1474a2453a5  dist-after/_expo/static/js/web/index-465b54ec4eaea197a50a5c109ac157dc.js
+
+## screenshot comparison (cmp)
+01-auth.png byte-identical
+02-today-reel.png byte-identical
+03-raw-footage.png byte-identical
+04-device.png byte-identical
+05-reonboard.png byte-identical
+06-archive.png byte-identical
+
+## screenshot sha256
+eda9e58f145e837376d72871922a1f66894129082305eea0028a0796e7ba186e  docs/superpowers/evidence/app-prettier/before/01-auth.png
+abd6ec7c037bab81ccf0e4a44eabd968a89cd31f8975887fbf7a546f6473d113  docs/superpowers/evidence/app-prettier/before/02-today-reel.png
+128e61f0b304da440cd8d46eeeee93a6f51b999411d104a7f4be55879bef8ca6  docs/superpowers/evidence/app-prettier/before/03-raw-footage.png
+bb8e2549028b6218089ecc3f4ce068ed7ef0739b04ed2670ae6fd82aa6d1fe59  docs/superpowers/evidence/app-prettier/before/04-device.png
+d68147d4d8d50901e04e2330c3bccf8f47621ef6e9081067a94e0171122758b0  docs/superpowers/evidence/app-prettier/before/05-reonboard.png
+6ff9382db59fc81d5ab61f1687409ce082afb39bde76e1e7facc946d79747efa  docs/superpowers/evidence/app-prettier/before/06-archive.png
+eda9e58f145e837376d72871922a1f66894129082305eea0028a0796e7ba186e  docs/superpowers/evidence/app-prettier/after/01-auth.png
+abd6ec7c037bab81ccf0e4a44eabd968a89cd31f8975887fbf7a546f6473d113  docs/superpowers/evidence/app-prettier/after/02-today-reel.png
+128e61f0b304da440cd8d46eeeee93a6f51b999411d104a7f4be55879bef8ca6  docs/superpowers/evidence/app-prettier/after/03-raw-footage.png
+bb8e2549028b6218089ecc3f4ce068ed7ef0739b04ed2670ae6fd82aa6d1fe59  docs/superpowers/evidence/app-prettier/after/04-device.png
+d68147d4d8d50901e04e2330c3bccf8f47621ef6e9081067a94e0171122758b0  docs/superpowers/evidence/app-prettier/after/05-reonboard.png
+6ff9382db59fc81d5ab61f1687409ce082afb39bde76e1e7facc946d79747efa  docs/superpowers/evidence/app-prettier/after/06-archive.png
