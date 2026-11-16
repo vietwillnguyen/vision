@@ -62,5 +62,7 @@ jobs:
           NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 60000
       - name: ESLint
         run: npm run lint
+      - name: Prettier
+        run: npm run format:check
       - name: Type-check
         run: npm run typecheck
