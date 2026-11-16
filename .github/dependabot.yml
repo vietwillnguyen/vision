@@ -61,6 +61,37 @@ updates:
     groups:
       app-minor-and-patch:
         update-types: ["minor", "patch"]
+    # These versions are owned by the Expo SDK, not by semver: each SDK release
+    # pins the react, react-native and native-module versions its prebuilt
+    # native code was compiled against, and `npx expo install --check` flags any
+    # drift. A minor bump of any of them (react 19.2 -> 19.3, react-native
+    # 0.86 -> 0.88) is an SDK upgrade in disguise, so Dependabot only proposes
+    # patches here and SDK upgrades go through `npx expo install --fix`.
+    ignore:
+      - dependency-name: "react"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-test-renderer"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-native-screens"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-native-safe-area-context"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-native-svg"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "@react-native-async-storage/async-storage"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "expo*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "jest-expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint-config-expo"
+        update-types: ["version-update:semver-major"]
 
   # Scans .github/workflows/. Keeps actions/checkout, setup-node, setup-uv,
   # astral-sh, and supabase/setup-cli current. Note this bumps the action *ref*
