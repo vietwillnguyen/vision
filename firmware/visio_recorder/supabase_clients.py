@@ -6,6 +6,12 @@ from typing import Any
 
 from supabase import create_client
 
+# Content types by suffix for everything firmware uploads. Explicit rather than
+# `mimetypes`, whose answer depends on the host's /etc/mime.types. Anything
+# unlisted (flag markers) is stored as opaque bytes.
+_CONTENT_TYPES = {".mp4": "video/mp4"}
+_DEFAULT_CONTENT_TYPE = "application/octet-stream"
+
 
 # `client` below is supabase-py's Client in production and a fake in tests.
 # Annotating it as Client would reject the fakes these adapters are tested with,
@@ -16,8 +22,24 @@ class SupabaseStorage:
         self._client = client
 
     def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
+        """Upload ``local_path`` to ``bucket/object_path``.
+
+        storage3's defaults are wrong for this device on every header it sends:
+        ``x-upsert: false`` makes the next-boot ``flush_pending`` retry of an
+        object that already reached storage fail as a duplicate forever, and
+        ``content-type: text/plain`` mislabels every segment. Passing the open
+        file rather than ``f.read()`` lets httpx stream a ~170 MB segment in
+        chunks instead of holding it (and multipart copies of it) in a 512 MB
+        Pi Zero 2W's memory. Object keys are capture timestamps, so an upsert
+        only ever overwrites an object with the same file.
+        """
+        content_type = _CONTENT_TYPES.get(local_path.suffix, _DEFAULT_CONTENT_TYPE)
         with open(local_path, "rb") as f:
-            self._client.storage.from_(bucket).upload(object_path, f.read())
+            self._client.storage.from_(bucket).upload(
+                object_path,
+                f,
+                {"content-type": content_type, "upsert": "true"},
+            )
 
 
 class SupabaseStatus:

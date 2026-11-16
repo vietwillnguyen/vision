@@ -1,0 +1,8 @@
+storage3.exceptions.StorageApiError: {'statusCode': 409, 'error': Duplicate, 'message': The resource already exists}
+segment: 20260714_090000.mp4 5502888 bytes
+first upload: ok, peak python memory 5731500 bytes (1.04x file size)
+power cut before mark_uploaded: file stays queued
+next boot flush_pending uploaded: 0
+queue after flush: ['20260714_090000.mp4']
+stored mimetype: text/plain  size: 5502888
+downloaded object ffprobe: duration=59.933000

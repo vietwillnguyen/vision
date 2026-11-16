@@ -110,6 +110,13 @@ pipeline actually parses - the real Stage 1 -> Stage 2 handoff, storage
 object to parsed `Segment`, rather than a bypassed direct DB write. Same
 live-instance requirement and skip behavior as `test_rls_end_to_end.py`.
 
+`tests/test_firmware_upload_live.py` pins the request-shape details of that
+same upload adapter that only the real storage API enforces: a retried upload
+of an object already in the bucket succeeds (the next-boot `flush_pending`
+retry after a power cut between upload and unlink), segments are stored as
+`video/mp4`, and the file is streamed rather than read whole into memory.
+Same live-instance requirement and skip behavior.
+
 ## Running
 
 ```

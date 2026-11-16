@@ -29,8 +29,19 @@ class FakeStorageBucket:
         self._bucket = bucket
         self._uploads = uploads
 
-    def upload(self, path: str, data: bytes) -> None:
-        self._uploads.append((self._bucket, path, data))
+    def upload(self, path: str, file, file_options=None) -> None:
+        # Record what supabase-py's storage3 would turn into the request: the
+        # file handle (read here, while the adapter still holds it open) and
+        # the headers it would send.
+        self._uploads.append(
+            {
+                "bucket": self._bucket,
+                "path": path,
+                "file": file,
+                "data": file.read() if hasattr(file, "read") else file,
+                "file_options": file_options,
+            }
+        )
 
 
 class FakeStorage:
@@ -101,7 +112,57 @@ def test_storage_adapter_uploads_to_bucket_and_path(tmp_path):
 
     clients.storage.upload("segments", "device-abc/20260709_080000.mp4", local)
 
-    assert fake.uploads == [("segments", "device-abc/20260709_080000.mp4", b"vid")]
+    [upload] = fake.uploads
+    assert upload["bucket"] == "segments"
+    assert upload["path"] == "device-abc/20260709_080000.mp4"
+    assert upload["data"] == b"vid"
+
+
+def _upload_one(tmp_path: Path, filename: str) -> dict:
+    fake = FakeSupabase()
+    clients = build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
+    local = tmp_path / filename
+    local.write_bytes(b"payload")
+    clients.storage.upload("segments", f"device-abc/{filename}", local)
+    [upload] = fake.uploads
+    return upload
+
+
+def test_storage_adapter_upload_is_an_idempotent_upsert(tmp_path):
+    # flush_pending retries a queued file on every boot. If the first attempt
+    # reached storage but the device lost power before unlinking it, the retry
+    # targets an object that already exists; storage3's default x-upsert=false
+    # turns that into a duplicate error forever.
+    upload = _upload_one(tmp_path, "20260709_080000.mp4")
+
+    assert upload["file_options"]["upsert"] == "true"
+
+
+def test_storage_adapter_labels_segments_as_video_mp4(tmp_path):
+    # storage3's default content-type is text/plain;charset=UTF-8.
+    upload = _upload_one(tmp_path, "20260709_080000.mp4")
+
+    assert upload["file_options"]["content-type"] == "video/mp4"
+
+
+def test_storage_adapter_labels_flag_markers_as_binary(tmp_path):
+    upload = _upload_one(tmp_path, "FLAG_20260709_080000.marker")
+
+    assert upload["file_options"]["content-type"] == "application/octet-stream"
+
+
+def test_storage_adapter_streams_the_file_instead_of_reading_it_whole(tmp_path):
+    # A ~170 MB segment read into one bytes object is a large share of a
+    # 512 MB Pi Zero 2W; handing storage3 the open file lets httpx stream it.
+    upload = _upload_one(tmp_path, "20260709_080000.mp4")
+
+    assert not isinstance(upload["file"], bytes)
+    assert hasattr(upload["file"], "read")
 
 
 def test_status_adapter_upserts_device_status_row(tmp_path):
