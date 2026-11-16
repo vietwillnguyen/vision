@@ -6,9 +6,9 @@ from pipeline.models import ScoreWeights, Segment
 def test_score_weights_defaults_match_spec():
     weights = ScoreWeights()
     assert weights.scene_weight == 0.4
-    # The spec's 0.3 is deliberately overridden until the firmware records
-    # audio; see the comment on ScoreWeights and vision-audio-capture.
-    assert weights.audio_weight == 0.0
+    # Restored now the firmware records audio; a segment without an audio
+    # stream scores as silence, so the term is 0 for it.
+    assert weights.audio_weight == 0.3
     assert weights.motion_weight == 0.2
 
 

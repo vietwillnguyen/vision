@@ -150,9 +150,10 @@ class FfmpegMediaProbe:
         return duration
 
     def extract_audio(self, video_path: Path, workdir: Path) -> Path | None:
-        # The pendant records video only (capture.py runs rpicam-vid with no
-        # ALSA source), and ffmpeg refuses to write a WAV from a file with no
-        # audio stream, so check first and report silence as None.
+        # A pendant with no working microphone records video only (capture.py
+        # falls back to rpicam-vid with no ALSA source), and ffmpeg refuses to
+        # write a WAV from a file with no audio stream, so check first and
+        # report silence as None.
         streams = run_captured(build_audio_stream_probe_command(video_path))
         if not streams.stdout.strip():
             return None
