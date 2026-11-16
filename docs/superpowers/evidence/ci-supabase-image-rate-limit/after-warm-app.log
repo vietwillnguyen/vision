@@ -1,0 +1,40 @@
+# PR #88 tests run 43942898507 attempt 2 (warm image cache), job app (133568193844)
+# https://github.com/vietwillnguyen/vision/actions/runs/43942898507/attempts/2
+2026-11-16T19:52:53.3821018Z Cache restored from key: node-cache-Linux-x64-npm-8ee5a24aa349a5e2d6bf4efb77df18b833b2a58f37e2bab1a1093bd3e0936dda
+2026-11-16T19:52:53.4248099Z ##[group]Run supabase/setup-cli@v3
+2026-11-16T19:53:01.5372579Z ##[group]Run ./.github/actions/supabase-images
+2026-11-16T19:53:01.5819988Z ##[group]Run actions/cache/restore@v6
+2026-11-16T19:53:12.6219428Z Cache Size: ~774 MB (811804680 B)
+2026-11-16T19:53:22.3193146Z Cache restored from key: supabase-images-Linux-X64-cli2.109.0-e6e884d3cf3806d4fa986fccee572c99c656ccf90a5947987c2ee3f6e765f107
+2026-11-16T19:53:22.3280594Z echo "archive: $(du -h "$archive" | cut -f1)"
+2026-11-16T19:53:22.7656102Z archive: 3.1G
+2026-11-16T19:53:39.6041971Z Loaded image: public.ecr.aws/supabase/pg_prove:3.36
+2026-11-16T19:53:42.6464108Z Loaded image: public.ecr.aws/supabase/kong:2.8.1
+2026-11-16T19:53:43.9147683Z Loaded image: public.ecr.aws/supabase/gotrue:v2.192.0
+2026-11-16T19:53:46.4631801Z Loaded image: public.ecr.aws/supabase/realtime:v2.112.1
+2026-11-16T19:53:46.8056033Z Loaded image: public.ecr.aws/supabase/mailpit:v1.30.2
+2026-11-16T19:53:49.1527749Z Loaded image: public.ecr.aws/supabase/postgres-meta:v0.96.1
+2026-11-16T19:53:55.1135265Z Loaded image: public.ecr.aws/supabase/postgres:17.6.1.140
+2026-11-16T19:53:55.1604048Z Loaded image: public.ecr.aws/supabase/postgrest:v14.14
+2026-11-16T19:54:05.9747128Z Loaded image: public.ecr.aws/supabase/storage-api:v1.61.7
+2026-11-16T19:54:06.1450233Z real	0m43.379s
+2026-11-16T19:54:06.3592542Z ##[group]Run time scripts/ci/supabase-images.sh seed
+2026-11-16T19:54:06.4622414Z supabase-images: seed done: 9 already present, 0 pulled from ghcr.io
+2026-11-16T19:54:06.4623511Z real	0m0.096s
+2026-11-16T19:54:06.4665032Z   echo "probe: $out"
+2026-11-16T19:54:06.4665719Z     *"connection refused"*|*"0.0.0.0"*|*"[::]"*) echo "$registry blocked for this job" ;;
+2026-11-16T19:54:06.5066574Z probe: Error response from daemon: Get "https://public.ecr.aws/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:54:06.5067190Z public.ecr.aws blocked for this job
+2026-11-16T19:54:06.5173609Z probe: Error response from daemon: Get "https://ghcr.io/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:54:06.5174055Z ghcr.io blocked for this job
+2026-11-16T19:54:06.5276977Z probe: Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:54:06.5277678Z docker.io blocked for this job
+2026-11-16T19:54:06.5302252Z ##[group]Run supabase start -x imgproxy
+2026-11-16T19:54:06.9230326Z  realtime Skipped - Image is already present locally 
+2026-11-16T19:54:36.8020179Z Started supabase local development setup.
+2026-11-16T19:54:37.3834178Z ##[group]Run scripts/ci/supabase-images.sh verify
+2026-11-16T19:54:37.4142847Z supabase-images: all 7 running container images are in the manifest
+2026-11-16T19:55:08.9046413Z ##[group]Run scripts/gen-db-types.sh
+2026-11-16T19:55:09.8152446Z gen-db-types: reusing running local Supabase, applying pending migrations
+2026-11-16T19:55:14.2308926Z gen-db-types: wrote app/src/generated/database.ts and integration/tests/fixtures/public_schema.json
+2026-11-16T19:55:28.1234202Z ##[group]Run supabase stop
