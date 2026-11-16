@@ -113,7 +113,8 @@ live-instance requirement and skip behavior as `test_rls_end_to_end.py`.
 `tests/test_firmware_upload_live.py` pins the request-shape details of that
 same upload adapter that only the real storage API enforces: a retried upload
 of an object already in the bucket succeeds (the next-boot `flush_pending`
-retry after a power cut between upload and unlink), segments are stored as
+retry after a power cut between upload and unlink), a different file under an
+existing key is refused rather than overwritten, segments are stored as
 `video/mp4`, and the file is streamed rather than read whole into memory.
 Same live-instance requirement and skip behavior.
 

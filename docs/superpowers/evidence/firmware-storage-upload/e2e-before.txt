@@ -1,3 +1,4 @@
+httpx.HTTPStatusError: Client error '400 Bad Request' for url 'http://127.0.0.1:54321/storage/v1/object/segments/58152966-e82c-44a1-9e13-5815d830fc49/20260714_090000.mp4'
 storage3.exceptions.StorageApiError: {'statusCode': 409, 'error': Duplicate, 'message': The resource already exists}
 segment: 20260714_090000.mp4 5502888 bytes
 first upload: ok, peak python memory 5731500 bytes (1.04x file size)
