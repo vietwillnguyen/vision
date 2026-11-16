@@ -1,0 +1,78 @@
+# PR #84 (fix/app-web-tab-icons), run 43865896759 attempt 1, job app 133294233157
+# https://github.com/vietwillnguyen/vision/actions/runs/43865896759/attempts/1
+## supabase start: every pull throttled, CLI retries (start took 4m48s)
+2026-11-16T12:22:06.0664221Z ##[group]Run supabase start
+2026-11-16T12:22:06.0664656Z supabase start
+2026-11-16T12:22:06.0695981Z shell: /usr/bin/bash -e {0}
+2026-11-16T12:22:06.0696360Z env:
+2026-11-16T12:22:06.0696619Z   SUPABASE_CLI_VERSION: 2.109.0
+2026-11-16T12:22:06.0696936Z ##[endgroup]
+2026-11-16T12:22:06.6031252Z  kong Pulling 
+2026-11-16T12:22:06.6044122Z  postgrest Pulling 
+2026-11-16T12:22:06.6045815Z  gotrue Pulling 
+2026-11-16T12:22:06.6046770Z  mailpit Pulling 
+2026-11-16T12:22:06.6047293Z  realtime Pulling 
+2026-11-16T12:22:06.6048083Z  storage-api Pulling 
+2026-11-16T12:22:06.6048623Z  imgproxy Pulling 
+2026-11-16T12:22:06.6049443Z  postgres Pulling 
+2026-11-16T12:24:20.1902466Z  gotrue Error toomanyrequests: Data limit exceeded
+2026-11-16T12:24:27.2439478Z  realtime Error toomanyrequests: Data limit exceeded
+2026-11-16T12:24:38.2974691Z  imgproxy Error toomanyrequests: Data limit exceeded
+2026-11-16T12:24:38.9412918Z  postgres Error toomanyrequests: Data limit exceeded
+2026-11-16T12:24:40.3449018Z  postgrest Error toomanyrequests: Data limit exceeded
+2026-11-16T12:24:47.9395534Z  storage-api Error toomanyrequests: Data limit exceeded
+2026-11-16T12:24:52.2386810Z  mailpit Error toomanyrequests: Data limit exceeded
+2026-11-16T12:25:11.7815737Z  kong Error toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.0553983Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.0555947Z Retrying after 4s: public.ecr.aws/supabase/mailpit:v1.30.2
+2026-11-16T12:25:12.0556737Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.0557483Z Retrying after 4s: public.ecr.aws/supabase/storage-api:v1.61.7
+2026-11-16T12:25:12.0715067Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.0716058Z Retrying after 4s: public.ecr.aws/supabase/kong:2.8.1
+2026-11-16T12:25:12.1208578Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.1211562Z Retrying after 4s: public.ecr.aws/supabase/imgproxy:v3.8.0
+2026-11-16T12:25:12.1248707Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.1251628Z Retrying after 4s: public.ecr.aws/supabase/postgrest:v14.14
+2026-11-16T12:25:12.1253395Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.1255887Z Retrying after 4s: public.ecr.aws/supabase/realtime:v2.112.1
+2026-11-16T12:25:12.1263157Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.1264341Z Retrying after 4s: public.ecr.aws/supabase/gotrue:v2.192.0
+2026-11-16T12:25:12.1265055Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:12.1265751Z Retrying after 4s: public.ecr.aws/supabase/postgres:17.6.1.140
+2026-11-16T12:25:16.3868873Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:16.3869804Z Retrying after 8s: public.ecr.aws/supabase/mailpit:v1.30.2
+2026-11-16T12:25:16.3944706Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:16.3945829Z Retrying after 8s: public.ecr.aws/supabase/gotrue:v2.192.0
+2026-11-16T12:25:16.3995880Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:16.3998903Z Retrying after 8s: public.ecr.aws/supabase/storage-api:v1.61.7
+2026-11-16T12:25:16.4081446Z failed to pull docker image: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:25:16.4083007Z Retrying after 8s: public.ecr.aws/supabase/kong:2.8.1
+...
+2026-11-16T12:26:40.1878087Z Status: Downloaded newer image for ghcr.io/supabase/edge-runtime:v1.74.2
+2026-11-16T12:26:42.8295893Z Starting containers...
+2026-11-16T12:26:43.9086685Z Waiting for health checks...
+2026-11-16T12:26:54.0026582Z Started supabase local development setup.
+2026-11-16T12:26:54.0027775Z ╭──────────────────────────────────╮
+## Verify generated database types are current: gen types' bare docker run of postgres-meta, no retry
+2026-11-16T12:27:42.2497465Z ##[group]Run scripts/gen-db-types.sh
+2026-11-16T12:27:42.2497894Z scripts/gen-db-types.sh
+2026-11-16T12:27:42.2498544Z git diff --exit-code -- app/src/generated/database.ts integration/tests/fixtures/public_schema.json
+2026-11-16T12:27:42.2521072Z shell: /usr/bin/bash -e {0}
+2026-11-16T12:27:42.2521362Z env:
+2026-11-16T12:27:42.2521605Z   SUPABASE_CLI_VERSION: 2.109.0
+2026-11-16T12:27:42.2521937Z   SUPABASE_URL: http://127.0.0.1:54321
+2026-11-16T12:27:42.2523798Z   SUPABASE_ANON_KEY: ***
+2026-11-16T12:27:42.2525052Z   SUPABASE_SERVICE_ROLE_KEY: ***
+2026-11-16T12:27:42.2525344Z ##[endgroup]
+2026-11-16T12:27:43.3046410Z gen-db-types: reusing running local Supabase, applying pending migrations
+2026-11-16T12:27:43.8293017Z Connecting to local database...
+2026-11-16T12:27:43.8548092Z Local database is up to date.
+2026-11-16T12:27:44.9580973Z Connecting to db 5432
+2026-11-16T12:27:44.9811618Z Unable to find image 'public.ecr.aws/supabase/postgres-meta:v0.96.1' locally
+2026-11-16T12:27:45.3315556Z docker: Error response from daemon: toomanyrequests: Data limit exceeded
+2026-11-16T12:27:45.3316004Z 
+2026-11-16T12:27:45.3316252Z Run 'docker run --help' for more information
+2026-11-16T12:27:45.8247906Z error running container: exit 125
+2026-11-16T12:27:45.8248784Z Try rerunning the command with --debug to troubleshoot the error.
+2026-11-16T12:27:45.8386280Z ##[error]Process completed with exit code 1.
+2026-11-16T12:27:45.8451926Z ##[group]Run supabase stop

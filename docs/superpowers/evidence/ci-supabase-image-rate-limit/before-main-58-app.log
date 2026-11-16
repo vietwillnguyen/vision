@@ -1,0 +1,20 @@
+# main post-merge of #58, run 32822248259, job app 97722657927
+# https://github.com/vietwillnguyen/vision/actions/runs/32822248259
+2026-08-25T07:36:04.9837490Z   SUPABASE_CLI_VERSION: 2.109.0
+2026-08-25T07:36:04.9837784Z   SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
+2026-08-25T07:36:04.9838133Z   SUPABASE_URL: http://127.0.0.1:54321
+2026-08-25T07:36:04.9839214Z   SUPABASE_ANON_KEY: ***
+2026-08-25T07:36:04.9840552Z   SUPABASE_SERVICE_ROLE_KEY: ***
+2026-08-25T07:36:04.9841119Z ##[endgroup]
+2026-08-25T07:36:05.9098467Z gen-db-types: reusing running local Supabase, applying pending migrations
+2026-08-25T07:36:06.3846565Z Connecting to local database...
+2026-08-25T07:36:06.4093815Z Local database is up to date.
+2026-08-25T07:36:07.3401267Z Connecting to db 5432
+2026-08-25T07:36:07.3649705Z Unable to find image 'public.ecr.aws/supabase/postgres-meta:v0.96.1' locally
+2026-08-25T07:36:07.6543110Z v0.96.1: Pulling from supabase/postgres-meta
+2026-08-25T07:36:07.6871153Z docker: toomanyrequests: Rate exceeded
+2026-08-25T07:36:07.6871529Z 
+2026-08-25T07:36:07.6871741Z Run 'docker run --help' for more information
+2026-08-25T07:36:08.0078478Z error running container: exit 125
+2026-08-25T07:36:08.0079176Z Try rerunning the command with --debug to troubleshoot the error.
+2026-08-25T07:36:08.0193355Z ##[error]Process completed with exit code 1.
