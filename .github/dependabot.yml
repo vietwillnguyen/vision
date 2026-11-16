@@ -61,6 +61,32 @@ updates:
     groups:
       app-minor-and-patch:
         update-types: ["minor", "patch"]
+    # These versions are owned by the Expo SDK, not by semver: each SDK release
+    # pins the react, react-native and native-module versions its prebuilt
+    # native code was compiled against, and `npx expo install --check` flags any
+    # drift. Packages the SDK pins to an exact version are fully ignored, since
+    # even a patch bump drifts from the pin; they only move via
+    # `npx expo install --fix`. Packages the SDK pins to a tilde range still get
+    # patch bumps, but a minor bump of any of them is an SDK upgrade in disguise.
+    ignore:
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "react-test-renderer"
+      - dependency-name: "react-native"
+      - dependency-name: "react-native-svg"
+      - dependency-name: "@react-native-async-storage/async-storage"
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-native-screens"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "react-native-safe-area-context"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "expo*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "jest-expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint-config-expo"
+        update-types: ["version-update:semver-major"]
 
   # Scans .github/workflows/. Keeps actions/checkout, setup-node, setup-uv,
   # astral-sh, and supabase/setup-cli current. Note this bumps the action *ref*
