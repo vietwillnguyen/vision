@@ -20,8 +20,8 @@ env:
   # action *refs*, not action *inputs*, so this bump stays manual.
   #
   # Bumping it also means updating .github/supabase-images.txt, the images that
-  # version boots: CI serves them from a cache and blocks public.ecr.aws, so a
-  # stale list fails loudly rather than falling back to the rate-limited pull.
+  # version boots: CI serves them from a cache and blocks public.ecr.aws and
+  # its ghcr.io fallback, so a stale list fails loudly rather than pulling.
   SUPABASE_CLI_VERSION: "2.109.0"
   # With [experimental.pgdelta] enabled in supabase/config.toml (kept for
   # developers' `db diff`), `supabase start` runs a one-off edge-runtime
@@ -94,7 +94,7 @@ jobs:
         # Anonymous pulls from public.ecr.aws (the CLI's default registry) hit
         # `toomanyrequests` on shared runners. This loads every image from the
         # Actions cache, or seeds it from Supabase's GHCR mirror on a miss, and
-        # then blocks public.ecr.aws for the rest of the job.
+        # then blocks public.ecr.aws and ghcr.io for the rest of the job.
         uses: ./.github/actions/supabase-images
         with:
           cli-version: ${{ env.SUPABASE_CLI_VERSION }}
@@ -170,7 +170,7 @@ jobs:
         # Anonymous pulls from public.ecr.aws (the CLI's default registry) hit
         # `toomanyrequests` on shared runners. This loads every image from the
         # Actions cache, or seeds it from Supabase's GHCR mirror on a miss, and
-        # then blocks public.ecr.aws for the rest of the job.
+        # then blocks public.ecr.aws and ghcr.io for the rest of the job.
         uses: ./.github/actions/supabase-images
         with:
           cli-version: ${{ env.SUPABASE_CLI_VERSION }}

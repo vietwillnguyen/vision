@@ -9,11 +9,12 @@
 # Bump this list in the same PR as SUPABASE_CLI_VERSION. When it is stale CI
 # fails loudly instead of pulling: the "Verify Supabase images" step names any
 # container image missing from here, and a command that runs a one-off image
-# (gen types, test db) fails with a connection error to public.ecr.aws because
-# the workflow blocks that host. The tags for a CLI version are in its source
-# at the matching tag: apps/cli-go/pkg/config/templates/Dockerfile for the
-# services and pg_prove, and packages/stack/src/versions.ts for the
-# postgres-meta tag `gen types` uses (it differs from the Dockerfile's).
+# (gen types, test db) fails with a connection error because the workflow blocks
+# both public.ecr.aws and ghcr.io, the mirror the CLI falls back to. The tags
+# for a CLI version are in its source at the matching tag:
+# apps/cli-go/pkg/config/templates/Dockerfile for the services and pg_prove,
+# and packages/stack/src/versions.ts for the postgres-meta tag `gen types`
+# uses (it differs from the Dockerfile's).
 
 # supabase start
 public.ecr.aws/supabase/postgres:17.6.1.140

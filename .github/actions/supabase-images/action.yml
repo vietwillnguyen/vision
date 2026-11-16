@@ -3,7 +3,8 @@ description: >-
   Make every Docker image in .github/supabase-images.txt present locally under
   the public.ecr.aws name the Supabase CLI resolves, from the Actions cache when
   warm and from Supabase's GHCR mirror when cold, then block public.ecr.aws so
-  nothing later in the job can pull from it. Run before `supabase start`.
+  nothing later in the job can pull from it or from the GHCR fallback the CLI
+  tries next. Run before `supabase start`.
 
 inputs:
   cli-version:
@@ -69,22 +70,28 @@ runs:
         path: ${{ runner.temp }}/supabase-images/images.tar
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
-    - name: Block public.ecr.aws
+    - name: Block Supabase image registries
       # Every image the job needs is local now, so the CLI has no reason to
-      # contact the rate-limited registry. Resolving it to an unroutable address
-      # turns a stale manifest into an immediate, explained failure instead of a
-      # pull that works until the quota runs out. The probe proves the Docker
-      # daemon, which does the pulling, sees the block.
+      # contact a registry. It pulls from public.ecr.aws, and when that fails it
+      # quietly falls back to ghcr.io, so both hosts resolve to an unroutable
+      # address: a stale manifest becomes an immediate, explained failure instead
+      # of a pull that works until the quota runs out. Seeding, the only ghcr.io
+      # use, is done. The probes prove the Docker daemon, which does the pulling,
+      # sees the block.
       shell: bash
       run: |
         rm -f "$RUNNER_TEMP/supabase-images/images.tar"
-        printf '0.0.0.0 public.ecr.aws\n:: public.ecr.aws\n' | sudo tee -a /etc/hosts >/dev/null
-        if out="$(docker pull public.ecr.aws/supabase/postgres:block-probe 2>&1)"; then
-          echo "::error::public.ecr.aws is still reachable from the Docker daemon"
-          exit 1
-        fi
-        echo "probe: $out"
-        case "$out" in
-          *"connection refused"*|*"0.0.0.0"*|*"[::]"*) echo "public.ecr.aws blocked for this job" ;;
-          *) echo "::error::unexpected probe failure, block not confirmed: $out"; exit 1 ;;
-        esac
+        for host in public.ecr.aws ghcr.io; do
+          printf '0.0.0.0 %s\n:: %s\n' "$host" "$host" | sudo tee -a /etc/hosts >/dev/null
+        done
+        for host in public.ecr.aws ghcr.io; do
+          if out="$(docker pull "$host/supabase/postgres:block-probe" 2>&1)"; then
+            echo "::error::$host is still reachable from the Docker daemon"
+            exit 1
+          fi
+          echo "probe: $out"
+          case "$out" in
+            *"connection refused"*|*"0.0.0.0"*|*"[::]"*) echo "$host blocked for this job" ;;
+            *) echo "::error::unexpected probe failure, $host block not confirmed: $out"; exit 1 ;;
+          esac
+        done
