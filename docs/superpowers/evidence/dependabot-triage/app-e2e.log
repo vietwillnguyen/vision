@@ -1,0 +1,54 @@
+# app deps branch - local run 2026-11-16T11:23:10Z, node v22.23.1, supabase CLI 2.109.0 local stack
+## npm ci: ok
+## npx expo install --check
+Dependencies are up to date
+## scripts/gen-db-types.sh + git diff --exit-code
+We recommend updating regularly for new features and bug fixes: https://supabase.com/docs/guides/cli/getting-started#updating-the-supabase-cli
+gen-db-types: wrote app/src/generated/database.ts and integration/tests/fixtures/public_schema.json
+generated types: no diff
+## npm run lint
+> app@1.0.0 lint
+> eslint . --max-warnings 0
+
+## npx tsc --noEmit
+exit=0
+## npx jest --ci (live Supabase env set)
+First run (default workers, shared /tmp jest cache, host load average ~55 on 16 cores from other concurrent jobs):
+5 container suites hit the 15s per-test timeout on their first test - the known cold-cache contention flake recorded in PR #22; isolated reruns pass.
+Rerun with a private cold cache and --maxWorkers=4 (the GitHub runner's core count):
+Test Suites: 32 passed, 32 total
+Tests:       126 passed, 126 total
+(useDeviceStatus.live.test.tsx ran against the local stack, not skipped)
+## npx expo export --platform web
+index.html (1.2KB)
+metadata.json (49B)
+
+Exported: /tmp/claude-1001/web-export-smoke
+## expo-web screenshots (export with EXPO_PUBLIC_SUPABASE_* baked in, served on 127.0.0.1, 430x932 viewport)
+Seeded with seed-screens.sh; signed in as the seeded user; 01-auth.png .. 05-archive.png in this directory.
+Rendering matches the pre-upgrade baselines in ../epic5-app-screen-wiring/.
+
+# Second commit: node-fetch 2 -> 3 (Dependabot #39), taken with changes
+## Before the jest.config.js change, with node-fetch@3.3.2 installed
+FAIL __tests__/hooks/useDeviceStatus.live.test.tsx
+  Test suite failed to run - Jest encountered an unexpected token
+  node_modules/node-fetch/src/index.js:9  import http from 'node:http';
+  SyntaxError: Cannot use import statement outside a module
+## After adding node-fetch, data-uri-to-buffer, fetch-blob, formdata-polyfill to transformIgnorePatterns and dropping @types/node-fetch (v3 ships its own types)
+npx expo install --check: Dependencies are up to date
+npx tsc --noEmit: ok
+npm run lint: ok
+npx jest --ci --maxWorkers=4 (cold private cache, live Supabase env): Test Suites: 32 passed, 32 total / Tests: 126 passed, 126 total
+npx jest --ci (default workers, warm cache, live Supabase env): Test Suites: 32 passed, 32 total / Tests: 126 passed, 126 total
+npx expo export --clear --platform web: Exported
+The live suite's "asynchronous operations that weren't stopped" notice appears identically with node-fetch 2.7.0 on the first commit, so it is not new.
+
+# TypeScript 6.0.3 -> 7.0.2 (Dependabot #38), rejected
+npm install -D typescript@7.0.2; tsc --version: Version 7.0.2; tsc --noEmit: exit 0; jest __tests__/logic: 31 passed
+npm run lint:
+  ESLint: 9.39.5
+  TypeError: Cannot read properties of undefined (reading 'Intrinsic')
+    at ts-api-utils/lib/index.cjs:787:57
+    at eslint-config-expo/node_modules/@typescript-eslint/typescript-estree/dist/convert-comments.js:37:30
+@typescript-eslint/typescript-estree@8.65.0 (and typescript-eslint@8.72.2, the latest) peer: typescript >=4.8.4 <6.1.0
+The lint gate in lint.yml would go red; TypeScript 7 drops the JS compiler API that typescript-eslint uses.

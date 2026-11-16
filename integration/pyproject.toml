@@ -5,14 +5,14 @@ requires-python = ">=3.11"
 dependencies = [
     "visio-recorder",
     "visio-pipeline",
-    "supabase>=2.4.0",
+    "supabase>=2.34.1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
-    "ruff>=0.14.0",
-    "mypy>=1.18.0",
+    "ruff>=0.17.5",
+    "mypy>=2.4.1",
 ]
 
 [tool.uv.sources]
@@ -47,7 +47,7 @@ extra_checks = true
 testpaths = ["tests"]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=84"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

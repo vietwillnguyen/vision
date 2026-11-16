@@ -109,7 +109,11 @@ The Camera Module 3 Wide with a post-process FFmpeg filter is the recommended de
 
 ### OS
 
-Raspberry Pi OS Lite (Bookworm, 64-bit headless).
+Raspberry Pi OS Lite (trixie / Debian 13, 64-bit headless).
+
+**As-built deviation:** this spec originally targeted Bookworm; the provisioned device runs trixie, verified during physical bring-up for device provisioning (PR #26).
+Two trixie differences matter to provisioning: `dphys-swapfile` is replaced by `rpi-swap`, and the Raspberry Pi archive no longer ships `pijuice-base`.
+The firmware's Python floor stays 3.11 (`requires-python`), while trixie itself ships Python 3.13.
 
 ### Recording Daemon (`visio-recorder`)
 
