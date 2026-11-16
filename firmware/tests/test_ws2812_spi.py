@@ -119,6 +119,13 @@ def test_frame_is_framed_by_resets_of_at_least_280_us_at_the_fastest_clock():
     assert 240 * 8 / SPI_SPEED_HZ >= 280e-6
 
 
+def test_frame_is_long_enough_for_spi_bcm2835_to_send_it_by_dma():
+    # spi-bcm2835 only uses DMA for transfers of at least 96 bytes
+    # (BCM2835_SPI_DMA_MIN_LENGTH); shorter ones go through the PIO/IRQ path,
+    # which can leave idle clocks between bytes and stretch T0L past 1000 ns.
+    assert len(encode_frame([(0, 0, 0)])) >= 96
+
+
 def test_frame_fits_in_one_default_spidev_transfer():
     assert len(encode_frame([(255, 255, 255)])) <= SimulatedSpiDevice.BUFSIZ
 

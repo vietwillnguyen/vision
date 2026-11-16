@@ -32,11 +32,15 @@ byte-aligned encoding at any even BCM2835 divider fits both the legacy and
 the V5 windows (their T1L windows only overlap at 580-600 ns), so this
 targets V5 and leaves a legacy part as a bench check.
 
-Two more properties of the byte-per-bit layout matter on real hardware: each
-byte ends low, so an inter-byte gap only stretches a low phase (which the
-part tolerates) and can never stretch a high one into a different bit; and
-the frame is plain bytes, so no word-size or bit-order configuration is
-involved.
+Two more properties of the byte-per-bit layout matter on real hardware.
+The whole frame is 504 bytes, and ``spi-bcm2835`` sends any transfer of at
+least 96 bytes (``BCM2835_SPI_DMA_MIN_LENGTH``) by DMA, which keeps the TX
+FIFO fed so there are no idle clocks between bytes. If a gap ever did occur,
+it could only lengthen a low phase, because each byte ends low, and never
+turn a 0 into a 1; with 0xC0 the V5 T0L headroom is only 40 ns, so a gap
+would put T0L outside the datasheet window while staying far below the
+280 us reset. And the frame is plain bytes, so no word-size or bit-order
+configuration is involved.
 
 The kernel driver (``spi-bcm2835``) caches the core clock at probe time, so
 the device must pin the core clock (``core_freq_fixed=1`` in config.txt).
