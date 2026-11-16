@@ -1,0 +1,11 @@
+### scripts/gen-db-types.sh (after the SC2154 fix) against the running local stack
+gen-db-types: reusing running local Supabase, applying pending migrations
+Connecting to local database...
+{"applied":[],"message":"Migrations applied"}
+Connecting to db 5432
+Stopped services: [supabase_imgproxy_vision supabase_pg_meta_vision supabase_studio_vision supabase_edge_runtime_vision supabase_analytics_vision supabase_vector_vision supabase_pooler_vision]
+gen-db-types: wrote app/src/generated/database.ts and integration/tests/fixtures/public_schema.json
+gen exit=0
+drift diff exit=0
+### shellcheck (lint.yml list incl. gen-db-types.sh)
+shellcheck exit=0

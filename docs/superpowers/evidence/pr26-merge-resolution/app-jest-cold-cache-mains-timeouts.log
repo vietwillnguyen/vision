@@ -1,0 +1,467 @@
+PASS __tests__/hooks/useDeviceStatus.test.tsx (6.755 s)
+  useDeviceStatus
+    ✓ starts loading (76 ms)
+    ✓ reaches ready with connecting realtime after the initial fetch (57 ms)
+    ✓ loads the initial status from the database (94 ms)
+    ✓ updates status when a realtime event arrives (63 ms)
+    ✓ does not overwrite a realtime update with a slower initial fetch (9 ms)
+    ✓ surfaces an initial fetch failure as an error state (58 ms)
+    ✓ shows status from a first-ever INSERT when no row existed at mount (5 ms)
+    ✓ keeps the last known status when the row is deleted (71 ms)
+    ✓ stays loading when a DELETE arrives before any status is known (16 ms)
+    ✓ subscribes on mount and removes the channel on unmount (77 ms)
+    ✓ goes live on SUBSCRIBED and stale on CHANNEL_ERROR (59 ms)
+    ✓ marks stale on TIMED_OUT and CLOSED too (60 ms)
+
+PASS __tests__/hooks/useSegments.test.tsx (6.124 s)
+  useSegments
+    ✓ fetches and maps segments for the day (111 ms)
+    ✓ applies user feedback optimistically and persists it (69 ms)
+    ✓ reverts the optimistic update when the write fails (62 ms)
+
+PASS __tests__/hooks/useAuth.test.tsx (7.378 s)
+  useAuth
+    ✓ starts loading then resolves to signed-out without a session (133 ms)
+    ✓ falls back to signed-out when getSession rejects (67 ms)
+    ✓ restores a persisted session (74 ms)
+    ✓ follows auth state changes (73 ms)
+    ✓ signIn resolves null on success and a message on failure (121 ms)
+
+PASS __tests__/hooks/useSlotThumbnails.test.tsx (6.509 s)
+  useSlotThumbnails
+    ✓ extracts thumbnails for occupied slots only (146 ms)
+    ✓ caches by segment id across slot-array identity changes (105 ms)
+    ✓ prunes stale thumbnails when a segment is removed from the slots (66 ms)
+
+PASS __tests__/logic/timeline.test.ts (6.482 s)
+  buildTimelineSlots
+    ✓ returns 288 five-minute slots for a full day (15 ms)
+    ✓ places a segment into the slot matching its recorded time (3 ms)
+    ✓ marks manually flagged segments on their slot (5 ms)
+    ✓ ignores segments outside the given day (1 ms)
+    ✓ keeps the later-listed segment when two segments fall in the same slot (1 ms)
+    ✓ places an end-of-day segment when slotMinutes does not divide the day evenly (1 ms)
+
+PASS __tests__/hooks/useReel.test.tsx (6.891 s)
+  useReel
+    ✓ maps the reel row (155 ms)
+    ✓ resolves none when no reel exists (59 ms)
+    ✓ falls back to the clean style for a style the app cannot render (71 ms)
+    ✓ short-circuits to none for a null date (7 ms)
+  useReelsInRange
+    ✓ maps all rows in the range (61 ms)
+
+PASS __tests__/hooks/useSlotThumbnails.moduleMissing.test.tsx
+  useSlotThumbnails when the platform has no video-thumbnails support
+    ✓ logs once at error level and never populates thumbnails, without throwing (13 ms)
+
+PASS __tests__/hooks/useDeviceStatus.live.test.tsx (10.578 s)
+  useDeviceStatus against a live Supabase instance
+    ✓ reaches live realtime and reflects a real postgres_changes upsert (3154 ms)
+
+PASS __tests__/logic/segmentExport.test.ts
+  buildSegmentSignedUrlRequest
+    ✓ builds a request for the segments bucket with a default one-hour expiry (19 ms)
+    ✓ accepts a custom expiry (1 ms)
+    ✓ rejects an empty key (39 ms)
+    ✓ accepts the expiry bounds of 1 and 86400 seconds (1 ms)
+    ✓ rejects an invalid expiry of 0 (2 ms)
+    ✓ rejects an invalid expiry of -1 (2 ms)
+    ✓ rejects an invalid expiry of 86401 (2 ms)
+    ✓ rejects an invalid expiry of NaN (2 ms)
+    ✓ rejects an invalid expiry of Infinity (2 ms)
+  buildReelSignedUrlRequest
+    ✓ targets the reels bucket with a default 1h expiry (1 ms)
+    ✓ rejects an empty key (6 ms)
+    ✓ rejects an out-of-range expiry (2 ms)
+
+PASS __tests__/hooks/useDevice.test.tsx
+  useDevice
+    ✓ resolves the first device (58 ms)
+    ✓ resolves none when the user has no devices (53 ms)
+    ✓ surfaces query errors (55 ms)
+
+PASS __tests__/hooks/useSignedUrl.test.tsx
+  useSignedUrl
+    ✓ resolves a signed url for the request (65 ms)
+    ✓ stays null for a null request (3 ms)
+
+PASS __tests__/logic/dates.test.ts
+  toUtcMidnight
+    ✓ truncates a mid-day timestamp to 00:00:00.000 UTC (2 ms)
+    ✓ keeps the UTC calendar day for a local-time west-of-UTC evening (1 ms)
+  utcDateString
+    ✓ formats as YYYY-MM-DD in UTC
+  utcRangeEndingAt
+    ✓ returns a midnight-aligned inclusive range of N days (1 ms)
+
+PASS __tests__/logic/regeneratePreferences.test.ts
+  validateRegenerateRequest
+    ✓ accepts a valid combination (8 ms)
+    ✓ rejects an invalid target length (18 ms)
+    ✓ rejects an invalid style (2 ms)
+    ✓ rejects an invalid mood (1 ms)
+
+PASS __tests__/lib/supabase.test.ts
+  supabaseClientOptions
+    ✓ persists sessions to AsyncStorage (2 ms)
+
+PASS __tests__/logic/heatmap.test.ts
+  buildHeatmapCells
+    ✓ marks each day in the range as having a reel or not (11 ms)
+    ✓ returns a single cell when start and end are the same day (3 ms)
+
+PASS __tests__/logic/authValidation.test.ts
+  validateAuthForm
+    ✓ returns no errors for a valid email and password (3 ms)
+    ✓ flags an invalid email (2 ms)
+    ✓ flags a password shorter than 8 characters (1 ms)
+
+PASS __tests__/lib/videoThumbnails.web.test.ts
+  videoThumbnails.web
+    ✓ reports unavailable and rejects getThumbnailAsync (19 ms)
+
+PASS __tests__/lib/mediaSave.web.test.ts
+  mediaSave.web
+    ✓ reports unavailable and rejects saveUrlToCameraRoll (18 ms)
+
+PASS __tests__/components/ReelPlayer.test.tsx (10.613 s)
+  ReelPlayer
+    ✓ renders the video view with an accessibility label when a uri is ready (9968 ms)
+    ✓ shows a placeholder while the uri is pending (12 ms)
+    ✓ invokes onShare from the labeled share button (8 ms)
+
+PASS __tests__/screens/DeviceScreen.test.tsx (11.224 s)
+  DeviceScreen
+    ✓ shows a loading state (568 ms)
+    ✓ shows an error state (7 ms)
+    ✓ renders status fields when ready and live, without a stale banner (10026 ms)
+    ✓ shows a stale banner when realtime is stale (11 ms)
+    ✓ labels the re-onboard button for accessibility (10 ms)
+
+PASS __tests__/containers/AuthContainer.test.tsx (10.6 s)
+  AuthContainer
+    ✓ validates locally before calling signIn (9429 ms)
+    ✓ calls signIn with valid credentials and surfaces auth errors (91 ms)
+
+PASS __tests__/components/SegmentPreview.test.tsx (21.142 s)
+  SegmentPreview
+    ✓ renders nothing when no segment is selected (68 ms)
+    ✓ calls onSave when the save button is pressed (11811 ms)
+    ✓ calls onShare when the share button is pressed (19 ms)
+    ✓ renders the video player when a uri is ready (16 ms)
+    ✓ shows a placeholder while the uri is pending (14 ms)
+
+FAIL __tests__/containers/TodayReelContainer.test.tsx (11.429 s)
+  TodayReelContainer
+    ✕ plays today's reel through a signed url (10349 ms)
+    ✓ explains when no reel exists yet (67 ms)
+    ✓ renders placeholder when reel has empty s3_key (55 ms)
+
+  ● TodayReelContainer › plays today's reel through a signed url
+
+    Unable to find an element with testID: video-view
+
+    [36m<View>[39m
+      [36m<Text[39m
+        [33maccessibilityRole[39m=[32m"header"[39m
+      [36m>[39m
+        [0mToday's Reel[0m
+      [36m</Text>[39m
+      [36m<View>[39m
+        [36m<Text>[39m
+          [0mPreparing playback...[0m
+        [36m</Text>[39m
+      [36m</View>[39m
+      [36m<View>[39m
+        [36m<View[39m
+          [33maccessibilityLabel[39m=[32m"Share reel"[39m
+          [33maccessibilityRole[39m=[32m"button"[39m
+          [33maccessible[39m=[32m{true}[39m
+        [36m>[39m
+          [36m<View>[39m
+            [36m<Text>[39m
+              [0mShare[0m
+            [36m</Text>[39m
+          [36m</View>[39m
+        [36m</View>[39m
+      [36m</View>[39m
+    [36m</View>[39m
+
+      47 |       />,
+      48 |     );
+    > 49 |     await waitFor(() => expect(screen.getByTestId('video-view')).toBeTruthy());
+         |                  ^
+      50 |   });
+      51 |
+      52 |   it('explains when no reel exists yet', async () => {
+
+      at Object.<anonymous> (__tests__/containers/TodayReelContainer.test.tsx:49:18)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+      at node_modules/@babel/runtime/helpers/asyncToGenerator.js:22:7
+      at Object.<anonymous> (node_modules/@babel/runtime/helpers/asyncToGenerator.js:14:12)
+
+PASS __tests__/containers/DeviceContainer.test.tsx (21.16 s)
+  ✓ wires useDeviceStatus into DeviceScreen (11813 ms)
+  ✓ navigates to Reonboard when the re-onboard button is pressed (72 ms)
+  ✓ keeps showing the last known status when the status row is deleted (61 ms)
+
+PASS __tests__/screens/AuthScreen.test.tsx (21.398 s)
+  AuthScreen
+    ✓ shows validation errors when present (11892 ms)
+    ✓ calls onSubmit when the sign in button is pressed (27 ms)
+    ✓ calls onEmailChange as the user types (22 ms)
+    ✓ renders an auth error when provided (23 ms)
+    ✓ labels inputs for accessibility (14 ms)
+
+PASS __tests__/screens/ReonboardScreen.test.tsx (21.442 s)
+  ReonboardScreen
+    ✓ renders the form step with SSID and password inputs (12043 ms)
+    ✓ disables Generate QR until both fields are filled (24 ms)
+    ✓ disables Generate QR and shows a submitting label while isSubmitting is true (10 ms)
+    ✓ calls onSubmit with the typed SSID and password (13 ms)
+    ✓ reports typed input via onSsidChange/onPasswordChange (20 ms)
+    ✓ renders the QR code with exactly qrValue on the ready step, plus the privacy hint (22 ms)
+    ✓ calls onDone when Done is pressed on the ready step (9 ms)
+    ✓ shows the error message and calls onRetry on the error step (9 ms)
+
+PASS __tests__/screens/ArchiveScreen.test.tsx (10.902 s)
+  ArchiveScreen
+    ✓ calls onDayPress with the date of a pressed cell (10123 ms)
+    ✓ labels each cell for accessibility (11 ms)
+
+PASS __tests__/containers/ArchiveContainer.test.tsx (21.986 s)
+  ArchiveContainer
+    ✓ renders 30 UTC-midnight-aligned cells ending today (11984 ms)
+    ✓ plays the reel for a pressed day (201 ms)
+    ✓ handles empty s3_key without crashing (75 ms)
+    ✓ shows error when per-day reel fetch fails (121 ms)
+
+PASS __tests__/components/TimelineScrubber.test.tsx (12.453 s)
+  TimelineScrubber
+    ✓ renders a flag marker only for flagged slots (11338 ms)
+    ✓ calls onSlotLongPress with the slot on long press (15 ms)
+    ✓ renders a thumbnail image for slots that have one (663 ms)
+
+  console.error
+    An update to RawFootageContainer inside a test was not wrapped in act(...).
+    
+    When testing, code that causes React state updates should be wrapped into act(...):
+    
+    act(() => {
+      /* fire events that update state */
+    });
+    /* assert on the output */
+    
+    This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+      19 |     // segments that are no longer present get pruned immediately, while
+      20 |     // the segment-id cache is kept around for extraction dedupe.
+    > 21 |     setThumbnails((prev) => {
+         |     ^
+      22 |       const next: Record<number, string> = {};
+      23 |       for (const slot of slots) {
+      24 |         if (!slot.segment) continue;
+
+      at node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14402:19
+      at runWithFiberInDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2315:13)
+      at warnIfUpdatesNotWrappedWithActDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14401:9)
+      at scheduleUpdateOnFiber (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:12086:9)
+      at dispatchSetStateInternal (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:6208:13)
+      at dispatchSetState (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:6165:7)
+      at setThumbnails (src/hooks/useSlotThumbnails.ts:21:5)
+      at Object.react_stack_bottom_frame (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:15755:20)
+      at runWithFiberInDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2315:13)
+      at commitHookEffectListMount (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:9530:29)
+      at commitHookPassiveMountEffects (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:9617:11)
+      at commitPassiveMountOnFiber (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:11205:13)
+      at recursivelyTraversePassiveMountEffects (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:11160:11)
+      at commitPassiveMountOnFiber (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:11240:11)
+      at flushPendingEffects (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14086:11)
+      at performWorkOnRootViaSchedulerTask (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2896:11)
+      at Immediate.performWorkUntilDeadline [as _onImmediate] (node_modules/scheduler/cjs/scheduler.native.development.js:45:48)
+
+  console.error
+    An update to RawFootageContainer inside a test was not wrapped in act(...).
+    
+    When testing, code that causes React state updates should be wrapped into act(...):
+    
+    act(() => {
+      /* fire events that update state */
+    });
+    /* assert on the output */
+    
+    This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+      70 |         if (cancelled) return;
+      71 |         const resolved = uri;
+    > 72 |         setThumbnails((prev) =>
+         |         ^
+      73 |           prev[slot.startMinute] === resolved ? prev : { ...prev, [slot.startMinute]: resolved },
+      74 |         );
+      75 |       }
+
+      at node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14402:19
+      at runWithFiberInDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2315:13)
+      at warnIfUpdatesNotWrappedWithActDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14401:9)
+      at scheduleUpdateOnFiber (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:12086:9)
+      at dispatchSetStateInternal (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:6208:13)
+      at dispatchSetState (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:6165:7)
+      at setThumbnails (src/hooks/useSlotThumbnails.ts:72:9)
+          at _loop.next (<anonymous>)
+      at _loop (src/hooks/useSlotThumbnails.ts:52:31)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+      at node_modules/@babel/runtime/helpers/asyncToGenerator.js:22:7
+      at node_modules/@babel/runtime/helpers/asyncToGenerator.js:14:12
+      at src/hooks/useSlotThumbnails.ts:76:6
+      at Object.react_stack_bottom_frame (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:15755:20)
+      at runWithFiberInDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2315:13)
+      at commitHookEffectListMount (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:9530:29)
+      at commitHookPassiveMountEffects (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:9617:11)
+      at commitPassiveMountOnFiber (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:11205:13)
+      at recursivelyTraversePassiveMountEffects (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:11160:11)
+      at commitPassiveMountOnFiber (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:11240:11)
+      at flushPendingEffects (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14086:11)
+      at performWorkOnRootViaSchedulerTask (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2896:11)
+      at Immediate.performWorkUntilDeadline [as _onImmediate] (node_modules/scheduler/cjs/scheduler.native.development.js:45:48)
+
+  console.error
+    An update to RawFootageContainer inside a test was not wrapped in act(...).
+    
+    When testing, code that causes React state updates should be wrapped into act(...):
+    
+    act(() => {
+      /* fire events that update state */
+    });
+    /* assert on the output */
+    
+    This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+      40 |     if (!segment) return;
+      41 |     Alert.alert('Segment options', segment.recordedAt, [
+    > 42 |       { text: 'Preview', onPress: () => setSelected(segment) },
+         |                                         ^
+      43 |       { text: 'Always include', onPress: () => void setUserFeedback(segment.id, 'include') },
+      44 |       { text: 'Never include', onPress: () => void setUserFeedback(segment.id, 'exclude') },
+      45 |       { text: 'Clear preference', onPress: () => void setUserFeedback(segment.id, null) },
+
+      at node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14402:19
+      at runWithFiberInDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2315:13)
+      at warnIfUpdatesNotWrappedWithActDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14401:9)
+      at scheduleUpdateOnFiber (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:12086:9)
+      at dispatchSetStateInternal (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:6208:13)
+      at dispatchSetState (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:6165:7)
+      at Object.setSelected [as onPress] (src/containers/RawFootageContainer.tsx:42:41)
+      at Object.<anonymous> (__tests__/containers/RawFootageContainer.test.tsx:122:55)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+PASS __tests__/containers/ReonboardContainer.test.tsx (22.782 s)
+  ReonboardContainer
+    ✓ builds a QR payload with exactly the fields firmware expects (13254 ms)
+    ✓ shows the error step when getSession returns no session (73 ms)
+    ✓ shows the error step when getSession errors (69 ms)
+    ✓ shows the error step when getSession rejects instead of resolving (72 ms)
+    ✓ ignores a second press while getSession is still in flight (70 ms)
+    ✓ calls navigation.goBack() from onDone (67 ms)
+    ✓ keeps the typed SSID/password after Try again (68 ms)
+
+  console.error
+    An update to RawFootageContainer inside a test was not wrapped in act(...).
+    
+    When testing, code that causes React state updates should be wrapped into act(...):
+    
+    act(() => {
+      /* fire events that update state */
+    });
+    /* assert on the output */
+    
+    This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+      40 |     if (!segment) return;
+      41 |     Alert.alert('Segment options', segment.recordedAt, [
+    > 42 |       { text: 'Preview', onPress: () => setSelected(segment) },
+         |                                         ^
+      43 |       { text: 'Always include', onPress: () => void setUserFeedback(segment.id, 'include') },
+      44 |       { text: 'Never include', onPress: () => void setUserFeedback(segment.id, 'exclude') },
+      45 |       { text: 'Clear preference', onPress: () => void setUserFeedback(segment.id, null) },
+
+      at node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14402:19
+      at runWithFiberInDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2315:13)
+      at warnIfUpdatesNotWrappedWithActDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:14401:9)
+      at scheduleUpdateOnFiber (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:12086:9)
+      at dispatchSetStateInternal (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:6208:13)
+      at dispatchSetState (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:6165:7)
+      at Object.setSelected [as onPress] (src/containers/RawFootageContainer.tsx:42:41)
+      at Object.<anonymous> (__tests__/containers/RawFootageContainer.test.tsx:137:55)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+PASS __tests__/containers/RawFootageContainer.test.tsx (23.529 s)
+  RawFootageContainer
+    ✓ renders the timeline once segments load (12685 ms)
+    ✓ long-press offers feedback options that persist user_feedback (492 ms)
+    ✓ long-press Preview opens the segment preview with playback (501 ms)
+    ✓ saves the same segment twice without a destination collision (495 ms)
+
+PASS __tests__/App.test.tsx (28.502 s)
+  AppRoot
+    ✓ shows the auth screen when signed out (384 ms)
+    ✓ shows the four tabs when signed in with a device (407 ms)
+    ✓ explains when the account has no device (58 ms)
+
+Summary of all failing tests
+FAIL __tests__/containers/TodayReelContainer.test.tsx (11.429 s)
+  ● TodayReelContainer › plays today's reel through a signed url
+
+    Unable to find an element with testID: video-view
+
+    [36m<View>[39m
+      [36m<Text[39m
+        [33maccessibilityRole[39m=[32m"header"[39m
+      [36m>[39m
+        [0mToday's Reel[0m
+      [36m</Text>[39m
+      [36m<View>[39m
+        [36m<Text>[39m
+          [0mPreparing playback...[0m
+        [36m</Text>[39m
+      [36m</View>[39m
+      [36m<View>[39m
+        [36m<View[39m
+          [33maccessibilityLabel[39m=[32m"Share reel"[39m
+          [33maccessibilityRole[39m=[32m"button"[39m
+          [33maccessible[39m=[32m{true}[39m
+        [36m>[39m
+          [36m<View>[39m
+            [36m<Text>[39m
+              [0mShare[0m
+            [36m</Text>[39m
+          [36m</View>[39m
+        [36m</View>[39m
+      [36m</View>[39m
+    [36m</View>[39m
+
+      47 |       />,
+      48 |     );
+    > 49 |     await waitFor(() => expect(screen.getByTestId('video-view')).toBeTruthy());
+         |                  ^
+      50 |   });
+      51 |
+      52 |   it('explains when no reel exists yet', async () => {
+
+      at Object.<anonymous> (__tests__/containers/TodayReelContainer.test.tsx:49:18)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+      at node_modules/@babel/runtime/helpers/asyncToGenerator.js:22:7
+      at Object.<anonymous> (node_modules/@babel/runtime/helpers/asyncToGenerator.js:14:12)
+
+
+Test Suites: 1 failed, 31 passed, 32 total
+Tests:       1 failed, 125 passed, 126 total
+Snapshots:   0 total
+Time:        31.885 s
+Ran all test suites.
+exit=1

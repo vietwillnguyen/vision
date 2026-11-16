@@ -1,0 +1,35 @@
+Using CPython 3.14.2
+Creating virtual environment at: .venv
+   Building visio-recorder @ file://<repo>/firmware
+      Built visio-recorder @ file://<repo>/firmware
+Installed 42 packages in 92ms
+============================= test session starts ==============================
+platform linux -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: <repo>/firmware
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.14.1
+collected 289 items
+
+tests/test_battery.py ...                                                [  1%]
+tests/test_capture.py ....                                               [  2%]
+tests/test_daemon.py ....................                                [  9%]
+tests/test_device_identity.py ........                                   [ 12%]
+tests/test_drivers.py .                                                  [ 12%]
+tests/test_flag_button.py ...........                                    [ 16%]
+tests/test_led.py ....                                                   [ 17%]
+tests/test_muxer.py ...                                                  [ 18%]
+tests/test_onboarding.py .........                                       [ 21%]
+tests/test_preflight.py ................................................ [ 38%]
+...............                                                          [ 43%]
+tests/test_preflight_entrypoint.py ........                              [ 46%]
+tests/test_recording_loop.py ..............                              [ 51%]
+tests/test_setup_device.py ............................................. [ 66%]
+..................................................                       [ 84%]
+tests/test_supabase_clients.py .......                                   [ 86%]
+tests/test_upload_queue.py ....                                          [ 87%]
+tests/test_uploader.py ..                                                [ 88%]
+tests/test_wifi_onboard.py .................................             [100%]
+
+============================= 289 passed in 19.92s =============================
+exit=0

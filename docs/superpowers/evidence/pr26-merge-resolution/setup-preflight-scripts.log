@@ -1,0 +1,11 @@
+### bash -n firmware/scripts/setup-device.sh
+exit=0
+### systemd-analyze verify firmware/systemd/visio-recorder.service
+visio-recorder.service: Command /opt/visio-recorder/firmware/.venv/bin/python3 is not executable: No such file or directory
+visio-recorder.service: Command /opt/visio-recorder/firmware/.venv/bin/python3 is not executable: No such file or directory
+exit=1
+### firmware tests for the setup/preflight scripts
+........................................................................ [ 86%]
+......................                                                   [100%]
+166 passed in 6.51s
+note: the only verify finding is the device-side venv interpreter under /opt/visio-recorder, which exists only after setup-device.sh runs on the Pi; the unit otherwise parses clean

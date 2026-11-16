@@ -1,0 +1,47 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: <repo>/integration
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.14.2
+collected 7 items
+
+tests/test_marker_contract.py ...                                        [ 42%]
+tests/test_rls_end_to_end.py .                                           [ 57%]
+tests/test_row_schema_contract.py ..                                     [ 85%]
+tests/test_storage_ingestion_live.py .                                   [100%]
+
+=============================== warnings summary ===============================
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase_auth/timer.py:18: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+    if asyncio.iscoroutinefunction(self._function):
+
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase/_sync/client.py:264: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncStorageClient(
+
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase/_sync/client.py:264: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncStorageClient(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 15 warnings in 3.79s ========================
+exit=0
