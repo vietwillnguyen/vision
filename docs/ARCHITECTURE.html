@@ -28,7 +28,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 11498d3ddae109fc886d4b74f0b4e13f82c0550319124d3a573c877d0d9a91ff  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 292f0e0c22b058ff480a6a6dbe51e24174e7443d52c3c04ebc09055af1050eb7  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 4c56b6f08f289c7ce8177e7c65a87f27fedb418ff4416e5673bcc6ab43f40b84  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-16 (merge of main: trixie OS reconcile + segment duration contract + recording lifecycle) -->
@@ -84,7 +84,7 @@
       </div>
       <div class="stat">
         <div class="stat-title">Pipeline cost</div>
-        <div class="stat-value text-primary text-2xl">&lt;$0.30/day</div>
+        <div class="stat-value text-primary text-2xl">&lt;$0.75/day</div>
         <div class="stat-desc">Whisper + Claude Haiku vision, motion-gated</div>
       </div>
       <div class="stat">
@@ -228,12 +228,29 @@ flowchart TD
     <div class="card bg-base-100 shadow p-4">
       <h3 class="font-semibold mb-2">Key as-built decisions</h3>
       <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
-        <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per 5-minute segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
+        <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
+        <li>Segment size is pinned, not defaulted: <span class="font-mono text-xs bg-base-200 rounded px-1">--width 1280 --height 720 --framerate 30 --bitrate 4000000</span> are passed explicitly, and the default segment length (60 s) is derived from the bitrate so a segment fits the hosted 50 MiB upload limit with a 1.66x margin. See the segment size contract below.</li>
         <li>Upload retry is <em>startup-flush only</em> — no continuous while-running retry loop. A failed segment stays queued until the next process start.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
       </ul>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4 space-y-2">
+      <h3 class="font-semibold text-sm">Segment size contract</h3>
+      <p class="text-xs text-base-content/70">The hosted project rejects any object over 50 MiB (free plan, cannot be raised). Before this contract the firmware left size to rpicam-apps defaults (640x480 at the V4L2 encoder's 10 Mbps): a 5-minute segment was ~375 MB, rejected in production and retried on every boot forever. Locally it uploaded fine, because <span class="font-mono text-xs bg-base-200 rounded px-1">config.toml</span>'s <span class="font-mono text-xs bg-base-200 rounded px-1">file_size_limit</span> is not what the CLI's storage container enforces.</p>
+      <div class="overflow-x-auto rounded-box border border-base-content/10">
+        <table class="table table-xs">
+          <thead><tr><th>Side</th><th>Guarantee</th></tr></thead>
+          <tbody>
+            <tr><td>Storage</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">reels</span> buckets carry a 50 MiB <span class="font-mono text-xs bg-base-200 rounded px-1">file_size_limit</span>, enforced on every stack</td></tr>
+            <tr><td>Capture</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_VIDEO_WIDTH/HEIGHT/FRAMERATE/BITRATE</span> (1280x720@30, 4 Mbps) passed to <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> explicitly</td></tr>
+            <tr><td>Segment length</td><td>longest 10 s multiple whose predicted size <span class="font-mono text-xs bg-base-200 rounded px-1">(video + 128 kbps audio reserve) / 8 x s x 1.02</span> uses at most 2/3 of <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_MAX_UPLOAD_BYTES</span>: 60 s, ~31.6 MB, at the defaults</td></tr>
+            <tr><td>Oversize guard</td><td>a file over the limit is split with <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg -c copy -f segment</span> into parts named by their start; a part storage still 413s is split again; an unsplittable one moves to <span class="font-mono text-xs bg-base-200 rounded px-1">rejected/</span>, counts in <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.segments_rejected</span>, and is never retried</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 
@@ -258,7 +275,7 @@ flowchart TD
         <thead><tr><th>Table</th><th>Key columns</th></tr></thead>
         <tbody>
           <tr><td class="font-mono">devices</td><td>device_id, user_id, name, created_at</td></tr>
-          <tr><td class="font-mono">device_status</td><td>device_id, battery_pct, storage_used_gb, storage_free_gb, segments_pending, segments_uploaded_today, recording_active, updated_at</td></tr>
+          <tr><td class="font-mono">device_status</td><td>device_id, battery_pct, storage_used_gb, storage_free_gb, segments_pending, segments_uploaded_today, recording_active, segments_rejected, updated_at</td></tr>
           <tr><td class="font-mono">segments</td><td>id, device_id, recorded_at, duration_sec, s3_key, motion_score, audio_score, scene_score, composite_score, manually_flagged, user_feedback</td></tr>
           <tr><td class="font-mono">reels</td><td>id, device_id, date, s3_key, duration_sec, style, created_at; unique (device_id, date) so same-day pipeline re-runs upsert</td></tr>
           <tr><td class="font-mono">score_weights</td><td>user_id, scene_weight, audio_weight, motion_weight (default 0.4/0.3/0.2)</td></tr>
@@ -294,7 +311,7 @@ score = base_score * 1.5  (if manually flagged)
     </div>
     <div class="card bg-base-100 shadow p-4 space-y-2">
       <h3 class="font-semibold text-sm">Segment duration contract</h3>
-      <p class="text-xs text-base-content/70">A segment's length is a property of its file, never of the recording config: the firmware's 5-minute length is only an upper bound (stop press, crash, dead battery). Prerequisite for start/stop recording.</p>
+      <p class="text-xs text-base-content/70">A segment's length is a property of its file, never of the recording config: the firmware's nominal length (one minute by default) is only an upper bound (stop press, crash, dead battery). Prerequisite for start/stop recording.</p>
       <ul class="list-disc list-inside text-xs space-y-1">
         <li><strong>Firmware</strong> names the segment after its capture start and muxes it with the capture framerate, so the MP4's container duration is real. It reports duration nowhere else.</li>
         <li><strong>Pipeline</strong> downloads and <span class="font-mono">ffprobe</span>s every segment before matching flag markers. No measurable duration &rarr; <span class="font-mono">pipeline_dlq</span> <span class="font-mono">rejected</span>; a failed download fails the device day for retry.</li>
@@ -303,7 +320,7 @@ score = base_score * 1.5  (if manually flagged)
         <table class="table table-xs">
           <thead><tr><th>Consumer</th><th>Rule</th></tr></thead>
           <tbody>
-            <tr><td>Flag-marker window</td><td><span class="font-mono">[recorded_at, recorded_at + duration)</span>; a marker in the gap after a short segment is <span class="font-mono">unmatched</span></td></tr>
+            <tr><td>Flag-marker window</td><td><span class="font-mono">[recorded_at, recorded_at + duration)</span>; a marker up to 3 s after a segment ends (the restart gap between captures) flags that segment; one further into a gap is <span class="font-mono">unmatched</span></td></tr>
             <tr><td>Clip extraction</td><td><span class="font-mono">min(15 s, duration)</span>, centred at <span class="font-mono">(duration - clip) / 2</span>, always inside the file</td></tr>
             <tr><td>Vision frames</td><td>3 frames spread over the real duration (<span class="font-mono">fps=3/&lt;duration&gt;</span>)</td></tr>
             <tr><td><span class="font-mono">segments.duration_sec</span></td><td>whole seconds, rounded up (one-second markers stay covered); rewritten on re-run</td></tr>

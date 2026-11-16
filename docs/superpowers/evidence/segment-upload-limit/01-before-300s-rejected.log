@@ -1,0 +1,64 @@
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/auth/v1/admin/users "HTTP/1.1 200 OK"
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/rest/v1/devices "HTTP/1.1 201 Created"
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/auth/v1/token?grant_type=password "HTTP/1.1 200 OK"
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/rest/v1/device_status "HTTP/1.1 201 Created"
+daemon defaults: {'segment_duration_ms': 300000, 'framerate': 30}
+$ rpicam-vid -t 300000 --framerate 30 --codec h264 -n -o /tmp/tmp30pj0i38/20261116_090000.h264
+$ ffmpeg -loglevel error -y -framerate 30 -i /tmp/tmp30pj0i38/20261116_090000.h264 -c copy /tmp/tmp30pj0i38/20261116_090000.mp4
+INFO httpx HTTP Request: GET http://127.0.0.1:54521/storage/v1/object/info/segments/639d5a3d-c514-46bd-beed-c91b05971226/20261116_090000.mp4 "HTTP/1.1 400 Bad Request"
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/storage/v1/object/segments/639d5a3d-c514-46bd-beed-c91b05971226/20261116_090000.mp4 "HTTP/1.1 400 Bad Request"
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/rest/v1/device_status "HTTP/1.1 200 OK"
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/rest/v1/device_status "HTTP/1.1 200 OK"
+INFO httpx HTTP Request: GET http://127.0.0.1:54521/storage/v1/object/info/segments/639d5a3d-c514-46bd-beed-c91b05971226/20261116_090000.mp4 "HTTP/1.1 400 Bad Request"
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/storage/v1/object/segments/639d5a3d-c514-46bd-beed-c91b05971226/20261116_090000.mp4 "HTTP/1.1 400 Bad Request"
+ERROR visio_recorder.recording_loop flush_pending failed to upload queued segment /tmp/tmp30pj0i38/queue/20261116_090000.mp4
+Traceback (most recent call last):
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/storage3/_sync/file_api.py", line 81, in _request
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/httpx/_models.py", line 829, in raise_for_status
+    raise HTTPStatusError(message, request=request, response=self)
+httpx.HTTPStatusError: Client error '400 Bad Request' for url 'http://127.0.0.1:54521/storage/v1/object/segments/639d5a3d-c514-46bd-beed-c91b05971226/20261116_090000.mp4'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/visio_recorder/recording_loop.py", line 150, in flush_pending
+    upload_segment(storage_client, device_id, path)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/visio_recorder/uploader.py", line 11, in upload_segment
+    client.upload("segments", object_path, local_path)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/visio_recorder/supabase_clients.py", line 63, in upload
+    bucket_api.upload(object_path, f, {"content-type": content_type})
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/storage3/_sync/file_api.py", line 607, in upload
+    return self._upload_or_update("POST", path_parts, file, file_options)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/storage3/_sync/file_api.py", line 572, in _upload_or_update
+    response = self._request(
+        method,
+    ...<3 lines>...
+        data=_data,
+    )
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/storage3/_sync/file_api.py", line 85, in _request
+    raise StorageApiError(
+        resp["message"], resp["error"], resp["statusCode"]
+    ) from exc
+storage3.exceptions.StorageApiError: {'statusCode': 413, 'error': Payload too large, 'message': The object exceeded the maximum allowed size}
+INFO httpx HTTP Request: POST http://127.0.0.1:54521/storage/v1/object/list/segments "HTTP/1.1 200 OK"
+INFO httpx HTTP Request: GET http://127.0.0.1:54521/rest/v1/device_status?select=segments_pending%2Csegments_uploaded_today%2Crecording_active&device_id=eq.639d5a3d-c514-46bd-beed-c91b05971226 "HTTP/1.1 200 OK"
+INFO httpx HTTP Request: DELETE http://127.0.0.1:54521/auth/v1/admin/users/e4dc74d9-9403-4d54-aa21-e0a99d59cab4 "HTTP/1.1 200 OK"
+next boot: flush_pending
+  uploaded 0 files
+left in upload queue:
+  20261116_090000.mp4 375368628 bytes
+  (1 files)
+segments bucket:
+  (0 objects)
+device_status: [{'segments_pending': 1, 'segments_uploaded_today': 0, 'recording_active': False}]
+
+real	0m22.502s
+user	1m4.212s
+sys	0m10.850s

@@ -108,6 +108,7 @@ The shared database contract every other subsystem codes against:
 - `devices.push_token` (nullable) stores the mobile app's Expo push token for nightly reel notifications.
 - Row-level security on every table: rows are visible only to the owning user (`auth.uid()` matched directly or via the owning device's `user_id`).
 - Private `segments` and `reels` storage buckets with owner-scoped object policies keyed on the `{device_id}/` path prefix.
+  Both cap objects at 50 MiB (`file_size_limit`, migration `20261116120000_cap_bucket_file_size.sql`), the hosted free plan's limit; `config.toml`'s `[storage] file_size_limit` alone is not enforced by the local storage container.
 - Table privileges are granted explicitly: `service_role` gets full DML, `authenticated` gets select everywhere, writes only on `devices`, `score_weights`, `segments.user_feedback`, and (added post-Epic-0, see `20260710090000_grant_device_status_writes.sql`) insert/update on `device_status` - the firmware daemon never holds a `service_role` key, so it upserts its own status row as `authenticated`. The `anon` role gets no grants - devices are paired to authenticated users only.
 
 ### Local development
@@ -129,11 +130,13 @@ Flip `[studio]` back on locally if you want the table editor.
 
 **Plan:** [`docs/superpowers/plans/2026-07-04-visio-firmware.md`](docs/superpowers/plans/2026-07-04-visio-firmware.md)
 
-The `visio-recorder` Python systemd daemon: boot-time battery check, WiFi + Supabase auth onboarding via QR code, rolling 5-minute H.264-to-MP4 segment capture and upload, an LED state machine, and per-segment `device_status` reporting.
+The `visio-recorder` Python systemd daemon: boot-time battery check, WiFi + Supabase auth onboarding via QR code, rolling H.264-to-MP4 segment capture (one minute by default, sized to fit the 50 MiB upload limit) and upload, an LED state machine, and per-segment `device_status` reporting.
 The manual flag marker (`FLAG_YYYYMMDD_HHMMSS.marker`, `flag_button.py`) is wired to a GPIO 17 button press in `main()`: a debounced press hands the marker to a dedicated flag-upload worker thread, which uploads it immediately or leaves it queued for the next boot's flush on failure.
 Every hardware or network boundary (PiJuice, GPIO, WS2812B LEDs, `ffmpeg`/`rpicam-vid`, Supabase) is a small `Protocol` with a fake used in tests; `daemon.py` is the only module that wires real implementations together.
 On boot it runs the battery/LED startup sequence, scans a QR code to onboard WiFi (writing a NetworkManager keyfile) and Supabase auth on first boot, activates the NetworkManager connection (`nmcli connection reload` + `up`, retried best-effort on restart boots), registers the device, flushes any queued uploads left over from a previous run, recovers captures an unclean stop left behind, then starts the per-segment `rpicam-vid` capture loop with the flag-button listener and a background upload worker with real disk-usage stats.
-Configuration is read from environment variables via the systemd unit's `EnvironmentFile=/etc/visio-recorder.env`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR`, `VISIO_SEGMENT_DURATION_MS`, `VISIO_FRAMERATE`.
+Configuration is read from environment variables via the systemd unit's `EnvironmentFile=/etc/visio-recorder.env`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR`, `VISIO_VIDEO_WIDTH` (1280), `VISIO_VIDEO_HEIGHT` (720), `VISIO_FRAMERATE` (30), `VISIO_VIDEO_BITRATE` (4000000 bps), `VISIO_MAX_UPLOAD_BYTES` (52428800, the hosted free plan's per-file limit), and `VISIO_SEGMENT_DURATION_MS` (derived from the bitrate and upload limit when unset: 60000 at the defaults).
+Segments over the upload limit are split with `ffmpeg -c copy` before upload, and one that cannot be split is moved to `rejected/` and counted in `device_status.segments_rejected` instead of being retried forever; the [Segment Size Contract](docs/superpowers/specs/2026-07-04-visio-pendant-design.md#segment-size-contract) has the numbers.
+To measure real segment size on the Pi: `rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o /tmp/size-test.h264 && ls -l /tmp/size-test.h264`.
 Device prerequisites beyond this project's `uv.lock`: `apt install zbar-tools` for QR decoding, plus the `pijuice`, `rpi_ws281x`, and `gpiozero` system packages for the battery, LED, and flag-button drivers on the Pi.
 
 ### Local development

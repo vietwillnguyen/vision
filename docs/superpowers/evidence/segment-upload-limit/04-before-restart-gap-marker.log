@@ -1,0 +1,131 @@
+ERROR visio_recorder.daemon could not report recording_active=True to device_status
+Traceback (most recent call last):
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/visio_recorder/daemon.py", line 164, in _push_recording_status
+    status = build_device_status(
+        device_id=deps.device_id,
+    ...<5 lines>...
+        recording_active=recording_active,
+    )
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/visio_recorder/recording_loop.py", line 82, in build_device_status
+    stats = disk_stats_reader.usage(data_dir)
+  File "/home/viet/worktrees/fix-segment-upload-limit/integration/.venv/lib/python3.14/site-packages/visio_recorder/recording_loop.py", line 34, in usage
+    usage = shutil.disk_usage(path)
+  File "/home/viet/.local/share/uv/python/cpython-3.14.2-linux-x86_64-gnu/lib/python3.14/shutil.py", line 1449, in disk_usage
+    st = os.statvfs(path)
+FileNotFoundError: [Errno 2] No such file or directory: '$SCRATCH/day-smoke/device'
+daemon defaults: video=VideoSettings(width=1280, height=720, framerate=30, bitrate_bps=4000000) segment_duration_ms=60000 max_upload_bytes=52428800
+session from 08:30:00: 2 segments
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o $SCRATCH/day-smoke/device/20261116_083000.h264
+session from 12:15:00: 2 segments
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o $SCRATCH/day-smoke/device/20261116_121500.h264
+session from 18:40:00: 2 segments
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o $SCRATCH/day-smoke/device/20261116_184000.h264
+  $ rpicam-vid -t 30000 --width 1280 --height 720 --framerate 30 --bitrate 20000000 --codec h264 -n -o $SCRATCH/day-smoke/device/20261116_200000.h264
+WARNING visio_recorder.upload_limit split 20261116_200000.mp4 (74775616 bytes, over the 52428800-byte upload limit) into 20261116_200000.mp4, 20261116_200015.mp4
+  $ rpicam-vid -t 30000 --width 1280 --height 720 --framerate 30 --bitrate 20000000 --codec h264 -n -o $SCRATCH/day-smoke/device/20261116_200500.h264
+WARNING visio_recorder.upload_limit storage rejected 20261116_200500.mp4 (75418867 bytes) as too large: segments/d8f767a7-9ea5-4952-b444-49366b44a64d/20261116_200500.mp4 (75418867 bytes) is over the storage size limit: The object exceeded the maximum allowed size; splitting it under 37709433 bytes
+WARNING visio_recorder.upload_limit split 20261116_200500.mp4 (75418867 bytes, over the 37709433-byte upload limit) into 20261116_200500.mp4, 20261116_200511.mp4, 20261116_200521.mp4
+ERROR visio_recorder.upload_limit segment 20261116_210000.mp4 can never be uploaded (20261116_210000.mp4: CalledProcessError(1, ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', '$SCRATCH/day-smoke/device/queue/20261116_210000.mp4'])); moved to $SCRATCH/day-smoke/device/rejected and will not be retried
+{
+  "flag_presses": {
+    "mid_segment": "08:30:30",
+    "last_second_of_segment": "08:32:00",
+    "restart_gap": "08:32:01",
+    "first_second_of_segment": "08:32:02"
+  },
+  "oversize_guard": {
+    "local_split": {
+      "capture_bytes": 74763341,
+      "max_upload_bytes": 52428800,
+      "uploaded_files": 2,
+      "upload_ok": true
+    },
+    "storage_413_resplit": {
+      "capture_bytes": 75406542,
+      "max_upload_bytes": 104857600,
+      "uploaded_files": 3,
+      "upload_ok": true
+    },
+    "unsplittable": {
+      "flush_uploaded_first_boot": 4,
+      "flush_uploaded_second_boot": 0,
+      "rejected_dir": [
+        "20261116_210000.mp4"
+      ]
+    }
+  },
+  "left_in_queue": [],
+  "device_status": [
+    {
+      "segments_pending": 0,
+      "segments_uploaded_today": 0,
+      "segments_rejected": 1
+    }
+  ],
+  "storage": {
+    "objects": 15,
+    "segments": 11,
+    "markers": 4,
+    "captured_by_loop": 6,
+    "every_loop_capture_uploaded": true,
+    "largest_segment_bytes": 40104512,
+    "smallest_full_segment_bytes": 29972828,
+    "limit_bytes": 52428800,
+    "guard_parts": [
+      "20261116_200000.mp4 40104512",
+      "20261116_200015.mp4 34666303",
+      "20261116_200500.mp4 29955820",
+      "20261116_200511.mp4 25404133",
+      "20261116_200521.mp4 20054956"
+    ]
+  },
+  "sample_segment": {
+    "name": "20261116_083000.mp4",
+    "bytes": 29972828,
+    "duration_sec": 59.9994,
+    "bit_rate": 3996417,
+    "video": "h264\n1280\n720\n30/1"
+  },
+  "pipeline": {
+    "devices_processed": 1,
+    "devices_failed": 0,
+    "vision_calls": 0,
+    "transcriber_calls": 0
+  },
+  "segments_rows": {
+    "count": 11,
+    "durations": [
+      8,
+      10,
+      12,
+      14,
+      16,
+      60
+    ],
+    "flagged": [
+      "20261116_083000.mp4",
+      "20261116_083101.mp4"
+    ]
+  },
+  "dlq_rows": [
+    {
+      "key": "d8f767a7-9ea5-4952-b444-49366b44a64d/FLAG_20261116_083201.marker",
+      "kind": "unmatched",
+      "attempts": 1
+    },
+    {
+      "key": "d8f767a7-9ea5-4952-b444-49366b44a64d/FLAG_20261116_083202.marker",
+      "kind": "unmatched",
+      "attempts": 1
+    }
+  ],
+  "reel_row": {
+    "s3_key": "d8f767a7-9ea5-4952-b444-49366b44a64d/20261116.mp4",
+    "duration_sec": 30
+  },
+  "reel_file": {
+    "bytes": 10721091,
+    "duration_sec": 30.0,
+    "video": "h264\n1280\n720"
+  }
+}
