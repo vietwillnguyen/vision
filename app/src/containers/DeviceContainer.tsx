@@ -13,7 +13,5 @@ type DeviceContainerProps = NativeStackScreenProps<DeviceStackParamList, 'Device
 
 export function DeviceContainer({ client, deviceId, navigation }: DeviceContainerProps) {
   const state = useDeviceStatus(client, deviceId);
-  return (
-    <DeviceScreen state={state} onReonboardPress={() => navigation.navigate('Reonboard')} />
-  );
+  return <DeviceScreen state={state} onReonboardPress={() => navigation.navigate('Reonboard')} />;
 }

@@ -9,9 +9,7 @@ import { useResetOnInputChange } from './useResetOnInputChange';
 type SegmentRow = Tables<'segments'>;
 
 export type SegmentsState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'ready'; segments: Segment[] };
+  { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; segments: Segment[] };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

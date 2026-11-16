@@ -3,12 +3,21 @@ from pathlib import Path
 VINTAGE_FILTER = "curves=vintage,noise=alls=8:allf=t+u,vignette=PI/4"
 
 
-def compute_clip_offset_sec(segment_duration_sec: int, clip_duration_sec: int) -> float:
+def compute_clip_duration_sec(
+    segment_duration_sec: float, clip_duration_sec: float
+) -> float:
+    """A segment shorter than a clip contributes all of itself."""
+    return min(clip_duration_sec, segment_duration_sec)
+
+
+def compute_clip_offset_sec(
+    segment_duration_sec: float, clip_duration_sec: float
+) -> float:
     return max((segment_duration_sec - clip_duration_sec) / 2, 0.0)
 
 
 def build_trim_command(
-    input_path: Path, output_path: Path, offset_sec: float, clip_duration_sec: int
+    input_path: Path, output_path: Path, offset_sec: float, clip_duration_sec: float
 ) -> list[str]:
     return [
         "ffmpeg",

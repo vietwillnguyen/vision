@@ -85,7 +85,11 @@ describe('RawFootageContainer', () => {
   it('renders the timeline once segments load', async () => {
     const { client } = fakeClient();
     render(
-      <RawFootageContainer client={client} deviceId="dev-1" now={() => new Date('2026-07-18T15:00:00Z')} />,
+      <RawFootageContainer
+        client={client}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T15:00:00Z')}
+      />,
     );
     await waitFor(() => expect(screen.getByTestId('timeline-scrubber')).toBeTruthy());
     expect(screen.getByTestId('slot-480')).toBeTruthy();
@@ -95,7 +99,11 @@ describe('RawFootageContainer', () => {
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     const { client, updateCalls } = fakeClient();
     render(
-      <RawFootageContainer client={client} deviceId="dev-1" now={() => new Date('2026-07-18T15:00:00Z')} />,
+      <RawFootageContainer
+        client={client}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T15:00:00Z')}
+      />,
     );
     await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
     fireEvent(screen.getByTestId('slot-480'), 'longPress');
@@ -114,7 +122,11 @@ describe('RawFootageContainer', () => {
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     const { client } = fakeClient();
     render(
-      <RawFootageContainer client={client} deviceId="dev-1" now={() => new Date('2026-07-18T15:00:00Z')} />,
+      <RawFootageContainer
+        client={client}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T15:00:00Z')}
+      />,
     );
     await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
     fireEvent(screen.getByTestId('slot-480'), 'longPress');
@@ -129,7 +141,11 @@ describe('RawFootageContainer', () => {
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     const { client } = fakeClient();
     render(
-      <RawFootageContainer client={client} deviceId="dev-1" now={() => new Date('2026-07-18T15:00:00Z')} />,
+      <RawFootageContainer
+        client={client}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T15:00:00Z')}
+      />,
     );
     await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
     fireEvent(screen.getByTestId('slot-480'), 'longPress');

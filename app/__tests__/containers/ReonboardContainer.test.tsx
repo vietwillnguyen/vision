@@ -5,17 +5,24 @@ import React from 'react';
 import { ReonboardContainer } from '../../src/containers/ReonboardContainer';
 import type { VisionClient } from '../../src/lib/supabase';
 
-jest.mock('react-native-qrcode-svg', () => function MockQrCode(props: { value: string }) {
-  const { Text } = jest.requireActual('react-native');
-  return <Text testID="qr-code">{props.value}</Text>;
-});
+jest.mock(
+  'react-native-qrcode-svg',
+  () =>
+    function MockQrCode(props: { value: string }) {
+      const { Text } = jest.requireActual('react-native');
+      return <Text testID="qr-code">{props.value}</Text>;
+    },
+);
 
 const SESSION = {
   access_token: 'access-abc',
   refresh_token: 'refresh-xyz',
 } as unknown as Session;
 
-function fakeClient(session: Session | null, error: { message: string } | null = null): VisionClient {
+function fakeClient(
+  session: Session | null,
+  error: { message: string } | null = null,
+): VisionClient {
   return {
     auth: {
       getSession: () => Promise.resolve({ data: { session }, error }),

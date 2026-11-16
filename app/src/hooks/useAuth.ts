@@ -4,9 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { VisionClient } from '../lib/supabase';
 
 export type AuthState =
-  | { kind: 'loading' }
-  | { kind: 'signed-out' }
-  | { kind: 'signed-in'; session: Session };
+  { kind: 'loading' } | { kind: 'signed-out' } | { kind: 'signed-in'; session: Session };
 
 export function useAuth(client: VisionClient): {
   state: AuthState;

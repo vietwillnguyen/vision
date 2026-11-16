@@ -10,6 +10,9 @@ export async function saveUrlToCameraRoll(url: string, filenamePrefix: string): 
   if (!granted) {
     throw new PermissionDeniedError('Photo library permission was not granted');
   }
-  const file = await File.downloadFileAsync(url, new File(Paths.cache, `${filenamePrefix}-${Date.now()}.mp4`));
+  const file = await File.downloadFileAsync(
+    url,
+    new File(Paths.cache, `${filenamePrefix}-${Date.now()}.mp4`),
+  );
   await MediaLibrary.saveToLibraryAsync(file.uri);
 }

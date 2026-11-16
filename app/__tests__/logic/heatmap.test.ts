@@ -21,7 +21,11 @@ describe('buildHeatmapCells', () => {
   });
 
   it('returns a single cell when start and end are the same day', () => {
-    const cells = buildHeatmapCells([], new Date('2026-07-01T00:00:00.000Z'), new Date('2026-07-01T00:00:00.000Z'));
+    const cells = buildHeatmapCells(
+      [],
+      new Date('2026-07-01T00:00:00.000Z'),
+      new Date('2026-07-01T00:00:00.000Z'),
+    );
     expect(cells).toEqual([{ date: '2026-07-01', hasReel: false }]);
   });
 });

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from pipeline.delivery.notifier import PushTokenNotRegisteredError
+from pipeline.ingestion import UnreadableSegmentError
 from pipeline.models import ScoreWeights
 from pipeline.orchestrator import (
     MAX_DLQ_ATTEMPTS,
@@ -94,10 +95,30 @@ class FakeStore:
 
 
 class FakeMedia:
-    def __init__(self, frame_diffs=None):
+    """Durations are keyed by file stem; unlisted files are full length.
+
+    A stem mapped to None is an unreadable file.
+    """
+
+    def __init__(self, frame_diffs=None, silent=False, durations=None):
         self.frame_diffs = frame_diffs if frame_diffs is not None else [200.0]
+        self.silent = silent
+        self.durations = durations or {}
+        self.probed: list[str] = []
+        self.frame_durations: dict[str, float] = {}
+
+    def probe_duration_sec(self, video_path):
+        self.probed.append(video_path.name)
+        if not video_path.exists():
+            raise AssertionError(f"probed {video_path} before it was downloaded")
+        duration = self.durations.get(video_path.stem, 300.0)
+        if duration is None:
+            raise UnreadableSegmentError(f"{video_path.name} has no video stream")
+        return duration
 
     def extract_audio(self, video_path, workdir):
+        if self.silent:
+            return None
         audio = workdir / (video_path.stem + ".wav")
         audio.write_bytes(b"audio")
         return audio
@@ -105,14 +126,19 @@ class FakeMedia:
     def extract_frame_diffs(self, video_path):
         return self.frame_diffs
 
-    def extract_frames(self, video_path, workdir):
+    def extract_frames(self, video_path, workdir, duration_sec):
+        self.frame_durations[video_path.stem] = duration_sec
         frame = workdir / (video_path.stem + ".jpg")
         frame.write_bytes(b"jpg")
         return [frame]
 
 
 class FakeTranscriber:
+    def __init__(self):
+        self.calls = 0
+
     def transcribe(self, audio_path):
+        self.calls += 1
         return TranscriptionResult(
             speech_presence_ratio=0.8, silence_ratio=0.1, has_exclamation=False
         )
@@ -155,11 +181,13 @@ DEVICE = DeviceRecord(
 DAY = date(2026, 7, 14)
 
 
-def make_deps(store, tmp_path, vision=None, media=None, push=None, runner=None):
+def make_deps(
+    store, tmp_path, vision=None, media=None, push=None, runner=None, transcriber=None
+):
     return OrchestratorDeps(
         store=store,
         media=media or FakeMedia(),
-        transcriber=FakeTranscriber(),
+        transcriber=transcriber or FakeTranscriber(),
         vision=vision or FakeVision(),
         push=push or FakePush(),
         runner=runner or FakeRunner(),
@@ -252,7 +280,157 @@ class TestHappyPath:
         assert store.persisted_segments[0]["composite_score"] == pytest.approx(1.0)
 
 
+class TestRealSegmentDurations:
+    """Every consumer of a segment's length uses the length of its file."""
+
+    def test_short_segment_clip_is_cut_from_inside_the_file(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090500")]}
+        )
+        runner = FakeRunner()
+        media = FakeMedia(durations={"20260714_090500": 40.0})
+        deps = make_deps(store, tmp_path, media=media, runner=runner)
+
+        run_nightly(deps, DAY)
+
+        [trim] = [c for c in runner.commands if "-ss" in c]
+        assert float(trim[trim.index("-ss") + 1]) == pytest.approx(12.5)
+        assert float(trim[trim.index("-t") + 1]) == pytest.approx(15)
+
+    def test_segment_shorter_than_a_clip_is_used_whole(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090500")]}
+        )
+        runner = FakeRunner()
+        media = FakeMedia(durations={"20260714_090500": 9.5})
+        deps = make_deps(store, tmp_path, media=media, runner=runner)
+
+        run_nightly(deps, DAY)
+
+        [trim] = [c for c in runner.commands if "-ss" in c]
+        assert float(trim[trim.index("-ss") + 1]) == 0.0
+        assert float(trim[trim.index("-t") + 1]) == pytest.approx(9.5)
+
+    def test_persisted_duration_is_the_measured_one(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE],
+            segment_keys={"dev-1": [segment_key("090000"), segment_key("090500")]},
+        )
+        media = FakeMedia(
+            durations={"20260714_090000": 299.967, "20260714_090500": 39.9996}
+        )
+        deps = make_deps(store, tmp_path, media=media)
+
+        run_nightly(deps, DAY)
+
+        durations = {r["s3_key"]: r["duration_sec"] for r in store.persisted_segments}
+        assert durations == {segment_key("090000"): 300, segment_key("090500"): 40}
+        assert all(isinstance(d, int) for d in durations.values())
+
+    def test_marker_after_a_short_segment_flags_the_restarted_one(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE],
+            segment_keys={"dev-1": [segment_key("090500"), segment_key("090600")]},
+            marker_keys={"dev-1": ["dev-1/FLAG_20260714_090700.marker"]},
+        )
+        media = FakeMedia(durations={"20260714_090500": 40.0})
+        deps = make_deps(store, tmp_path, media=media)
+
+        run_nightly(deps, DAY)
+
+        flagged = {r["s3_key"]: r["manually_flagged"] for r in store.persisted_segments}
+        assert flagged == {segment_key("090500"): False, segment_key("090600"): True}
+
+    def test_vision_frames_are_spread_over_the_measured_duration(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090500")]}
+        )
+        media = FakeMedia(durations={"20260714_090500": 40.0})
+        deps = make_deps(store, tmp_path, media=media)
+
+        run_nightly(deps, DAY)
+
+        assert media.frame_durations == {"20260714_090500": 40.0}
+
+    def test_each_segment_is_downloaded_once(self, tmp_path):
+        class CountingStore(FakeStore):
+            downloads: list[str] = []
+
+            def download_segment(self, s3_key, workdir):
+                self.downloads.append(s3_key)
+                return super().download_segment(s3_key, workdir)
+
+        store = CountingStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090000")]}
+        )
+        deps = make_deps(store, tmp_path)
+
+        run_nightly(deps, DAY)
+
+        assert store.downloads == [segment_key("090000")]
+
+    def test_unreadable_segment_goes_to_the_dlq_and_the_day_continues(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE],
+            segment_keys={"dev-1": [segment_key("090000"), segment_key("090500")]},
+        )
+        media = FakeMedia(durations={"20260714_090500": None})
+        deps = make_deps(store, tmp_path, media=media)
+
+        result = run_nightly(deps, DAY)
+
+        assert result.devices_failed == []
+        recorded = {e.key: e.kind for _, e in store.recorded_dlq}
+        assert recorded == {segment_key("090500"): "rejected"}
+        assert [r["s3_key"] for r in store.persisted_segments] == [
+            segment_key("090000")
+        ]
+
+    def test_reel_duration_is_measured_from_the_assembled_reel(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE],
+            segment_keys={"dev-1": [segment_key("090000"), segment_key("090500")]},
+        )
+        media = FakeMedia(durations={"20260714_090500": 9.5, "reel_20260714": 24.4667})
+        deps = make_deps(store, tmp_path, media=media)
+
+        run_nightly(deps, DAY)
+
+        assert store.inserted_reels[0]["duration_sec"] == 24
+        assert "reel_20260714.mp4" in media.probed
+
+    def test_reel_shorter_than_its_clips_is_logged(self, tmp_path, caplog):
+        store = FakeStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090000")]}
+        )
+        media = FakeMedia(durations={"reel_20260714": 0.5})
+        deps = make_deps(store, tmp_path, media=media)
+
+        run_nightly(deps, DAY)
+
+        assert store.inserted_reels[0]["duration_sec"] == 0
+        assert "clips total 15.00s" in caplog.text
+
+
 class TestEdgeCases:
+    def test_silent_segment_is_scored_without_transcription(self, tmp_path):
+        # The pendant records no audio (capture.py has no ALSA source), so the
+        # media probe finds no audio stream; that is silence, not a failure.
+        store = FakeStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090000")]}
+        )
+        transcriber = FakeTranscriber()
+        deps = make_deps(
+            store, tmp_path, media=FakeMedia(silent=True), transcriber=transcriber
+        )
+
+        result = run_nightly(deps, DAY)
+
+        assert result.devices_failed == []
+        assert transcriber.calls == 0
+        assert len(store.persisted_segments) == 1
+        assert len(store.inserted_reels) == 1
+
     def test_no_segments_means_no_reel_and_no_notification(self, tmp_path):
         store = FakeStore(devices=[DEVICE])
         push = FakePush()

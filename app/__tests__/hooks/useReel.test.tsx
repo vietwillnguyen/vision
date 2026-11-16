@@ -32,7 +32,13 @@ describe('useReel', () => {
     await waitFor(() =>
       expect(result.current).toEqual({
         kind: 'ready',
-        reel: { id: 'r1', date: '2026-07-18', s3Key: 'dev-1/2026-07-18.mp4', durationSec: 60, style: 'clean' },
+        reel: {
+          id: 'r1',
+          date: '2026-07-18',
+          s3Key: 'dev-1/2026-07-18.mp4',
+          durationSec: 60,
+          style: 'clean',
+        },
       }),
     );
   });

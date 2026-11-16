@@ -10,7 +10,11 @@ interface TimelineScrubberProps {
   onSlotLongPress: (slot: TimelineSlot) => void;
 }
 
-export function TimelineScrubber({ slots, thumbnails = {}, onSlotLongPress }: TimelineScrubberProps) {
+export function TimelineScrubber({
+  slots,
+  thumbnails = {},
+  onSlotLongPress,
+}: TimelineScrubberProps) {
   return (
     <ScrollView horizontal testID="timeline-scrubber" style={styles.strip}>
       {slots.map((slot) => (

@@ -85,7 +85,10 @@ describe('useAuth', () => {
     await expect(result.current.signIn('a@b.co', 'password123')).resolves.toBeNull();
     expect(signInWithPassword).toHaveBeenCalledWith({ email: 'a@b.co', password: 'password123' });
 
-    signInWithPassword.mockResolvedValueOnce({ data: {}, error: { message: 'Invalid login credentials' } });
+    signInWithPassword.mockResolvedValueOnce({
+      data: {},
+      error: { message: 'Invalid login credentials' },
+    });
     await expect(result.current.signIn('a@b.co', 'wrong-password')).resolves.toBe(
       'Invalid login credentials',
     );
