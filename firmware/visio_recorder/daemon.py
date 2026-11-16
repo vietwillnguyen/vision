@@ -334,9 +334,12 @@ def run_recording_loop(
             if stop.is_set():
                 break
             started_at = clock()
-            if not_before is not None and started_at < not_before:
-                sleep((not_before - started_at).total_seconds())
-                started_at = not_before
+            if not_before is not None:
+                wait = (not_before - started_at).total_seconds()
+                if 0 < wait <= 1:
+                    sleep(wait)
+                    started_at = not_before
+                not_before = None
             try:
                 h264_path = record_segment(
                     deps.command_runner,

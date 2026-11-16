@@ -768,6 +768,47 @@ def test_the_capture_after_a_failed_audio_one_waits_for_a_new_second(tmp_path):
     ]
 
 
+def test_a_clock_stepping_back_after_the_fallback_never_stalls_recording(tmp_path):
+    # Only the capture right after the failure may wait, and never for long:
+    # a later wall-clock step back (DST fall-back, an NTP step) must not make
+    # the loop sleep until the failure time comes round again.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    slept: list[float] = []
+    readings = iter(
+        [
+            datetime(2026, 11, 16, 14, 0, 5),
+            datetime(2026, 11, 16, 14, 0, 6),
+            datetime(2026, 11, 16, 1, 0, 0),
+        ]
+    )
+
+    class DiesOnce(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+                Path(args[args.index("-o") + 1]).write_bytes(b"ts-data")
+                raise subprocess.CalledProcessError(1, args)
+            super().run(args)
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=DiesOnce(on_record=lambda n: stop.set() if n >= 2 else None),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        audio=AudioSettings(),
+    )
+
+    run_recording_loop(deps, stop, clock=lambda: next(readings), sleep=slept.append)
+
+    assert slept == []
+    assert storage.uploaded == [
+        "device-abc/20261116_140005.mp4",
+        "device-abc/20261116_140006.mp4",
+        "device-abc/20261116_010000.mp4",
+    ]
+
+
 def test_a_failing_video_only_capture_still_escapes_the_loop(tmp_path):
     class Killed(FakeCommandRunner):
         def run(self, args: list[str]) -> None:
