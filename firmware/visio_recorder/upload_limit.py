@@ -12,10 +12,16 @@ a fitting file too large after the fact. So before upload:
   start time (``YYYYMMDD_HHMMSS.mp4``) so the pipeline treats them as ordinary,
   consecutive segments;
 - a part storage still answers 413 for is split again, under half its size;
-- a segment that cannot be split under the limit (ffmpeg fails, or a part is
-  still too large) is moved to ``rejected/`` beside the queue, logged as an
-  error and counted in ``device_status.segments_rejected``. It is kept for
-  manual recovery but never retried.
+- a segment that cannot be split under the limit (ffprobe cannot read its
+  duration, ffmpeg fails with ample free space, the split yields fewer than
+  two parts, a part is still too large, or parts would share a name) is moved
+  to ``rejected/`` beside the queue, logged as an error and counted in
+  ``device_status.segments_rejected``. It is kept for manual recovery but
+  never retried;
+- a split that fails for a passing reason (any ``OSError`` such as a full SD
+  card, or ffmpeg failing while the queue's filesystem has less free space
+  than the file being split) leaves the segment queued and counts it as
+  failed, so the next boot's flush tries again.
 
 Splitting is crash-safe: parts are built in a scratch directory inside the
 queue (skipped by ``list_pending``), every part except the one that reuses the
@@ -50,6 +56,10 @@ _logger = logging.getLogger(__name__)
 
 class SegmentSplitError(Exception):
     """The segment could not be split into parts under the limit."""
+
+
+class SegmentSplitDeferred(Exception):
+    """The split failed for a passing reason; the segment can be retried."""
 
 
 class DurationProbe(Protocol):
@@ -129,7 +139,8 @@ def split_segment(
 
     Returns ``[path]`` unchanged for a file within the limit or anything that
     is not a segment. Raises ``SegmentSplitError`` (leaving ``path`` intact)
-    when the parts cannot be made to fit.
+    when the parts cannot be made to fit, and ``SegmentSplitDeferred`` (also
+    leaving ``path`` intact) when the split failed for a passing reason.
     """
     size = path.stat().st_size
     if size <= max_bytes or path.suffix != ".mp4":
@@ -137,11 +148,19 @@ def split_segment(
     started_at = datetime.strptime(path.stem, _STEM_FORMAT)
     work_dir = path.parent / f".{path.stem}.split"
     shutil.rmtree(work_dir, ignore_errors=True)
-    work_dir.mkdir()
     try:
+        work_dir.mkdir()
         chunks = math.ceil(size / (max_bytes * SPLIT_FILL))
         chunk_sec = probe.duration_sec(path) / chunks
-        runner.run(build_split_command(path, chunk_sec, work_dir))
+        free = shutil.disk_usage(path.parent).free
+        try:
+            runner.run(build_split_command(path, chunk_sec, work_dir))
+        except subprocess.CalledProcessError as err:
+            if free < size:
+                raise SegmentSplitDeferred(
+                    f"{path.name}: ffmpeg failed with {free} bytes free: {err!r}"
+                ) from err
+            raise
         parts: list[tuple[Path, Path]] = []
         for line in (work_dir / "parts.csv").read_text().splitlines():
             if not line.strip():
@@ -163,8 +182,10 @@ def split_segment(
         # The original is replaced last so a power cut leaves it to re-split.
         for part, final in sorted(parts, key=lambda pf: pf[1] == path):
             part.replace(final)
-    except SegmentSplitError:
+    except (SegmentSplitError, SegmentSplitDeferred):
         raise
+    except OSError as err:
+        raise SegmentSplitDeferred(f"{path.name}: {err!r}") from err
     except Exception as err:
         raise SegmentSplitError(f"{path.name}: {err!r}") from err
     finally:
@@ -213,6 +234,12 @@ def upload_queued(
         except SegmentSplitError as err:
             _reject(current, err)
             outcome.rejected += 1
+            continue
+        except SegmentSplitDeferred as err:
+            _logger.warning(
+                "could not split %s yet (%s); keeping it queued", current.name, err
+            )
+            outcome.failed += 1
             continue
         for part in parts:
             try:

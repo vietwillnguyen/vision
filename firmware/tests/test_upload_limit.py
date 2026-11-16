@@ -1,12 +1,14 @@
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from visio_recorder.muxer import SubprocessCommandRunner
 from visio_recorder.upload_limit import (
     FfprobeDurationProbe,
+    SegmentSplitDeferred,
     SegmentSplitError,
     UploadLimit,
     build_split_command,
@@ -35,13 +37,21 @@ class FakeSplitRunner:
     ``parts`` is a list of (size_bytes, start_sec, end_sec) to produce.
     """
 
-    def __init__(self, parts: list[tuple[int, float, float]], fail: bool = False):
+    def __init__(
+        self,
+        parts: list[tuple[int, float, float]],
+        fail: bool = False,
+        error: Exception | None = None,
+    ):
         self.parts = parts
         self.fail = fail
+        self.error = error
         self.calls: list[list[str]] = []
 
     def run(self, args: list[str]) -> None:
         self.calls.append(args)
+        if self.error is not None:
+            raise self.error
         if self.fail:
             raise subprocess.CalledProcessError(1, args)
         pattern = Path(args[-1])
@@ -275,6 +285,36 @@ def test_upload_queued_keeps_a_segment_queued_on_a_network_failure(tmp_path):
 
     assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 1, 0)
     assert path.exists()
+
+
+def test_a_full_disk_while_writing_parts_keeps_the_segment_queued(tmp_path):
+    queue_dir = tmp_path / "queue"
+    path = _segment(queue_dir, "20261116_090000.mp4", 2500)
+    runner = FakeSplitRunner([], error=OSError(28, "No space left on device"))
+
+    with pytest.raises(SegmentSplitDeferred):
+        split_segment(path, MAX, runner, FakeProbe(60.0))
+
+    outcome = upload_queued(path, RecordingStorage(), "dev", _limit(runner))
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 1, 0)
+    assert sorted(p.name for p in queue_dir.iterdir()) == ["20261116_090000.mp4"]
+    assert not rejected_dir(queue_dir).exists()
+
+
+def test_ffmpeg_failing_on_a_nearly_full_disk_keeps_the_segment_queued(
+    tmp_path, monkeypatch
+):
+    queue_dir = tmp_path / "queue"
+    path = _segment(queue_dir, "20261116_090000.mp4", 2500)
+    monkeypatch.setattr(shutil, "disk_usage", lambda _path: SimpleNamespace(free=100))
+    runner = FakeSplitRunner([], fail=True)
+
+    outcome = upload_queued(path, RecordingStorage(), "dev", _limit(runner))
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 1, 0)
+    assert sorted(p.name for p in queue_dir.iterdir()) == ["20261116_090000.mp4"]
+    assert not rejected_dir(queue_dir).exists()
 
 
 def test_upload_queued_skips_a_path_already_gone(tmp_path):

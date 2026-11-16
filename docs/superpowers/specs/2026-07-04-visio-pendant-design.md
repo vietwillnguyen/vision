@@ -163,7 +163,8 @@ What each side guarantees:
 - **Firmware** never retries an oversized file forever (`firmware/visio_recorder/upload_limit.py`).
   Before upload, a segment over `VISIO_MAX_UPLOAD_BYTES` is split losslessly with `ffmpeg -c copy -f segment` into parts targeting 80 % of the limit, each named after its own start time so the pipeline sees ordinary consecutive segments.
   A part storage still answers 413 for (a server limit below the configured one) is split again under half its size.
-  A segment that cannot be split under the limit (not decodable, or a part still too large) is moved to `rejected/` beside the queue, logged as an error, counted in `device_status.segments_rejected`, and never retried; it is kept on the SD card for manual recovery.
+  A segment that cannot be split under the limit (ffprobe cannot read its duration, ffmpeg fails with ample free space, fewer than two parts, a part still too large, or parts that would share a name) is moved to `rejected/` beside the queue, logged as an error, counted in `device_status.segments_rejected`, and never retried; it is kept on the SD card for manual recovery.
+  A split that fails for a passing reason (any `OSError` such as a full SD card, or ffmpeg failing while the queue's filesystem has less free space than the file) leaves the segment queued and counts it as failed, so the next boot's flush retries it.
   Splitting is crash-safe: parts are built in a hidden scratch directory in the queue and the original is replaced last, so a power cut leaves it to be split again.
 
 To measure the real size on a Pi, record one default segment and list it: `rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o /tmp/size-test.h264 && ls -l /tmp/size-test.h264` (the MP4 mux adds well under 1 %).
