@@ -194,6 +194,36 @@ The pending-segment-count threshold trigger is not implemented.
 
 **As-built addition:** storage keys the nightly run cannot process (unparseable/out-of-prefix keys, flag markers matching no segment window) are persisted to a `pipeline_dlq` table and retried each night with an attempt count; after 5 attempts the key is escalated and the device owner is notified via push.
 
+### Segment Duration Contract
+
+A segment's length is a property of its file, never of the recording configuration.
+The firmware's 5-minute segment length (`VISIO_SEGMENT_DURATION_MS`) is only an upper bound: a stop press, a crash or a dead battery ends a segment early, and a segment that ends early is still a valid segment.
+This contract is a prerequisite for start/stop recording, which will produce short segments routinely.
+
+What each side guarantees:
+
+- **Firmware** names each segment `YYYYMMDD_HHMMSS.mp4` after its capture start, and muxes it with the capture framerate (`ffmpeg -framerate <fps> -c copy`), so the MP4 container's duration is the real recorded length.
+  It reports no duration anywhere else: no field in the key, no column, no metadata.
+  An early-ended segment only has to be a finalised, muxable file; nothing about its length needs signalling.
+- **Pipeline** downloads and probes every segment (`ffprobe` `format=duration`) before matching flag markers, and that measured length is the only segment length it uses.
+  A file with no measurable duration (not video, zero length, no video stream) is rejected into `pipeline_dlq` as `rejected`, like a malformed key, and the rest of the device day carries on.
+  A failed download is not a rejection: it fails the device day, which the next run retries.
+
+Where the measured length is used:
+
+| Consumer | Rule |
+|---|---|
+| Flag-marker window | A segment covers `[recorded_at, recorded_at + duration)`; a marker in the gap after a short segment matches nothing and is DLQ'd as `unmatched`. |
+| Clip extraction | The clip is `min(15 s, duration)` long, centred: offset `(duration - clip) / 2`, so it always starts inside the file. |
+| Vision frames | The 3 frames are spread over the real duration (`fps=3/<duration>`), so a short segment is not scored with no frames. |
+| `segments.duration_sec` | Whole seconds, rounded up (after rounding to the millisecond, so probe noise cannot add a second), so a window rebuilt from the row still covers every one-second marker the file covers. A re-run rewrites it on existing rows. |
+| `reels.duration_sec` | The assembled reel is probed and its length stored, rounded to the nearest second; a reel more than 1 s away from the sum of its clips is logged as a warning, since that means a clip was dropped. |
+
+Flag markers have one-second resolution (`FLAG_YYYYMMDD_HHMMSS`), so the in-memory window uses the exact measured float and the stored integer rounds up rather than to nearest.
+
+**As-built finding (silent segments):** the firmware records video only, and `ffmpeg` refuses to extract audio from a file with no audio stream, so before this was handled every real device day failed in Stage 1.
+A segment with no audio stream now scores as silence without a Whisper call.
+
 ### Pipeline Stages
 
 **Stage 1 - Audio Analysis (Whisper API)**
@@ -239,7 +269,7 @@ A diversity constraint prevents two consecutive segments from the same location 
 
 **Stage 6 - FFmpeg Assembly**
 
-Selected segments are concatenated and encoded as 720p H.264 MP4.
+A 15-second clip is cut from the middle of each selected segment (the whole segment if it is shorter, see Segment Duration Contract), and the clips are concatenated and encoded as 720p H.264 MP4.
 
 Standard output: clean 720p feed.
 

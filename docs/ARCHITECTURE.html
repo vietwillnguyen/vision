@@ -28,7 +28,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: e35b9750f2c45e05deaf8dcb07c54d16a78369e9e86594cba864ec4be0ff0771  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 8a93bdf92e84b5716b0ff790e8b46019020d018becbc28d5ece4d43396b12415  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: d5f68258ffaa14aa554bb172ea1ee40648eb3bebe48b06a76076effb2ad57f9c  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-07-23 (spec-sync, main divergence merge) -->
@@ -274,7 +274,7 @@ flowchart TD
       <li class="step step-primary">Scene (Claude Haiku)</li>
       <li class="step step-primary">Composite score</li>
       <li class="step step-primary">Highlight select</li>
-      <li class="step step-primary">FFmpeg assembly</li>
+      <li class="step step-primary">FFmpeg assembly (15 s clip per segment)</li>
       <li class="step step-primary">Push delivery</li>
     </ul>
     <div class="card bg-base-100 shadow p-4">
@@ -286,6 +286,29 @@ score = base_score * 1.5  (if manually flagged)
     </div>
     <div class="alert alert-info alert-soft text-sm" role="alert">
       <span><strong>Trigger (as-built):</strong> the pipeline runs as the <span class="font-mono text-xs bg-base-200 rounded px-1">nightly-reel</span> GitHub Actions workflow - nightly cron at 19:00 UTC (02:00 device-local ICT), plus <span class="font-mono text-xs bg-base-200 rounded px-1">workflow_dispatch</span> with an optional <span class="font-mono text-xs bg-base-200 rounded px-1">day</span> input for manual runs. Supabase Edge Functions were ruled out (pipeline is Python + FFmpeg; Edge Functions run Deno), and the spec's pending-segment-count threshold trigger is not implemented. Keys a run cannot process land in <span class="font-mono text-xs bg-base-200 rounded px-1">pipeline_dlq</span> for nightly retry; after 5 attempts the key is escalated and the device owner is notified via push.</span>
+    </div>
+    <div class="card bg-base-100 shadow p-4 space-y-2">
+      <h3 class="font-semibold text-sm">Segment duration contract</h3>
+      <p class="text-xs text-base-content/70">A segment's length is a property of its file, never of the recording config: the firmware's 5-minute length is only an upper bound (stop press, crash, dead battery). Prerequisite for start/stop recording.</p>
+      <ul class="list-disc list-inside text-xs space-y-1">
+        <li><strong>Firmware</strong> names the segment after its capture start and muxes it with the capture framerate, so the MP4's container duration is real. It reports duration nowhere else.</li>
+        <li><strong>Pipeline</strong> downloads and <span class="font-mono">ffprobe</span>s every segment before matching flag markers. No measurable duration &rarr; <span class="font-mono">pipeline_dlq</span> <span class="font-mono">rejected</span>; a failed download fails the device day for retry.</li>
+      </ul>
+      <div class="overflow-x-auto rounded-box border border-base-content/10">
+        <table class="table table-xs">
+          <thead><tr><th>Consumer</th><th>Rule</th></tr></thead>
+          <tbody>
+            <tr><td>Flag-marker window</td><td><span class="font-mono">[recorded_at, recorded_at + duration)</span>; a marker in the gap after a short segment is <span class="font-mono">unmatched</span></td></tr>
+            <tr><td>Clip extraction</td><td><span class="font-mono">min(15 s, duration)</span>, centred at <span class="font-mono">(duration - clip) / 2</span>, always inside the file</td></tr>
+            <tr><td>Vision frames</td><td>3 frames spread over the real duration (<span class="font-mono">fps=3/&lt;duration&gt;</span>)</td></tr>
+            <tr><td><span class="font-mono">segments.duration_sec</span></td><td>whole seconds, rounded up (one-second markers stay covered); rewritten on re-run</td></tr>
+            <tr><td><span class="font-mono">reels.duration_sec</span></td><td>probed from the assembled reel, nearest second; &gt;1 s off the clip total is logged as a dropped clip</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="alert alert-success alert-soft text-sm" role="alert">
+      <span><strong>Silent segments scored, not failed.</strong> The pendant records video only and <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg</span> refuses to extract audio from a file with no audio stream, which failed every real device day in Stage 1. A segment with no audio stream now scores as silence without a Whisper call.</span>
     </div>
   </section>
 

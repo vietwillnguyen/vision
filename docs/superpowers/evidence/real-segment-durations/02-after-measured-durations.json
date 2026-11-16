@@ -1,0 +1,92 @@
+{
+  "source_segments": {
+    "20260714_090000": {
+      "bytes": 284893,
+      "duration_sec": 299.997,
+      "frames": 9000
+    },
+    "20260714_090500": {
+      "bytes": 39172,
+      "duration_sec": 39.9996,
+      "frames": 1200
+    },
+    "20260714_090600": {
+      "bytes": 284893,
+      "duration_sec": 299.997,
+      "frames": 9000
+    },
+    "20260714_100000": {
+      "bytes": 284893,
+      "duration_sec": 299.997,
+      "frames": 9000
+    }
+  },
+  "run": {
+    "devices_processed": 1,
+    "devices_failed": 0
+  },
+  "vision_frames_per_segment": {
+    "20260714_090000": 3,
+    "20260714_090500": 3,
+    "20260714_090600": 3,
+    "20260714_100000": 3
+  },
+  "segments_rows": [
+    {
+      "recorded_at": "2026-07-14T09:00:00+00:00",
+      "duration_sec": 300,
+      "manually_flagged": false,
+      "composite_score": 0.41411764705882353
+    },
+    {
+      "recorded_at": "2026-07-14T09:05:00+00:00",
+      "duration_sec": 40,
+      "manually_flagged": true,
+      "composite_score": 0.6211764705882353
+    },
+    {
+      "recorded_at": "2026-07-14T09:06:00+00:00",
+      "duration_sec": 300,
+      "manually_flagged": true,
+      "composite_score": 0.6211764705882353
+    },
+    {
+      "recorded_at": "2026-07-14T10:00:00+00:00",
+      "duration_sec": 300,
+      "manually_flagged": false,
+      "composite_score": 0.41411764705882353
+    }
+  ],
+  "reels_row": {
+    "s3_key": "76497e87-bc27-4322-bc94-6a7978af6407/20260714.mp4",
+    "duration_sec": 60
+  },
+  "dlq_rows": [],
+  "clips": {
+    "clip_000.mp4": {
+      "bytes": 14520,
+      "duration_sec": 15.0,
+      "frames": 450
+    },
+    "clip_001.mp4": {
+      "bytes": 14521,
+      "duration_sec": 15.0,
+      "frames": 450
+    },
+    "clip_002.mp4": {
+      "bytes": 14521,
+      "duration_sec": 15.0,
+      "frames": 450
+    },
+    "clip_003.mp4": {
+      "bytes": 14521,
+      "duration_sec": 15.0,
+      "frames": 450
+    }
+  },
+  "reel_file": {
+    "bytes": 100649,
+    "duration_sec": 60.0,
+    "frames": 1800
+  }
+}
