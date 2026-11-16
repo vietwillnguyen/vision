@@ -73,7 +73,14 @@ describe('AuthScreen', () => {
 
   it('labels inputs for accessibility', () => {
     render(
-      <AuthScreen email="" password="" errors={{}} onEmailChange={jest.fn()} onPasswordChange={jest.fn()} onSubmit={jest.fn()} />,
+      <AuthScreen
+        email=""
+        password=""
+        errors={{}}
+        onEmailChange={jest.fn()}
+        onPasswordChange={jest.fn()}
+        onSubmit={jest.fn()}
+      />,
     );
     expect(screen.getByLabelText('Email address')).toBeTruthy();
     expect(screen.getByLabelText('Password')).toBeTruthy();

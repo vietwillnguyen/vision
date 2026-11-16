@@ -65,7 +65,12 @@ export function useDeviceStatus(client: VisionClient, deviceId: string): DeviceS
       .channel(`device_status:${deviceId}`)
       .on<DeviceStatusRow>(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'device_status', filter: `device_id=eq.${deviceId}` },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'device_status',
+          filter: `device_id=eq.${deviceId}`,
+        },
         (payload) => {
           if (!isMounted) return;
           // DELETE carries an empty `new` (it is the *old* row that went away),

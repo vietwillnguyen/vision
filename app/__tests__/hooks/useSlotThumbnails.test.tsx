@@ -64,7 +64,9 @@ describe('useSlotThumbnails', () => {
       (props: { slots: TimelineSlot[] }) => useSlotThumbnails(client, props.slots),
       { initialProps: { slots: SLOTS } },
     );
-    await waitFor(() => expect(result.current).toEqual({ 480: 'thumb:https://signed/dev-1/s1.mp4' }));
+    await waitFor(() =>
+      expect(result.current).toEqual({ 480: 'thumb:https://signed/dev-1/s1.mp4' }),
+    );
 
     const withoutSegment: TimelineSlot[] = [
       { startMinute: 480, segment: null, isFlagged: false },

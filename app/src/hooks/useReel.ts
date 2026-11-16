@@ -15,9 +15,7 @@ export type ReelState =
   | { kind: 'ready'; reel: Reel };
 
 export type ReelsState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'ready'; reels: Reel[] };
+  { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; reels: Reel[] };
 
 export function useReel(client: VisionClient, deviceId: string, date: string | null): ReelState {
   const [state, setState] = useState<ReelState>({ kind: date ? 'loading' : 'none' });

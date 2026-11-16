@@ -15,7 +15,11 @@ interface TodayReelContainerProps {
   now?: () => Date;
 }
 
-export function TodayReelContainer({ client, deviceId, now = () => new Date() }: TodayReelContainerProps) {
+export function TodayReelContainer({
+  client,
+  deviceId,
+  now = () => new Date(),
+}: TodayReelContainerProps) {
   const today = utcDateString(now());
   const reelState = useReel(client, deviceId, today);
   const signedUrl = useSignedUrl(

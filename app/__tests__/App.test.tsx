@@ -58,7 +58,9 @@ function fakeClient(session: Session | null, devices: Record<string, unknown>[])
     from: (table: string) => makeChain(table === 'devices' ? devices : []),
     channel: () => ({ on: () => ({ subscribe: () => ({}) }) }),
     removeChannel: () => {},
-    storage: { from: () => ({ createSignedUrl: () => Promise.resolve({ data: null, error: null }) }) },
+    storage: {
+      from: () => ({ createSignedUrl: () => Promise.resolve({ data: null, error: null }) }),
+    },
   } as unknown as VisionClient;
 }
 
