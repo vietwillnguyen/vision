@@ -695,6 +695,41 @@ def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
     assert status.upserts[-1]["audio_active"] is False
 
 
+@pytest.mark.parametrize(
+    ("partial_bytes", "uploaded_partial"), [(b"ts-data", True), (b"", False)]
+)
+def test_a_failed_audio_capture_uploads_its_partial_ts_the_same_run(
+    tmp_path, partial_bytes, uploaded_partial
+):
+    # The capture dies mid-segment after writing part of its MPEG-TS. That
+    # footage must upload now, not wait for the next boot's orphan recovery.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+
+    class DiesMidSegment(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+                Path(args[args.index("-o") + 1]).write_bytes(partial_bytes)
+                raise subprocess.CalledProcessError(1, args)
+            super().run(args)
+
+    runner = DiesMidSegment(on_record=lambda n: stop.set() if n >= 1 else None)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        audio=AudioSettings(),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 16, 9, 0, 0)))
+
+    partial_upload = ["device-abc/20261116_090000.mp4"] if uploaded_partial else []
+    assert storage.uploaded == [*partial_upload, "device-abc/20261116_090001.mp4"]
+    assert list(deps.data_dir.iterdir()) == []
+
+
 def test_a_failing_video_only_capture_still_escapes_the_loop(tmp_path):
     class Killed(FakeCommandRunner):
         def run(self, args: list[str]) -> None:

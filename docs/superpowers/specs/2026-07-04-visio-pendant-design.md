@@ -165,7 +165,8 @@ The daemon remuxes it to MP4 with `ffmpeg -i X.ts -map 0 -c copy X.mp4`.
 
 **Fallback.** At startup the daemon opens `VISIO_AUDIO_DEVICE` (default `visio_mic`) the way rpicam-vid will, with a 0.2 s `ffmpeg -f alsa` capture.
 If it does not open (microphone not wired, overlay or ALSA config missing), the daemon logs a warning and records video only, exactly as before; the pendant always records.
-If an audio capture fails mid-run, the loop records video only for the rest of the run, and the partial `.ts` is recovered at the next boot.
+If an audio capture fails mid-run, the loop records video only for the rest of the run.
+The failed capture's partial `.ts` is queued for upload like any other segment when it holds data, so its footage reaches the same day's reel; a zero-byte one is deleted.
 `device_status.audio_active` reports which way it went: on the loop's start and stop upserts, and per segment for the segment just uploaded.
 `VISIO_AUDIO=off` disables audio and the probe.
 

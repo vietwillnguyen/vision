@@ -15,6 +15,7 @@ from visio_recorder.capture import (
     VideoSettings,
     probe_audio_device,
     record_segment,
+    segment_path,
 )
 from visio_recorder.device_identity import load_or_create_device_id, register_device
 from visio_recorder.drivers import (
@@ -260,8 +261,9 @@ def run_recording_loop(
     a capture fails while the loop is not stopping (the microphone vanished,
     or libav could not keep up), the loop records video only from then on
     rather than failing every segment; the failed capture's partial ``.ts``
-    is left for the next boot's orphan recovery, and per-segment upserts
-    report ``audio_active`` false from the next segment on.
+    is queued for the worker like any capture when it holds data (a
+    zero-byte one is deleted), and per-segment upserts report
+    ``audio_active`` false from the next segment on.
     """
     work: queue.Queue[Path | None] = queue.Queue()
     # Written only by the worker; read by the main thread only after join().
@@ -326,11 +328,12 @@ def run_recording_loop(
                 break
             if stop.is_set():
                 break
+            started_at = clock()
             try:
                 h264_path = record_segment(
                     deps.command_runner,
                     deps.data_dir,
-                    clock(),
+                    started_at,
                     deps.segment_duration_ms,
                     deps.video,
                     audio,
@@ -342,7 +345,13 @@ def run_recording_loop(
                     "audio+video capture failed; recording video only for the "
                     "rest of this run"
                 )
+                partial = segment_path(deps.data_dir, started_at, audio)
                 audio = None
+                if partial.exists():
+                    if partial.stat().st_size > 0:
+                        work.put(partial)
+                    else:
+                        partial.unlink()
                 continue
             work.put(h264_path)
     finally:

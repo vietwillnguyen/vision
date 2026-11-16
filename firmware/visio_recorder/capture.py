@@ -133,6 +133,13 @@ def probe_audio_device(runner: CommandRunner, audio: AudioSettings) -> bool:
     return True
 
 
+def segment_path(
+    output_dir: Path, started_at: "datetime", audio: AudioSettings | None
+) -> Path:
+    suffix = ".h264" if audio is None else ".ts"
+    return output_dir / segment_filename(started_at, suffix)
+
+
 def record_segment(
     runner: CommandRunner,
     output_dir: Path,
@@ -142,7 +149,6 @@ def record_segment(
     audio: AudioSettings | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = ".h264" if audio is None else ".ts"
-    output_path = output_dir / segment_filename(started_at, suffix)
+    output_path = segment_path(output_dir, started_at, audio)
     runner.run(build_rpicam_command(output_path, duration_ms, video, audio))
     return output_path
