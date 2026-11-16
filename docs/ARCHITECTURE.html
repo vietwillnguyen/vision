@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: f28ebd11d7dcad56c6e0111dc548a460d955d94d24b0626536e5c528ac294e1c  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 3880afc48c41bbe0f250c7716287a0ff1d7b67c0c239d4873b395af2e39612cb  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
-<!-- source-sha256: d5f68258ffaa14aa554bb172ea1ee40648eb3bebe48b06a76076effb2ad57f9c  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-07-23 (spec-sync, main divergence merge) -->
+<!-- source-sha256: 4c56b6f08f289c7ce8177e7c65a87f27fedb418ff4416e5673bcc6ab43f40b84  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
+<!-- regenerated-at: 2026-11-16 (merge of main: trixie OS reconcile + recording lifecycle) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -181,7 +181,7 @@ flowchart TD
 
   <section id="firmware" class="space-y-4">
     <h2 class="text-2xl font-bold">Firmware Daemon — <code>visio-recorder</code></h2>
-    <p class="text-base-content/70 max-w-3xl">As-built via the Epic 5 daemon-glue plan (issue #7, PR #15). Single Python systemd service, <code>main()</code> composes already-unit-tested parts.</p>
+    <p class="text-base-content/70 max-w-3xl">As-built via the Epic 5 daemon-glue plan (issue #7, PR #15). Single Python systemd service, <code>main()</code> composes already-unit-tested parts. Runs on Raspberry Pi OS Lite trixie (Debian 13, 64-bit headless), verified on the device during provisioning bring-up; the spec originally targeted Bookworm. The firmware's Python floor stays 3.11 while trixie ships 3.13.</p>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div class="card bg-base-100 shadow p-4">

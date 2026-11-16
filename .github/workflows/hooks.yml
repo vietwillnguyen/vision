@@ -17,7 +17,7 @@ jobs:
   pre-commit-hook:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run pre-commit hook tests
         # Pure git + coreutils; each case builds a throwaway repo in a temp dir
         # and drives real `git commit` calls through scripts/hooks/pre-commit.

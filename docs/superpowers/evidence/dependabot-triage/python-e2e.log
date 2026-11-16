@@ -1,0 +1,47 @@
+# python deps branch - local run 2026-11-16T11:15:10Z, Python 3.11 (CI floor), supabase CLI 2.109.0
+## supabase test db (pgTAP, after db reset)
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/device_status.test.sql ....... ok
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/devices.test.sql ............. ok
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/devices_push_token.test.sql .. ok
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/pipeline_dlq.test.sql ........ ok
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/reels.test.sql ............... ok
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/rls_policies.test.sql ........ ok
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/score_weights.test.sql ....... ok
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/segments.test.sql ............ ok
+/home/viet/worktrees/chore-deps-python/supabase/tests/database/storage_buckets.test.sql ..... ok
+Result: PASS
+## firmware: uv run --python 3.11 --locked --extra dev pytest
+.....................................                                    [100%]
+109 passed in 7.14s
+## firmware: ruff check / ruff format --check / mypy
+All checks passed!
+30 files already formatted
+Success: no issues found in 30 source files
+## pipeline: uv run --python 3.11 --locked --extra dev pytest
+..........................................................               [100%]
+130 passed in 12.12s
+## pipeline: ruff check / ruff format --check / mypy
+All checks passed!
+38 files already formatted
+Success: no issues found in 38 source files
+## integration: uv run --python 3.11 --locked --extra dev pytest
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+7 passed, 12 warnings in 2.75s
+## integration: ruff check / ruff format --check / mypy
+All checks passed!
+6 files already formatted
+Success: no issues found in 5 source files
+## resolved versions
+firmware: mypy 2.4.1;ruff 0.17.5;supabase 2.34.1;
+pipeline: litellm 1.109.1;mypy 2.4.1;ruff 0.17.5;supabase 2.34.1;
+integration: litellm 1.109.1;mypy 2.4.1;ruff 0.17.5;supabase 2.34.1;
+
+## pipeline: LiteLLM adapter smoke (mock_response, no network) - docs/superpowers/evidence/dependabot-triage/litellm_smoke.py
+litellm 1.109.1
+vision content: {"score": 7, "location": "outdoor", "people": true}
+LiteLLMVisionClient.score_frames: {"score":3,"location":"indoor","people":false}
+verbose->result: TranscriptionResult(speech_presence_ratio=0.4, silence_ratio=0.6, has_exclamation=True)
+
+## pipeline: python -m pipeline --day 2026-11-15 against local Supabase (no LLM key; no devices seeded)
+INFO __main__ nightly run for 2026-11-15: 1 device(s) processed, 0 failed
+exit=0

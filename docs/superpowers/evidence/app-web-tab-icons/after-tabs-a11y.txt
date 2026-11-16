@@ -1,0 +1,4 @@
+  uid=g71:58_2 tab "Today's Reel" selectable
+  uid=g71:58_3 tab "Raw Footage" selectable
+  uid=g71:58_4 tab "Device" selectable
+  uid=g71:58_5 tab "Archive" focusable focused selectable selected
