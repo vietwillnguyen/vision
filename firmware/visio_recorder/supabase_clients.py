@@ -35,9 +35,11 @@ class SupabaseStorage:
         cheap identity check for H.264 segments, and exact for flag markers,
         which are empty files whose name is their whole content. A different
         size, or a failed lookup, re-raises so the file stays queued. Storage
-        can reject a duplicate before reading the whole body, which leaves a
-        kept-alive connection unusable and hangs the size lookup sent on it, so
-        uploads ask for ``connection: close``.
+        can reject a large duplicate before reading its whole body, which
+        leaves the gateway's upstream connection unusable: the next storage
+        request sent on it (the size lookup) stalls until the client timeout,
+        and the one after that is served normally. So a failed lookup is tried
+        once more before giving up.
 
         storage3's default ``content-type: text/plain`` mislabels every
         segment, so it is set explicitly. Passing the open file rather than
@@ -48,16 +50,15 @@ class SupabaseStorage:
         bucket_api = self._client.storage.from_(bucket)
         try:
             with open(local_path, "rb") as f:
-                bucket_api.upload(
-                    object_path,
-                    f,
-                    {"content-type": content_type, "connection": "close"},
-                )
+                bucket_api.upload(object_path, f, {"content-type": content_type})
         except StorageApiError as err:
             if not _is_duplicate(err):
                 raise
             try:
-                stored_size = _stored_size(bucket_api, object_path)
+                try:
+                    stored_size = _stored_size(bucket_api, object_path)
+                except Exception:
+                    stored_size = _stored_size(bucket_api, object_path)
             except Exception:
                 raise err from None
             if stored_size != local_path.stat().st_size:

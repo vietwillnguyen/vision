@@ -35,6 +35,8 @@ class FakeStorageBucket:
         self._uploads = uploads
         self._objects = objects
         self.info_has_size = True
+        self.lookup_hangs_after_duplicate = False
+        self._hung_lookup_pending = False
 
     def upload(self, path: str, file, file_options=None) -> None:
         # Record what supabase-py's storage3 would turn into the request: the
@@ -52,10 +54,17 @@ class FakeStorageBucket:
         )
         key = (self._bucket, path)
         if key in self._objects:
+            self._hung_lookup_pending = self.lookup_hangs_after_duplicate
             raise StorageApiError("The resource already exists", "Duplicate", "409")
         self._objects[key] = data
 
     def info(self, path: str) -> dict:
+        # Local storage behind kong answers a large duplicate before reading
+        # its body, and the next storage request then stalls until httpx's
+        # ReadTimeout; the request after that is served normally.
+        if self._hung_lookup_pending:
+            self._hung_lookup_pending = False
+            raise TimeoutError("timed out")
         info: dict = {"name": path}
         if self.info_has_size:
             info["size"] = len(self._objects[(self._bucket, path)])
@@ -88,10 +97,12 @@ class FakeStorage:
         self._uploads = uploads
         self.objects: dict = {}
         self.info_has_size = True
+        self.lookup_hangs_after_duplicate = False
 
     def from_(self, bucket: str) -> FakeStorageBucket:
         api = FakeStorageBucket(bucket, self._uploads, self.objects)
         api.info_has_size = self.info_has_size
+        api.lookup_hangs_after_duplicate = self.lookup_hangs_after_duplicate
         return api
 
 
@@ -200,12 +211,16 @@ def test_storage_adapter_never_requests_an_overwrite(tmp_path):
     assert "upsert" not in upload["file_options"]
 
 
-def test_storage_adapter_does_not_reuse_the_upload_connection(tmp_path):
-    # Storage can answer 409 before reading a large body; reusing that
-    # connection hangs the duplicate's size lookup until the client timeout.
-    upload = _upload_one(tmp_path, "20260709_080000.mp4")
+def test_storage_adapter_retry_survives_a_stalled_first_size_lookup(tmp_path):
+    # Storage can answer 409 before reading a large body, and the size lookup
+    # sent next then times out. One stalled lookup must not leave an
+    # already-uploaded segment queued forever.
+    fake, storage = _storage_with_existing(tmp_path, b"payload")
+    fake.storage.lookup_hangs_after_duplicate = True
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"payload")
 
-    assert upload["file_options"]["connection"] == "close"
+    storage.upload("segments", "device-abc/20260709_080000.mp4", local)
 
 
 @pytest.mark.parametrize("info_has_size", [True, False])
