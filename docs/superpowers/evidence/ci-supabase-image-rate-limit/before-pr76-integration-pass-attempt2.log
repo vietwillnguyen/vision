@@ -1,0 +1,20 @@
+# PR #76 rerun that PASSED, run 43929330704 attempt 2, job integration: still throttled + pulls edge-runtime (1.1GB) though [edge_runtime] is off
+197:2026-11-16T18:29:30.9201723Z ##[group]Run supabase/setup-cli@v3
+417:2026-11-16T18:29:36.4466101Z ##[group]Run supabase start
+577:2026-11-16T18:29:41.4631729Z 2.8.1: Pulling from supabase/kong
+579:2026-11-16T18:29:41.4860328Z Retrying after 4s: public.ecr.aws/supabase/realtime:v2.112.1
+581:2026-11-16T18:29:41.4937170Z Retrying after 4s: public.ecr.aws/supabase/storage-api:v1.61.7
+582:2026-11-16T18:29:41.5363038Z 17.6.1.140: Pulling from supabase/postgres
+714:2026-11-16T18:29:45.4397528Z Status: Downloaded newer image for public.ecr.aws/supabase/kong:2.8.1
+715:2026-11-16T18:29:45.6834781Z v1.61.7: Pulling from supabase/storage-api
+716:2026-11-16T18:29:45.6849337Z v2.112.1: Pulling from supabase/realtime
+829:2026-11-16T18:29:57.3119974Z Status: Downloaded newer image for public.ecr.aws/supabase/realtime:v2.112.1
+857:2026-11-16T18:30:01.1949815Z Status: Downloaded newer image for public.ecr.aws/supabase/postgres:17.6.1.140
+862:2026-11-16T18:30:20.8598273Z Status: Downloaded newer image for public.ecr.aws/supabase/storage-api:v1.61.7
+881:2026-11-16T18:30:38.4258025Z v1.74.2: Pulling from supabase/edge-runtime
+910:2026-11-16T18:30:44.2883966Z Status: Downloaded newer image for public.ecr.aws/supabase/edge-runtime:v1.74.2
+913:2026-11-16T18:30:58.5553902Z Started supabase local development setup.
+958:2026-11-16T18:30:59.0178949Z ##[group]Run supabase test db
+968:2026-11-16T18:31:00.0707609Z 3.36: Pulling from supabase/pg_prove
+985:2026-11-16T18:31:00.9625021Z Status: Downloaded newer image for public.ecr.aws/supabase/pg_prove:3.36
+1102:2026-11-16T18:31:09.9700275Z ##[group]Run supabase stop

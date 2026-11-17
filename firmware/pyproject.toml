@@ -58,12 +58,12 @@ module = ["visio_recorder.*"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 
-# pijuice / rpi_ws281x / gpiozero are Raspberry Pi system packages installed via
+# pijuice / spidev / gpiozero are Raspberry Pi system packages installed via
 # apt on the device and deliberately not project dependencies - each import is
 # deferred into __init__ so drivers.py stays importable off-device (see its
 # module docstring). No stubs exist to install.
 [[tool.mypy.overrides]]
-module = ["pijuice.*", "rpi_ws281x.*", "gpiozero.*"]
+module = ["pijuice.*", "spidev.*", "gpiozero.*"]
 ignore_missing_imports = true
 
 

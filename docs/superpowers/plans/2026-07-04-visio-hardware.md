@@ -95,7 +95,23 @@ Expected: a dict like `{'data': 87, 'error': 'NO_ERROR'}` - this is the exact ca
 
 - [ ] [human] **Step 4: Wire the WS2812B NeoPixel**
 
-Connect the NeoPixel's data line to a PWM-capable GPIO pin (per `rpi_ws281x` wiring requirements - typically GPIO18), plus power and ground. Run a one-off test script to set it solid green, then off, confirming visible color response.
+Connect the NeoPixel's data line to GPIO 10 (SPI0 MOSI, header pin 19), plus power and ground.
+Not GPIO 18: that pin is reserved for the I2S microphone's bit clock, and the firmware drives the LED over SPI (pendant spec, "GPIO Pin Map" and "LED driver").
+With `dtparam=spi=on` and `core_freq_fixed=1` in `/boot/firmware/config.txt` and a reboot, run a one-off check from `firmware/` as a user in the `spi` group, cycling through each status colour and then off:
+
+```bash
+.venv/bin/python3 -c "
+import time
+from visio_recorder.drivers import Ws2812LedDriver
+from visio_recorder.led import LedPattern
+led = Ws2812LedDriver()
+for rgb in [(0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 0), (0, 0, 0)]:
+    led.set(rgb, LedPattern.SOLID); time.sleep(2)
+"
+```
+
+Expected: green, blue, yellow, red, then dark, each for two seconds.
+If colours flicker or are wrong, the 3.3 V data level is the first suspect - see the provisioning spec's "Needs the physical device" list.
 
 - [ ] [human] **Step 5: Wire the tactile button**
 

@@ -58,7 +58,7 @@ The hook's own suite is [`scripts/hooks/tests/test-pre-commit.sh`](scripts/hooks
 Every pull request targeting `main`, and every push to `main`, is gated by the workflows below.
 They are split by what each needs to run, so a red check points at one thing:
 
-- [`tests.yml`](.github/workflows/tests.yml) - the subsystem test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) plus the pgTAP database contract. Needs Docker and a live local Supabase instance, so it is the slowest gate.
+- [`tests.yml`](.github/workflows/tests.yml) - the subsystem test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) plus the pgTAP database contract, and a `ci-scripts` job that runs the stub-docker suite for [`scripts/ci/`](scripts/ci). Needs Docker and a live local Supabase instance, so it is the slowest gate.
 - [`lint.yml`](.github/workflows/lint.yml) - `ruff check`, `ruff format --check`, and `mypy` on the Python packages, plus `npm run lint` (eslint), `npm run format:check` (Prettier), and `npm run typecheck` (`tsc --noEmit`) on the app. Needs neither Docker nor Supabase, so it fails fast and independently of the suites above; see [Lint, format, and type-check](#lint-format-and-type-check). Type-checking is the one thing this split does not separate: `tsc --noEmit` runs here and in `tests.yml`, so a type error reddens both checks.
 - [`hooks.yml`](.github/workflows/hooks.yml) - the pre-commit architecture-sync guard's own suite, plus a re-check that the committed `source-sha256` manifest still matches every spec on disk (drift landed via `--no-verify` is invisible to the hook itself); see [Architecture doc](#architecture-doc) above.
 
@@ -69,6 +69,7 @@ The integration job additionally runs a `Run pgTAP database tests` step - `supab
 It is a step inside that job rather than a job of its own because the suites finish in about a second, so a dedicated job would spend a third `supabase start` to save nothing, and because a new job would have to be added as a required status check in branch protection before it actually gated anything, whereas a step inherits the existing job's protection immediately.
 The step runs before the pytest step: each suite wraps itself in `begin`/`rollback`, so it leaves the freshly migrated database untouched for the tests that follow.
 The Supabase CLI is pinned through the workflow-level `SUPABASE_CLI_VERSION` env var rather than `version: latest`, so CI cannot change underneath a commit; Dependabot bumps action refs but not action inputs, so that pin is a manual bump.
+Bump [`.github/supabase-images.txt`](.github/supabase-images.txt) in the same PR: the jobs that start Supabase load exactly those images through [`.github/actions/supabase-images`](.github/actions/supabase-images/action.yml) (from the Actions cache, or seeded from Supabase's GHCR mirror on a miss), then block `public.ecr.aws`, whose anonymous rate limits shared runners kept hitting, along with the `ghcr.io` and Docker Hub fallbacks the CLI tries next, so a stale list fails CI loudly instead of pulling.
 
 [`nightly-reel.yml`](.github/workflows/nightly-reel.yml) is not a gate - it is the scheduled pipeline run.
 
@@ -137,7 +138,9 @@ On boot it runs the battery/LED startup sequence, scans a QR code to onboard WiF
 Configuration is read from environment variables via the systemd unit's `EnvironmentFile=/etc/visio-recorder.env`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR`, `VISIO_VIDEO_WIDTH` (1280), `VISIO_VIDEO_HEIGHT` (720), `VISIO_FRAMERATE` (30), `VISIO_VIDEO_BITRATE` (4000000 bps), `VISIO_MAX_UPLOAD_BYTES` (52428800, the hosted free plan's per-file limit), and `VISIO_SEGMENT_DURATION_MS` (derived from the bitrate and upload limit when unset: 60000 at the defaults).
 Segments over the upload limit are split with `ffmpeg -c copy` before upload, and one that cannot be split is moved to `rejected/` and counted in `device_status.segments_rejected` instead of being retried forever; the [Segment Size Contract](docs/superpowers/specs/2026-07-04-visio-pendant-design.md#segment-size-contract) has the numbers.
 To measure real segment size on the Pi: `rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o /tmp/size-test.h264 && ls -l /tmp/size-test.h264`.
-Device prerequisites beyond this project's `uv.lock`: `apt install zbar-tools` for QR decoding, plus the `pijuice`, `rpi_ws281x`, and `gpiozero` system packages for the battery, LED, and flag-button drivers on the Pi.
+Device prerequisites beyond this project's `uv.lock`: `apt install zbar-tools` for QR decoding, plus the `pijuice`, `python3-spidev`, and `python3-gpiozero` system packages for the battery, LED, and flag-button drivers on the Pi.
+The status LED is a WS2812B driven over SPI0 MOSI (GPIO 10), so the device needs `dtparam=spi=on` and `core_freq_fixed=1` in `/boot/firmware/config.txt`, and the daemon's user needs the `spi` group; GPIO 18-21 stay free for an I2S microphone.
+The pendant spec's "GPIO Pin Map" and "LED driver" sections have the wiring and the SPI timing.
 
 ### Local development
 

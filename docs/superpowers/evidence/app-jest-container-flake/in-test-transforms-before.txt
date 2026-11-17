@@ -1,0 +1,12 @@
+# Full jest suite (live-Supabase suite excluded), cold transform cache, default parallelism, base b809807 (app/ identical to c5a923c).
+# Babel transforms logged by trace/tracing-transformer.js, attributed to the test running in that worker at the time.
+# 'before' = NO_PRELOAD=1, i.e. origin/main behaviour.
+modules transformed inside a running test: 616, 170202 ms of Babel CPU
+   14938 ms  ReonboardContainer builds a QR payload with exactly the fields firmware expects
+   13855 ms  wires useDeviceStatus into DeviceScreen
+   13765 ms  ArchiveContainer renders 30 UTC-midnight-aligned cells ending today
+   13738 ms  AuthScreen shows validation errors when present
+   13375 ms  SegmentPreview calls onSave when the save button is pressed
+   13297 ms  ReonboardScreen renders the form step with SSID and password inputs
+   13223 ms  RawFootageContainer renders the timeline once segments load
+   13216 ms  TodayReelContainer plays today's reel through a signed url

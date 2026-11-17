@@ -14,16 +14,19 @@ from tests.fakes import (
     FakeStorageClient,
     ScriptedStatusClient,
     ScriptedStorageClient,
+    SimulatedSpiDevice,
     TriggerableBatteryReader,
     unlimited_upload_limit,
 )
 from visio_recorder.capture import VideoSettings
+from tests.ws2812_waveform import decode_frame
 from visio_recorder.daemon import (
     LoopDeps,
     load_config,
     run_recording_loop,
     run_startup_sequence,
 )
+from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.led import LedPattern
 from visio_recorder.recording_loop import DiskStats
 
@@ -547,3 +550,53 @@ def test_status_push_failures_at_start_and_exit_never_stop_the_daemon(tmp_path):
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
     assert storage.uploaded == ["device-abc/20260704_120000.mp4"]
+
+
+def test_startup_and_loop_drive_the_spi_led_through_every_colour(tmp_path):
+    # The real led.py and the real SPI driver, with only /dev/spidev0.0
+    # simulated: the colours a WS2812B on GPIO 10 would latch, decoded from the
+    # wire bytes at the clock the SPI block really produces.
+    spi = SimulatedSpiDevice()
+    led = Ws2812LedDriver(spi=spi)
+    # 15% once triggered: low battery, but above the halt threshold.
+    battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=15)
+
+    class OutageThenLowBattery(ScriptedStorageClient):
+        # Uploads 2-4 fail; the battery reads low from upload 5 on. The worker
+        # reads the battery before each upload, so segment 6 is the first to
+        # see it - deterministic, unlike a main-loop trigger.
+        def upload(self, bucket, object_path, local_path):
+            try:
+                super().upload(bucket, object_path, local_path)
+            finally:
+                if self.attempts == 5:
+                    battery.trigger_halt()
+
+    storage = OutageThenLowBattery(fail_on_attempts={2, 3, 4})
+    stop = threading.Event()
+    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 6 else None)
+
+    assert run_startup_sequence(battery, led).proceed
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=battery,
+        led_driver=led,
+        storage_client=storage,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    green, blue, yellow, red = (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 0)
+    colours = [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+    assert spi.overlapping_writes == 0
+    upload = [blue, green]
+    assert colours == (
+        [green]  # startup, healthy battery
+        + upload  # segment 1 uploads
+        + upload  # 2 fails
+        + upload  # 3 fails
+        + upload
+        + [red]  # 4 fails: third in a row
+        + upload  # 5 uploads, counter resets; battery now reads low
+        + [yellow, yellow]  # 6 uploads on a low battery
+    )
