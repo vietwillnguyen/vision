@@ -47,7 +47,7 @@ extra_checks = true
 testpaths = ["tests"]
 
 [build-system]
-requires = ["setuptools>=84"]
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
