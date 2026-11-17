@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "STUB systemctl $*" >> /var/log/visio-sim-stubs.log

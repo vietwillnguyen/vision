@@ -1,0 +1,13 @@
+tests/test_setup_device.py::test_a_non_numeric_swap_size_does_not_abort_the_run[auto] PASSED [  8%]
+tests/test_setup_device.py::test_a_non_numeric_swap_size_does_not_abort_the_run[1024M] PASSED [ 16%]
+tests/test_setup_device.py::test_a_non_numeric_swap_size_does_not_abort_the_run[512 # bumped by hand during bring-up] PASSED [ 25%]
+tests/test_setup_device.py::test_a_non_numeric_swap_size_does_not_abort_the_run["1024"] PASSED [ 33%]
+tests/test_setup_device.py::test_a_non_numeric_swap_size_does_not_abort_the_run[] PASSED [ 41%]
+tests/test_setup_device.py::test_a_missing_swap_size_key_does_not_abort_the_run PASSED [ 50%]
+tests/test_setup_device.py::test_a_swap_size_below_the_floor_is_raised_without_complaint PASSED [ 58%]
+tests/test_setup_device.py::test_a_sufficient_swap_size_is_left_alone PASSED [ 66%]
+tests/test_setup_device.py::test_an_applied_1024mb_swap_file_is_a_no_op_on_re_run PASSED [ 75%]
+tests/test_setup_device.py::test_a_fresh_trixie_device_gets_the_dropin_and_a_reboot PASSED [ 83%]
+tests/test_setup_device.py::test_a_written_but_unapplied_dropin_still_asks_for_the_reboot PASSED [ 91%]
+tests/test_setup_device.py::test_a_hand_edited_dropin_is_put_back PASSED [100%]
+====================== 12 passed, 106 deselected in 0.32s ======================

@@ -1,0 +1,282 @@
+=== provisioning revision 3cdb337cc3c3469441b3195bf5fd6f025e4f429a
+=== run 1: fresh device (stops at the env file template)
+[setup-device] Step 1/10: swap size
+[setup-device] Swap is 208MB - wrote /etc/rpi/swap.conf.d/10-visio.conf pinning a 1024MB swap file, applied on the reboot reported at the end
+[setup-device] Step 2/10: apt packages
+[setup-device] pijuice-base is not in this release's package index - skipping (expected on Raspberry Pi OS trixie, where the Raspberry Pi archive no longer ships it). Keep VISIO_BATTERY_SOURCE=none until a battery driver is installed another way.
+[setup-device] Step 3/10: interfaces
+[setup-device] I2C was disabled - enabled now, reboot required
+[setup-device] No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)
+[setup-device] /boot/firmware/config.txt: set dtparam=spi=on
+[setup-device] /boot/firmware/config.txt: set core_freq_fixed=1
+[setup-device] /boot/firmware/config.txt: set dtoverlay=adau7002-simple
+[setup-device] /boot/firmware/config.txt changed - reboot required for SPI, the core clock and the I2S overlay to take effect
+[setup-device] Step 4/10: uv
+[setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
+[setup-device] Step 5/10: code
+Cloning into '/opt/visio-recorder'...
+done.
+HEAD is now at 3cdb337 fix(firmware): keep the reboot notice from a run that stops at the env file checkpoint
+[setup-device] Provisioned revision 3cdb337cc3c3469441b3195bf5fd6f025e4f429a (requested '3cdb337cc3c3469441b3195bf5fd6f025e4f429a')
+Using CPython 3.13.5 interpreter at: /usr/bin/python3
+Creating virtual environment at: /opt/visio-recorder/firmware/.venv
+Activate with: source /opt/visio-recorder/firmware/.venv/bin/activate
+Resolved 42 packages in 1ms
+   Building visio-recorder @ file:///opt/visio-recorder/firmware
+Downloading pydantic-core (2.0MiB)
+Downloading cryptography (4.5MiB)
+ Downloaded pydantic-core
+ Downloaded cryptography
+      Built visio-recorder @ file:///opt/visio-recorder/firmware
+Prepared 31 packages in 2.66s
+Installed 31 packages in 42ms
+ + annotated-types==0.7.0
+ + anyio==4.14.1
+ + certifi==2026.6.17
+ + cffi==2.0.0
+ + cryptography==49.0.0
+ + deprecation==2.1.0
+ + h11==0.16.0
+ + h2==4.3.0
+ + hpack==4.2.0
+ + httpcore==1.0.9
+ + httpx==0.28.1
+ + hyperframe==6.1.0
+ + idna==3.18
+ + multidict==6.7.1
+ + packaging==26.2
+ + postgrest==2.34.1
+ + propcache==0.5.2
+ + pycparser==3.0
+ + pydantic==2.13.4
+ + pydantic-core==2.46.4
+ + pyjwt==2.15.1
+ + realtime==2.34.1
+ + storage3==2.34.1
+ + supabase==2.34.1
+ + supabase-auth==2.34.1
+ + supabase-functions==2.34.1
+ + typing-extensions==4.16.0
+ + typing-inspection==0.4.2
+ + visio-recorder==0.1.0 (from file:///opt/visio-recorder/firmware)
+ + websockets==15.0.1
+ + yarl==1.24.2
+[setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
+[setup-device] Step 6/10: systemd and ALSA
+[setup-device] Installed /etc/asound.conf from /opt/visio-recorder/firmware/alsa/visio-mic.conf (defines the visio_mic capture device)
+[setup-device] Step 7/10: env file
+[setup-device] Wrote template /etc/visio-recorder.env - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script
+[setup-device] REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or /boot/firmware/config.txt. The re-run reports it again.
+exit=0
+=== env file template written by run 1
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+# Bring-up default: no PiJuice HAT installed yet (availability blocked as of
+# 2026-07-21), running from a USB power bank instead. Switch to "pijuice"
+# once real battery hardware is wired - see
+# docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md
+VISIO_BATTERY_SOURCE=none
+# Editor and interactive shell conveniences (neovim as EDITOR/VISUAL, tmux,
+# ls/git aliases, history settings, a branch-aware prompt, and the managed
+# block in the invoking user's ~/.bashrc) installed by setup-device.sh for
+# whoever runs it. Useful during bring-up; set to 0 for a shipped appliance
+# image to skip them. The daemon ignores this key.
+#
+# Setting it to 0 later removes the managed block from that user's ~/.bashrc
+# on the next run, but deliberately does NOT uninstall the packages - purging
+# neovim out from under an operator mid-bring-up is worse than leaving it
+# there. Setting it to 0 here, on this first run, is the way to get a device
+# that never installs the dev shell at all: this file is written before the
+# developer-shell step runs, so nothing has been installed yet.
+VISIO_DEV_SHELL=1
+# Where recordings are written; must be an absolute path. setup-device.sh
+# creates whatever is set here, and the daemon reads it from this file through
+# the unit's EnvironmentFile=, so those two always agree.
+#
+# visio-preflight reads it too, but only when it can: this file is mode 600
+# root-owned, so a plain SSH user cannot see it. An unprivileged run therefore
+# checks the default below and says so on its data_dir line instead of
+# claiming the configured path was verified. Run it under sudo to check the
+# configured one.
+# VISIO_DATA_DIR=/var/lib/visio-recorder
+#
+# Video and segment size. The defaults are shown commented out; uncomment a
+# line only to change it. A segment must fit under VISIO_MAX_UPLOAD_BYTES (the
+# hosted Supabase free plan's 50 MiB per-file limit) or it is split before
+# upload, so VISIO_SEGMENT_DURATION_MS is derived from the bitrate and the
+# limit while it stays unset - 60000 at these defaults. Setting it explicitly
+# pins it, even if the bitrate later changes.
+# VISIO_VIDEO_WIDTH=1280
+# VISIO_VIDEO_HEIGHT=720
+# VISIO_FRAMERATE=30
+# VISIO_VIDEO_BITRATE=4000000
+# VISIO_MAX_UPLOAD_BYTES=52428800
+# VISIO_SEGMENT_DURATION_MS=60000
+#
+# Audio from the INMP441 I2S microphone. "on" probes VISIO_AUDIO_DEVICE at
+# startup and records video only if it does not open; "off" skips the probe.
+# visio_mic is the ALSA PCM /etc/asound.conf defines.
+# VISIO_AUDIO=on
+# VISIO_AUDIO_DEVICE=visio_mic
+# VISIO_AUDIO_BITRATE=64000
+=== run 2: full provision
+[setup-device] An earlier run made changes that need a reboot, and the device has not rebooted since - the reboot is still required
+[setup-device] Step 1/10: swap size
+[setup-device] /etc/rpi/swap.conf.d/10-visio.conf is already in place but not active yet (swap is 208MB) - it applies on the reboot reported at the end
+[setup-device] Step 2/10: apt packages
+[setup-device] pijuice-base is not in this release's package index - skipping (expected on Raspberry Pi OS trixie, where the Raspberry Pi archive no longer ships it). Keep VISIO_BATTERY_SOURCE=none until a battery driver is installed another way.
+[setup-device] Step 3/10: interfaces
+[setup-device] I2C already enabled
+[setup-device] No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)
+[setup-device] /boot/firmware/config.txt: dtparam=spi=on already set
+[setup-device] /boot/firmware/config.txt: core_freq_fixed=1 already set
+[setup-device] /boot/firmware/config.txt: dtoverlay=adau7002-simple already set
+[setup-device] Step 4/10: uv
+[setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
+[setup-device] Step 5/10: code
+HEAD is now at 3cdb337 fix(firmware): keep the reboot notice from a run that stops at the env file checkpoint
+[setup-device] Provisioned revision 3cdb337cc3c3469441b3195bf5fd6f025e4f429a (requested '3cdb337cc3c3469441b3195bf5fd6f025e4f429a')
+Resolved 42 packages in 1ms
+Checked 31 packages in 0.88ms
+[setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
+[setup-device] Step 6/10: systemd and ALSA
+[setup-device] /etc/asound.conf already installed - no change
+[setup-device] Step 7/10: env file
+[setup-device] /etc/visio-recorder.env already configured
+[setup-device] Step 8/10: developer shell
+[setup-device] Installed: neovim ripgrep fd-find tmux htop tree jq less bash-completion
+[setup-device] Wrote starter /home/pi/.config/nvim/init.lua
+[setup-device] Managed dev-shell block written to /home/pi/.bashrc (owner pi:pi)
+[setup-device] Step 9/10: data dir
+[setup-device] Step 10/10: summary
+[setup-device] Provisioned revision: 3cdb337cc3c3469441b3195bf5fd6f025e4f429a
+[setup-device] VISIO_BATTERY_SOURCE=none
+[setup-device] Data dir: /var/lib/visio-recorder
+[setup-device] Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now.
+[setup-device] Run 'visio-preflight' from any directory to check the runtime environment.
+[setup-device] REBOOT REQUIRED: swap, interface or /boot/firmware/config.txt changes need a reboot to take effect before the daemon will work.
+[setup-device] Setup complete.
+exit=0
+=== /boot/firmware/config.txt changes (diff against the stock file)
+--- stock
++++ provisioned
+@@ -46,3 +46,6 @@
+ dtoverlay=dwc2,dr_mode=host
+ 
+ [all]
++dtparam=spi=on
++core_freq_fixed=1
++dtoverlay=adau7002-simple
+=== /etc/asound.conf matches firmware/alsa/visio-mic.conf
+identical
+=== swap drop-in
+# Managed by visio setup-device.sh - do not edit by hand.
+[Main]
+Mechanism=swapfile
+
+[File]
+FixedSizeMiB=1024
+=== simulated reboot: rpi-swap applies the 1024 MiB swap file, which reports 1048572 kB (issue #49)
+SwapTotal:       1048572 kB
+=== run 3: re-run on the provisioned, rebooted device
+[setup-device] Step 1/10: swap size
+[setup-device] Swap already 1023MB and /etc/rpi/swap.conf.d/10-visio.conf is in place - no change needed
+[setup-device] Step 2/10: apt packages
+[setup-device] pijuice-base is not in this release's package index - skipping (expected on Raspberry Pi OS trixie, where the Raspberry Pi archive no longer ships it). Keep VISIO_BATTERY_SOURCE=none until a battery driver is installed another way.
+[setup-device] Step 3/10: interfaces
+[setup-device] I2C already enabled
+[setup-device] No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)
+[setup-device] /boot/firmware/config.txt: dtparam=spi=on already set
+[setup-device] /boot/firmware/config.txt: core_freq_fixed=1 already set
+[setup-device] /boot/firmware/config.txt: dtoverlay=adau7002-simple already set
+[setup-device] Step 4/10: uv
+[setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
+[setup-device] Step 5/10: code
+HEAD is now at 3cdb337 fix(firmware): keep the reboot notice from a run that stops at the env file checkpoint
+[setup-device] Provisioned revision 3cdb337cc3c3469441b3195bf5fd6f025e4f429a (requested '3cdb337cc3c3469441b3195bf5fd6f025e4f429a')
+Resolved 42 packages in 1ms
+Checked 31 packages in 0.85ms
+[setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
+[setup-device] Step 6/10: systemd and ALSA
+[setup-device] /etc/asound.conf already installed - no change
+[setup-device] Step 7/10: env file
+[setup-device] /etc/visio-recorder.env already configured
+[setup-device] Step 8/10: developer shell
+[setup-device] Installed: neovim ripgrep fd-find tmux htop tree jq less bash-completion
+[setup-device] /home/pi/.config/nvim already has a config - left untouched
+[setup-device] Managed dev-shell block written to /home/pi/.bashrc (owner pi:pi)
+[setup-device] Step 9/10: data dir
+[setup-device] Step 10/10: summary
+[setup-device] Provisioned revision: 3cdb337cc3c3469441b3195bf5fd6f025e4f429a
+[setup-device] VISIO_BATTERY_SOURCE=none
+[setup-device] Data dir: /var/lib/visio-recorder
+[setup-device] Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now.
+[setup-device] Run 'visio-preflight' from any directory to check the runtime environment.
+[setup-device] No reboot required.
+[setup-device] Setup complete.
+exit=0
+=== managed files after run 2 vs run 3
+byte-identical: run 3 changed nothing
+619dd3ef33801464e0344db57f3eb805487055a78f1bd6b2197372c6a2c1fed3  boot/firmware/config.txt
+5c5f930b4e9c6b655e1e91eff04d2838ed0a442b45ba83c7ee069b8201eef20d  etc/asound.conf
+7f5b61302e0fb13ef2bf85b3a433db657dbd4e881150a48f5435cf19cdb01231  etc/rpi/swap.conf.d/10-visio.conf
+e545dae05108e12f362bb9b5c7c58a23a39d2e8d3e46068d9a9166b8ee1de538  etc/systemd/system/visio-recorder.service
+2d9e2cd68f3c80f8b4369e293a6fd54826055c2c1bd9502a6a1475add799edc2  etc/visio-recorder.env
+f9e0c93210348b4cd696b7c43d5c7c4ffa928f6c1df612084ccb07596b009639  home/pi/.bashrc
+c165b6fccadb0c0eace646c8b1ad76c1ec2203fb885eba6da32ab761189f3a35  home/pi/.config/nvim/init.lua
+/opt/visio-recorder/firmware/.venv/bin/visio-preflight
+=== stubbed apt-get install lines (what a real device would install)
+STUB apt-get install -y neovim ripgrep fd-find tmux htop tree jq less bash-completion
+STUB apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git python3-gpiozero python3-spidev alsa-utils
+=== venv imports the apt-installed hardware libraries, and no rpi_ws281x
+spidev /usr/lib/python3/dist-packages/spidev.cpython-313-x86_64-linux-gnu.so
+gpiozero /usr/lib/python3/dist-packages/gpiozero/__init__.py
+ModuleNotFoundError: No module named 'rpi_ws281x'
+=== visio-preflight as the operator (pi), SPI not yet on (before the reboot)
+[INFO] install: /opt/visio-recorder/firmware/visio_recorder
+[BLOCK] rpicam-vid: rpicam-vid not found on PATH - check the apt install step
+[BLOCK] rpicam-still: rpicam-still not found on PATH - check the apt install step
+[BLOCK] zbarimg: zbarimg not found on PATH - check the apt install step
+[OK] ffmpeg: found on PATH
+[BLOCK] nmcli: nmcli not found on PATH - check the apt install step
+[OK] spidev: importable
+[OK] gpiozero: importable
+[OK] supabase: importable
+[BLOCK] spidev0.0: /dev/spidev0.0 missing - SPI0 is off: setup-device.sh sets dtparam=spi=on in /boot/firmware/config.txt, then reboot so it takes effect
+[WARN] core_freq_fixed: could not ask vcgencmd (FileNotFoundError) - set core_freq_fixed=1 in /boot/firmware/config.txt (setup-device.sh does) and reboot
+[BLOCK] camera: rpicam-hello unavailable - FileNotFoundError: check apt install step
+[BLOCK] networkmanager: nmcli unavailable - FileNotFoundError: check apt install step
+[WARN] data_dir: /var/lib/visio-recorder exists but is not writable by uid 1000 - expected for a diagnostic run as a non-daemon user, not a fault; the daemon runs as uid 0 [checked the default: /etc/visio-recorder.env could not be read or parsed, so a configured VISIO_DATA_DIR could not be confirmed - it is mode 600 root-owned, so re-run under sudo to check the configured path; if that fails too the file itself is unreadable or malformed]
+[WARN] audio: no adau7002 sound card in /proc/asound/cards - dtoverlay=adau7002-simple is missing from /boot/firmware/config.txt (setup-device.sh adds it) or the device has not been rebooted since; the daemon will record video only
+[WARN] pijuice: pijuice not installed - expected when VISIO_BATTERY_SOURCE=none
+[WARN] i2c: I2C not enabled - run setup-device.sh, may need a reboot
+exit=1
+=== after the reboot: /dev/spidev0.0 appears root:spi 0660 (simulated node)
+-rw-rw---- 1 root spi 0 Nov 17 03:18 /dev/spidev0.0
+=== visio-preflight as the operator (pi, in the spi group)
+[INFO] install: /opt/visio-recorder/firmware/visio_recorder
+[BLOCK] rpicam-vid: rpicam-vid not found on PATH - check the apt install step
+[BLOCK] rpicam-still: rpicam-still not found on PATH - check the apt install step
+[BLOCK] zbarimg: zbarimg not found on PATH - check the apt install step
+[OK] ffmpeg: found on PATH
+[BLOCK] nmcli: nmcli not found on PATH - check the apt install step
+[OK] spidev: importable
+[OK] gpiozero: importable
+[OK] supabase: importable
+[OK] spidev0.0: /dev/spidev0.0 opens read-write
+[WARN] core_freq_fixed: could not ask vcgencmd (FileNotFoundError) - set core_freq_fixed=1 in /boot/firmware/config.txt (setup-device.sh does) and reboot
+[BLOCK] camera: rpicam-hello unavailable - FileNotFoundError: check apt install step
+[BLOCK] networkmanager: nmcli unavailable - FileNotFoundError: check apt install step
+[WARN] data_dir: /var/lib/visio-recorder exists but is not writable by uid 1000 - expected for a diagnostic run as a non-daemon user, not a fault; the daemon runs as uid 0 [checked the default: /etc/visio-recorder.env could not be read or parsed, so a configured VISIO_DATA_DIR could not be confirmed - it is mode 600 root-owned, so re-run under sudo to check the configured path; if that fails too the file itself is unreadable or malformed]
+[WARN] audio: no adau7002 sound card in /proc/asound/cards - dtoverlay=adau7002-simple is missing from /boot/firmware/config.txt (setup-device.sh adds it) or the device has not been rebooted since; the daemon will record video only
+[WARN] pijuice: pijuice not installed - expected when VISIO_BATTERY_SOURCE=none
+[WARN] i2c: I2C not enabled - run setup-device.sh, may need a reboot
+exit=1
+=== visio-preflight as an operator outside the spi group
+[WARN] spidev0.0: /dev/spidev0.0 exists but uid 1001 cannot open it - add this user to the spi group to drive the LED by hand; the daemon runs as uid 0, so this is not a fault
+[WARN] audio: no adau7002 sound card in /proc/asound/cards - dtoverlay=adau7002-simple is missing from /boot/firmware/config.txt (setup-device.sh adds it) or the device has not been rebooted since; the daemon will record video only
+=== the unit's ExecStartPre (uid 0, env from the EnvironmentFile), audio set to off
+[OK] spidev: importable
+[OK] spidev0.0: /dev/spidev0.0 opens read-write
+[OK] data_dir: /var/lib/visio-recorder writable
+[OK] audio: VISIO_AUDIO=off - recording video only, microphone not checked

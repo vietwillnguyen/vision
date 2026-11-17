@@ -196,9 +196,9 @@ The failed capture's partial `.ts` is queued for upload like any other segment w
 `device_status.audio_active` reports which way it went: on the loop's start and stop upserts, and per segment for the segment just uploaded.
 `VISIO_AUDIO=off` disables audio and the probe.
 
-**Device setup** (not yet in `firmware/scripts/setup-device.sh`, which is in draft PR #26; listed there as a follow-up):
+**Device setup.** `firmware/scripts/setup-device.sh` (PR #26) automates steps 2 and 3 and reports the reboot step 2 needs; steps 1 and 4 need the physical device.
 
-1. Wire the INMP441 (sources: Raspberry Pi's [GPIO pin functions table](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html) for the PCM pins; the `adau7002-simple` overlay in raspberrypi/linux `rpi-6.12.y`):
+1. [ ] (physical) Wire the INMP441 (sources: Raspberry Pi's [GPIO pin functions table](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html) for the PCM pins; the `adau7002-simple` overlay in raspberrypi/linux `rpi-6.12.y`):
 
    | INMP441 pin | Pi GPIO | Header pin | Function |
    |---|---|---|---|
@@ -209,12 +209,14 @@ The failed capture's partial `.ts` is queued for upload like any other segment w
    | VDD | 3V3 | 1 or 17 | power |
    | GND | GND | 6, 9, 14, 20, 25, 30, 34 or 39 | ground |
 
-2. Add `dtoverlay=adau7002-simple` to `/boot/firmware/config.txt` and reboot.
+2. [x] (automated) Add `dtoverlay=adau7002-simple` to `/boot/firmware/config.txt` and reboot - the script adds it idempotently in a section that applies to the Zero 2W and ends with `REBOOT REQUIRED`.
    The overlay makes the Pi the I2S clock producer and registers a capture-only card named `adau7002` (2 channels, S16_LE to S32_LE, 8-96 kHz); the INMP441 needs no driver because it only shifts samples out on the Pi's clocks.
    `googlevoicehat-soundcard` also works with I2S MEMS microphones but drives GPIO 16 as an amplifier enable, so it is not used.
-3. Install `firmware/alsa/visio-mic.conf` as `/etc/asound.conf`.
+3. [x] (automated) Install `firmware/alsa/visio-mic.conf` as `/etc/asound.conf` - an existing different file is kept once as `/etc/asound.conf.pre-visio`.
    It defines `visio_mic`: the card's native stereo S32_LE at 48 kHz, keeping only the left slot (the INMP441 leaves the right one empty), rather than averaging speech with silence.
-4. Check with `arecord -D visio_mic -f S16_LE -r 48000 -c 1 -d 5 test.wav`, then restart `visio-recorder` and confirm `audio_active` is true.
+4. [ ] (physical) Check with `arecord -D visio_mic -f S16_LE -r 48000 -c 1 -d 5 test.wav` (the script installs `alsa-utils`), then restart `visio-recorder` and confirm `audio_active` is true.
+   `visio-preflight` reports the microphone as a warning-only `audio` line: when `visio_mic` does not open it names the missing layer (no `adau7002` card, so the overlay is missing or the device has not rebooted; no `visio_mic` PCM in `/etc/asound.conf`; or, with both present, the wiring or a running daemon holding the device).
+   An open device can still be unwired: I2S reads zeros with nothing connected, so listen to `test.wav` rather than trusting the open alone.
 
 **GPIO 18 was the status LED's pin before the SPI LED rewire (PR #85).** The LED now runs on SPI0 MOSI (GPIO 10, header pin 19), so GPIO 18 is free for BCLK.
 A pendant still wired with the LED on GPIO 18 must move that wire to header pin 19 before the microphone goes on.
@@ -290,8 +292,9 @@ The device needs three things for this driver:
 - `dtparam=spi=on` in `/boot/firmware/config.txt` (SPI0 is off by default).
 - `core_freq_fixed=1` in the same file. The Zero 2W's core clock otherwise scales between 250 and 400 MHz ([`core_freq_min`](https://www.raspberrypi.com/documentation/computers/config_txt.html#overclocking-options)), while `spi-bcm2835` caches the core clock rate once at probe time, so a scaled clock would shift the real SPI rate by up to 1.6x and turn 0 bits into 1s. Raspberry Pi documents this flag as the way to keep peripherals that use the core clock at a consistent speed; it holds the higher 400 MHz rate, so it does not throttle the H.264 encode the way the older `core_freq=250` workaround would.
 - The service user in the `spi` group, which owns `/dev/spidev*` through Raspberry Pi OS's udev rules.
+  The daemon still runs as root, which needs no group; the group matters once the de-rooting follow-up lands.
 
-The provisioning script and systemd unit are being changed in PR #26, which has not merged; the changes it needs for this driver are listed in [`2026-07-21-visio-device-provisioning-design.md`](2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26).
+`firmware/scripts/setup-device.sh` (PR #26) provisions the first two and `python3-spidev`, and preflight blocks on `/dev/spidev0.0` opening and warns when the core clock is not fixed; the status of each item, and the de-rooting that remains, is tracked in [`2026-07-21-visio-device-provisioning-design.md`](2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26).
 
 ### WiFi Onboarding
 

@@ -999,6 +999,15 @@ git commit -m "docs: point firmware prerequisites at setup-device.sh and the pro
 
 This task requires the physical device. Steps needing direct visual/physical confirmation (LED color, camera framing, button feel) are marked **[human]**; the rest are plain SSH commands either the human or an agent with SSH access to the device can run and report output for.
 
+Updated 2026-11-17 for the LED SPI rewire (#85), the I2S microphone (#87) and the 50 MB segment contract (#86), which all landed on `main` after this checklist was written.
+
+- [ ] **Step 0: [human] Rewire the LED and wire the microphone (power off first)**
+
+Move the WS2812B data wire from GPIO 18 (header pin 12) to GPIO 10, SPI0 MOSI (**header pin 19**); its 5 V and GND stay where they are.
+GPIO 18 is now the microphone's bit clock, so this must happen before the microphone goes on.
+Then wire the INMP441: SCK to GPIO 18 (pin 12), WS to GPIO 19 (pin 35), SD to GPIO 20 (pin 38), L/R to GND (pin 39), VDD to 3V3 (pin 1 or 17), GND to any ground (pin 6, 9, 14, 20, 25, 30, 34 or 39).
+The microphone is optional for this checklist: without it the daemon records video only, and steps 4 and 8 say what to expect either way.
+
 - [ ] **Step 1: Run the setup script end to end**
 
 SSH to the Pi, clone/pull isn't needed manually - the script does it:
@@ -1012,7 +1021,8 @@ sudo bash setup-device.sh
 A script fetched by `curl` is not in a git checkout, so step 5/10 prints a loud WARNING that it is falling back to the moving `main` - expected here, and also why this form cannot verify a pre-merge branch.
 To provision an exact revision, clone the repo on the Pi and run `firmware/scripts/setup-device.sh` from that clone (it defaults to the clone's own commit), or set `VISIO_GIT_REF=<branch|tag|sha>` in the root environment the script runs in.
 
-Expected first run (env file doesn't exist yet): script exits 0 after writing `/etc/visio-recorder.env`, printing "fill in SUPABASE_URL and SUPABASE_ANON_KEY, then re-run this script".
+Expected first run (env file doesn't exist yet): script exits 0 after writing `/etc/visio-recorder.env`, printing "fill in SUPABASE_URL and SUPABASE_ANON_KEY, then re-run this script", followed by `REBOOT REQUIRED once the re-run finishes` (it has already edited swap, I2C and `config.txt`).
+The template lists every video, upload-limit and audio tunable commented out at its default; leave them commented.
 
 - [ ] **Step 2: Fill in secrets and re-run**
 
@@ -1021,7 +1031,8 @@ sudo nano /etc/visio-recorder.env   # fill in SUPABASE_URL, SUPABASE_ANON_KEY; l
 sudo bash setup-device.sh
 ```
 
-Expected: completes through all 10 steps; summary reports the provisioned commit SHA, the data dir and `VISIO_BATTERY_SOURCE=none` with the bring-up reminder, and states whether a reboot is required.
+Expected: completes through all 10 steps; summary reports the provisioned commit SHA, the data dir and `VISIO_BATTERY_SOURCE=none` with the bring-up reminder, and `REBOOT REQUIRED` (owed from the first run even though step 3 now logs `already set` for `dtparam=spi=on`, `core_freq_fixed=1` and `dtoverlay=adau7002-simple`).
+Check the edits landed once, under the final `[all]`: `grep -nE '^(dtparam=spi|core_freq_fixed|dtoverlay=adau7002)' /boot/firmware/config.txt`, and that `cmp /etc/asound.conf /opt/visio-recorder/firmware/alsa/visio-mic.conf` is silent.
 The last line is `Setup complete.` and `echo $?` is 0; an `INCOMPLETE` line followed by `Setup incomplete` and exit 1 means the run finished but the device cannot record or start yet - fix what that line names and re-run.
 
 - [ ] **Step 3: Reboot if the summary said to**
@@ -1032,6 +1043,8 @@ sudo reboot
 
 Wait ~30s, then reconnect: `ssh <user>@visio-pendant.local`
 
+Then re-run the script once more, the same way as step 2, to confirm idempotency (#49): it must end `No reboot required.` and `Setup complete.`, with step 1 saying the swap drop-in is in place and no change is needed.
+
 - [ ] **Step 4: Run preflight standalone and confirm no battery warnings**
 
 ```bash
@@ -1040,7 +1053,9 @@ visio-preflight; echo "exit: $?"
 
 No `cd`, no venv path and no `sudo`: the setup script symlinks the console script into `/usr/local/bin` (see the README's firmware section).
 
-Expected: an opening `[INFO] install:` line naming `/opt/visio-recorder/firmware/visio_recorder`, then every check `[OK]`, no `pijuice`/`i2c` lines at all (skipped under `VISIO_BATTERY_SOURCE=none`), `exit: 0`. If anything shows `[BLOCK]`, stop here and fix it before proceeding - that's exactly the failure this task exists to catch before it becomes an opaque daemon crash.
+Expected: an opening `[INFO] install:` line naming `/opt/visio-recorder/firmware/visio_recorder`, then every check `[OK]` - including `spidev`, `spidev0.0` (`/dev/spidev0.0 opens read-write`; `ls -l /dev/spidev0.0` shows `root spi`, mode `crw-rw----`) and `core_freq_fixed` - and `exit: 0`.
+With the microphone wired, `audio` is `[OK]`; without it, `[WARN] audio: ...` naming what is missing, which is expected and does not change the exit code.
+An unprivileged run cannot read the env file, so it also prints the `pijuice`/`i2c` warnings and a `data_dir` caveat (both described as expected); `sudo visio-preflight` should show neither. If anything shows `[BLOCK]`, stop here and fix it before proceeding - that's exactly the failure this task exists to catch before it becomes an opaque daemon crash.
 
 - [ ] **Step 5: Start the daemon and confirm it runs as root with no permission errors**
 
@@ -1050,7 +1065,23 @@ sudo systemctl status visio-recorder
 sudo journalctl -u visio-recorder -f
 ```
 
-Expected: `Active: active (running)`, no `PermissionError` writing the NM keyfile, no LED driver DMA/permission errors.
+Expected: `Active: active (running)`, no `PermissionError` writing the NM keyfile, no LED driver or `/dev/spidev0.0` errors, and the startup log line `recording 1280x720@30 fps at 4000000 bps in 60000 ms segments (upload limit 52428800 bytes)`.
+With the microphone wired there is no `ALSA capture device 'visio_mic' did not open` warning; without it that warning appears once and recording continues video only.
+
+- [ ] **Step 5a: [human] Confirm every LED colour on the SPI wiring**
+
+Watch the LED through startup and the first segments: green (recording), blue (uploading), and red (critical - pull the WiFi for three consecutive segment uploads to see it); yellow (low battery) cannot be shown under `VISIO_BATTERY_SOURCE=none`.
+Colours that flicker or come out wrong point at the 3.3 V data level or a pre-V5 WS2812B (see the provisioning spec's "Needs the physical device" list); also check `vcgencmd measure_clock core` reads 400000000 both idle and while recording.
+
+- [ ] **Step 5b: Confirm the microphone (skip if not wired)**
+
+```bash
+sudo systemctl stop visio-recorder
+arecord -D visio_mic -f S16_LE -r 48000 -c 1 -d 5 test.wav
+sudo systemctl start visio-recorder
+```
+
+Expected: `test.wav` plays back speech at an audible level (an unwired I2S bus still opens but records silence, so listen rather than trusting the open), and the next `device_status` row has `audio_active = true`.
 
 - [ ] **Step 6: [human] Confirm the QR onboarding flow end to end**
 
@@ -1062,13 +1093,13 @@ Press the physical flag button while a segment is recording. Confirm: a `FLAG_YY
 
 - [ ] **Step 8: Confirm a full capture/mux/upload cycle**
 
-Let the daemon run for at least one full segment duration (default 5 minutes, or set `VISIO_SEGMENT_DURATION_MS` lower for a faster test loop):
+Let the daemon run for at least two full segments (one minute each by default since #86):
 
 ```bash
 sudo journalctl -u visio-recorder --since "5 minutes ago" | grep -i "segment\|upload"
 ```
 
-Expected: a `.h264` segment recorded, muxed to `.mp4` via `ffmpeg`, uploaded to Supabase Storage, and a `device_status` row updated with real disk stats.
+Expected: a segment recorded (`.ts` with audio, `.h264` without), muxed to `.mp4` via `ffmpeg`, uploaded to Supabase Storage at about 30 MB (well under the 50 MiB limit, so no split), and a `device_status` row updated with real disk stats and the right `audio_active`.
 
 - [ ] **Step 9: Confirm restart recovery**
 

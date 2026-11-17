@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "STUB dpkg $*" >> /var/log/visio-sim-stubs.log

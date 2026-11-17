@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "STUB update-alternatives $*" >> /var/log/visio-sim-stubs.log
