@@ -62,7 +62,48 @@ class SegmentResult:
     upload_ok: bool
 
 
-def next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState:
+@dataclass
+class UploadHealth:
+    """How many uploads have failed in a row, and so whether to show Critical.
+
+    The upload worker owns one of these for the whole run.
+    It exists because the Critical LED is a *latched* condition, not a
+    per-segment one: the spec says three consecutive upload failures escalate
+    to the Critical red flash and "any subsequent successful upload resets the
+    counter", so from the escalation until that success the LED must stay red.
+    Deriving the LED state from this counter is what keeps a later segment's
+    Uploading blue and Recording green from painting over the red; before this
+    existed the counter lived in the worker, which re-applied Critical only
+    *after* ``on_segment_complete`` had already written both of those colours.
+
+    A rejected segment counts as a failure like a failed upload does, so
+    ``record`` takes the whole segment outcome, not just the upload's.
+    """
+
+    consecutive_failures: int = 0
+
+    @property
+    def is_critical(self) -> bool:
+        return self.consecutive_failures >= UPLOAD_FAILURES_TO_CRITICAL
+
+    def record(self, *, upload_ok: bool) -> None:
+        if upload_ok:
+            self.consecutive_failures = 0
+        else:
+            self.consecutive_failures += 1
+
+
+def next_led_state(
+    battery_is_low: bool, is_uploading: bool, upload_critical: bool = False
+) -> LedState:
+    """The one LED state a given set of conditions calls for.
+
+    ``upload_critical`` outranks everything: a device losing footage is worth
+    more than reporting a low battery or an upload in flight, and it is also
+    what the battery-halt path already does by applying Critical last.
+    """
+    if upload_critical:
+        return LedState.CRITICAL
     if battery_is_low:
         return LedState.LOW_BATTERY
     if is_uploading:
@@ -193,14 +234,31 @@ def on_segment_complete(
     disk_stats_reader: DiskStatsReader,
     data_dir: Path,
     upload_limit: UploadLimit,
+    upload_health: UploadHealth | None = None,
 ) -> SegmentResult:
+    """Mux, queue and upload one finished capture, driving the LED and status.
+
+    ``upload_health`` is the worker's run-long consecutive-failure counter.
+    Both LED states are derived from it, so a run already escalated to
+    Critical keeps showing red through this segment's whole upload instead of
+    blinking blue then green; the counter is updated from this segment's
+    outcome before the second LED call, so a success clears the red here
+    rather than one segment later. Omitting it uploads the segment with no
+    escalation history, which is what a single-segment caller wants.
+    """
+    upload_health = UploadHealth() if upload_health is None else upload_health
     mp4_path = mux_segment(command_runner, h264_path, framerate)
     h264_path.unlink()
     queued_path = enqueue(queue_dir, mp4_path)
 
     battery_status = read_battery_status(battery_reader)
     apply_led_state(
-        led_driver, next_led_state(battery_status.is_low, is_uploading=True)
+        led_driver,
+        next_led_state(
+            battery_status.is_low,
+            is_uploading=True,
+            upload_critical=upload_health.is_critical,
+        ),
     )
 
     outcome = upload_queued(queued_path, storage_client, device_id, upload_limit)
@@ -208,9 +266,15 @@ def on_segment_complete(
     # A rejected (unsplittable, oversized) segment is lost footage, so it
     # counts towards the Critical LED like a failed upload does.
     upload_ok = outcome.failed == 0 and outcome.rejected == 0
+    upload_health.record(upload_ok=upload_ok)
 
     apply_led_state(
-        led_driver, next_led_state(battery_status.is_low, is_uploading=False)
+        led_driver,
+        next_led_state(
+            battery_status.is_low,
+            is_uploading=False,
+            upload_critical=upload_health.is_critical,
+        ),
     )
 
     status = build_device_status(

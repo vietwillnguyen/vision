@@ -1524,8 +1524,11 @@ git commit -m "feat: add visio-recorder systemd unit"
 - **Recording loop:** resolved (issue #7) - `main()` supervises `rpicam-vid` as a subprocess via `run_recording_loop`, and calls `on_segment_complete` (Task 11) once per completed 5-minute segment, on a background worker thread per the spec.
 - **Real disk-usage stats:** resolved (issue #7) - `on_segment_complete`'s `DeviceStatus` now reads real usage via `ShutilDiskStatsReader`.
 - **Upload error handling:** resolved (issue #7) - the upload half of `on_segment_complete` is wrapped in try/except.
-  On failure the LED is restored to a normal state and the queued file is left in place - the startup queue flush is the retry mechanism.
+  On failure the queued file is left in place - the startup queue flush is the retry mechanism.
   Three consecutive failures escalate to the CRITICAL LED.
+  **Amended (Critical LED latch):** the LED is restored to a normal state only while the run is *below* the escalation threshold.
+  Both of `on_segment_complete`'s LED states are now derived from a shared `UploadHealth` counter, so from the third consecutive failure until the success that resets it the LED stays Critical red through every segment, including while that segment uploads.
+  Before the amendment the worker applied Critical only after `on_segment_complete` had already written Uploading blue and restored Recording green, so a pendant in a sustained outage showed those colours for most of every segment.
 - **Bookworm networking:** resolved (issue #7) - stock Raspberry Pi OS Bookworm uses NetworkManager, which does not honor `/etc/wpa_supplicant/wpa_supplicant.conf`, so onboarding writes an NM keyfile (`/etc/NetworkManager/system-connections/visio.nmconnection`) instead of `write_wpa_supplicant`'s output path.
 - **FLAG marker naming:** resolved (issue #9) - `write_flag_marker` now writes dated `FLAG_YYYYMMDD_HHMMSS.marker` names matching the pipeline's `parse_flag_marker_filename` contract (Task 11 there), so same-second presses on different days no longer collide at the storage object path.
 

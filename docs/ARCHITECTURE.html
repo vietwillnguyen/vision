@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: ac815080f60e4e606c772ef90ac2a430fba246bd896c17bc2ad50927a8d52fd9  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: d36a30fda8cd18cd7c4a43c43d71231d81aa824cb122939238ea264be3d3e265  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-17 (merge of main: LED over SPI + 50 MB segment contract + I2S audio) -->
+<!-- regenerated-at: 2026-11-17 (latched Critical LED for consecutive upload failures) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -216,8 +216,9 @@ flowchart TD
   M["main thread"] -- "rpicam-vid per 5-min segment" --> Q["queue.Queue"]
   Q --> W["worker thread<br/>(sole owner of upload state + LED)"]
   W -- "mux + upload" --> S["Supabase Storage"]
-  W -- "3 consecutive failures" --> CRIT["CRITICAL LED"]
-  W -- "any success" --> RESET["reset failure counter"]
+  W --> H["UploadHealth<br/>(consecutive-failure counter)"]
+  H -- "3 in a row: latched" --> CRIT["CRITICAL LED held through<br/>every following segment's upload"]
+  H -- "any success" --> RESET["reset counter, LED back to green/yellow"]
   M -- "battery halt or stop signal" --> DRAIN["drain queue, join() worker"]
   DRAIN --> OFF["upsert recording_active=false<br/>(any exit path; never raises)"]
   OFF --> HALT["apply CRITICAL after worker fully joins (halt only)"]
@@ -251,6 +252,7 @@ flowchart TD
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
+        <li>The upload-failure CRITICAL LED is <em>latched</em>, not momentary: both of <span class="font-mono text-xs bg-base-200 rounded px-1">on_segment_complete</span>'s LED states are derived from the shared <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter, and <span class="font-mono text-xs bg-base-200 rounded px-1">upload_critical</span> outranks low battery and uploading in <span class="font-mono text-xs bg-base-200 rounded px-1">next_led_state</span>. Red therefore survives the following segments' upload blue and recording green until the success that resets the counter. Previously the worker applied red only after those two colours had already been written, so a sustained outage looked normal for most of every segment.</li>
       </ul>
     </div>
 

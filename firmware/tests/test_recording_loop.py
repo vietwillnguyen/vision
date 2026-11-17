@@ -21,8 +21,10 @@ from visio_recorder.capture import VideoSettings
 from visio_recorder.daemon import LoopDeps, run_recording_loop
 from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
+    UPLOAD_FAILURES_TO_CRITICAL,
     DiskStats,
     ShutilDiskStatsReader,
+    UploadHealth,
     flush_pending,
     next_led_state,
     on_segment_complete,
@@ -49,6 +51,108 @@ def test_next_led_state_shows_recording_when_idle_and_healthy():
     assert (
         next_led_state(battery_is_low=False, is_uploading=False) == LedState.RECORDING
     )
+
+
+def test_next_led_state_lets_upload_critical_outrank_every_other_condition():
+    for battery_is_low in (False, True):
+        for is_uploading in (False, True):
+            assert (
+                next_led_state(
+                    battery_is_low, is_uploading=is_uploading, upload_critical=True
+                )
+                == LedState.CRITICAL
+            )
+
+
+def test_upload_health_escalates_at_three_failures_and_stays_critical():
+    # Snapshotted into a list rather than asserted in the loop: re-reading
+    # health.is_critical after an assert narrows it for mypy, which then calls
+    # the opposite assert unreachable.
+    health = UploadHealth()
+    escalated = []
+    for failures in range(1, UPLOAD_FAILURES_TO_CRITICAL + 3):
+        health.record(upload_ok=False)
+        escalated.append((failures, health.is_critical))
+
+    assert UPLOAD_FAILURES_TO_CRITICAL == 3
+    assert escalated == [(1, False), (2, False), (3, True), (4, True), (5, True)]
+
+
+def test_upload_health_is_cleared_by_one_successful_upload():
+    health = UploadHealth(consecutive_failures=7)
+
+    before = health.is_critical
+    health.record(upload_ok=True)
+    after = health.is_critical
+
+    assert (before, after) == (True, False)
+    assert health.consecutive_failures == 0
+
+
+def test_on_segment_complete_holds_critical_red_across_a_failing_segment(tmp_path):
+    # The LED bug end to end at the function level: a segment handled while
+    # the run is already Critical must not write the upload blue or the
+    # recording green at all.
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    led = FakeLedDriver()
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+
+    result = on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=FakeCommandRunner(),
+        storage_client=FailingStorageClient(),
+        status_client=FakeStatusClient(),
+        led_driver=led,
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        upload_health=health,
+    )
+
+    assert result.upload_ok is False
+    assert led.calls == [((255, 0, 0), LedPattern.FLASHING)] * 2
+    assert health.consecutive_failures == UPLOAD_FAILURES_TO_CRITICAL + 1
+
+
+def test_on_segment_complete_clears_critical_red_on_the_success_itself(tmp_path):
+    # The clear rule from the spec: "any subsequent successful upload resets
+    # the counter". The restore LED call must already see the reset, so the
+    # green lands on the successful segment rather than one segment later.
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    led = FakeLedDriver()
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+
+    on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=FakeCommandRunner(),
+        storage_client=FakeStorageClient(),
+        status_client=FakeStatusClient(),
+        led_driver=led,
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        upload_health=health,
+    )
+
+    assert led.calls == [
+        ((255, 0, 0), LedPattern.FLASHING),  # still Critical while uploading
+        ((0, 255, 0), LedPattern.SOLID),  # the success clears it
+    ]
+    assert not health.is_critical
 
 
 def test_on_segment_complete_happy_path(tmp_path):

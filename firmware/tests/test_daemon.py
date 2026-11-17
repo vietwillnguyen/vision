@@ -307,23 +307,23 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
     assert runner.record_count == 8
     assert storage.uploaded == ["device-abc/20260704_120004.mp4"]
     # All LED calls come from the single worker in FIFO order, so the exact
-    # sequence is deterministic. on_segment_complete applies UPLOADING then a
-    # restore per segment; the worker must re-apply CRITICAL after every
-    # failure at-or-past the threshold (segments 3, 4, and 8), so the LED
-    # state after draining each of those segments is CRITICAL.
+    # sequence is deterministic. on_segment_complete makes exactly two LED
+    # calls per segment, both derived from the shared UploadHealth: once the
+    # counter is at the threshold, every state it derives is CRITICAL, so the
+    # red is held across whole segments (4 and 5's upload) rather than being
+    # overwritten by UPLOADING blue and restored RECORDING green and then
+    # re-applied. The success at segment 5 resets the counter, which is what
+    # clears the red.
     per_segment = [UPLOADING_LED, RECORDING_LED]
     assert led.calls == (
         per_segment  # 1: fail (1 consecutive)
         + per_segment  # 2: fail (2)
-        + per_segment
-        + [CRITICAL_LED]  # 3: fail (3 -> threshold)
-        + per_segment
-        + [CRITICAL_LED]  # 4: fail (4 -> stays critical)
-        + per_segment  # 5: success (reset)
+        + [UPLOADING_LED, CRITICAL_LED]  # 3: fail (3 -> threshold)
+        + [CRITICAL_LED, CRITICAL_LED]  # 4: fail (4 -> stays critical)
+        + [CRITICAL_LED, RECORDING_LED]  # 5: success resets and clears it
         + per_segment  # 6: fail (1)
         + per_segment  # 7: fail (2)
-        + per_segment
-        + [CRITICAL_LED]  # 8: fail (3 -> threshold again)
+        + [UPLOADING_LED, CRITICAL_LED]  # 8: fail (3 -> threshold again)
     )
 
 
@@ -875,8 +875,53 @@ def test_startup_and_loop_drive_the_spi_led_through_every_colour(tmp_path):
         + upload  # segment 1 uploads
         + upload  # 2 fails
         + upload  # 3 fails
-        + upload
-        + [red]  # 4 fails: third in a row
-        + upload  # 5 uploads, counter resets; battery now reads low
+        + [blue, red]  # 4 fails: third in a row
+        + [red, green]  # 5 uploads: red held until the success clears it
         + [yellow, yellow]  # 6 uploads on a low battery
+    )
+
+
+def test_critical_red_survives_the_next_segments_upload_colours(tmp_path):
+    # Regression test for the Critical LED being painted over: the worker
+    # applied CRITICAL after the third consecutive upload failure, but the
+    # next segment's on_segment_complete then wrote UPLOADING blue and
+    # restored RECORDING green before the worker re-applied red, so a
+    # pendant in a sustained outage showed blue/green for most of every
+    # segment instead of the red the spec promises. The spec's clear rule
+    # for Critical is "any subsequent successful upload resets the counter"
+    # (docs/superpowers/specs/2026-07-04-visio-pendant-design.md), so the
+    # decoded waveform must stay red from the escalation until segment 5
+    # succeeds.
+    spi = SimulatedSpiDevice()
+    led = Ws2812LedDriver(spi=spi)
+    # Segments 1-4 fail (CRITICAL from 3 on), segment 5 succeeds and clears it.
+    storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 4})
+    stop = threading.Event()
+    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 5 else None)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=led,
+        storage_client=storage,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    green, blue, red = (0, 255, 0), (0, 0, 255), (255, 0, 0)
+    colours = [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+    assert runner.record_count == 5
+    assert storage.uploaded == ["device-abc/20260704_120004.mp4"]
+    # Nothing but red between the escalation and the success that clears it.
+    first_red = colours.index(red)
+    clearing_green = len(colours) - 1
+    assert colours[clearing_green] == green
+    assert set(colours[first_red:clearing_green]) == {red}
+    # Spelled out in full: once Critical, even the upload colour is red.
+    assert colours == (
+        [blue, green]  # 1: fail (1 consecutive)
+        + [blue, green]  # 2: fail (2)
+        + [blue, red]  # 3: fail (3 -> Critical)
+        + [red, red]  # 4: fail (4 -> stays Critical, no blue, no green)
+        + [red, green]  # 5: success resets the counter and clears Critical
     )

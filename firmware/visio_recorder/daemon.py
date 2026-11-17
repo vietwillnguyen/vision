@@ -35,10 +35,10 @@ from visio_recorder.onboarding import (
     run_onboarding,
 )
 from visio_recorder.recording_loop import (
-    UPLOAD_FAILURES_TO_CRITICAL,
     DiskStatsReader,
     ShutilDiskStatsReader,
     StatusClient,
+    UploadHealth,
     build_device_status,
     flush_pending,
     on_segment_complete,
@@ -248,11 +248,18 @@ def run_recording_loop(
     """Record segments on the main thread; upload them on one background worker.
 
     The main thread only records and enqueues. A single worker thread owns all
-    upload state (segment count, consecutive failures) and every LED call except
-    the halt CRITICAL applied here at exit. Both the halt and stop paths drain
-    the queue via a ``None`` sentinel before joining the worker; on halt, the
-    CRITICAL LED is applied after the drain so it is the final LED state and
-    cannot be overwritten by the drained segments' LED restores.
+    upload state (segment count, the ``UploadHealth`` consecutive-failure
+    counter) and every LED call except the halt CRITICAL applied here at exit.
+    Both the halt and stop paths drain the queue via a ``None`` sentinel before
+    joining the worker; on halt, the CRITICAL LED is applied after the drain so
+    it is the final LED state and cannot be overwritten by the drained
+    segments' LED restores.
+
+    The worker no longer applies the upload-failure CRITICAL itself.
+    ``on_segment_complete`` derives both of its LED states from the shared
+    ``UploadHealth``, so once three uploads have failed in a row the red is
+    held for every following segment - including while it uploads - until an
+    upload succeeds and resets the counter.
 
     ``device_status.recording_active`` is pushed True before the first capture
     and False once the loop has exited for any reason (stop, halt, or a
@@ -275,7 +282,7 @@ def run_recording_loop(
 
     def worker() -> None:
         segments_uploaded_today = 0
-        consecutive_failures = 0
+        upload_health = UploadHealth()
         while True:
             item = work.get()
             if item is None:
@@ -295,6 +302,7 @@ def run_recording_loop(
                     disk_stats_reader=deps.disk_stats_reader,
                     data_dir=deps.data_dir,
                     upload_limit=deps.upload_limit,
+                    upload_health=upload_health,
                 )
             except Exception:
                 _logger.exception(
@@ -304,15 +312,6 @@ def run_recording_loop(
                 continue
             segments_uploaded_today = result.segments_uploaded_today
             uploaded_today[0] = segments_uploaded_today
-            if result.upload_ok:
-                consecutive_failures = 0
-            else:
-                consecutive_failures += 1
-                # ">=" so a sustained outage re-applies CRITICAL after every
-                # failure past the threshold; on_segment_complete has already
-                # restored a normal LED state by this point.
-                if consecutive_failures >= UPLOAD_FAILURES_TO_CRITICAL:
-                    apply_led_state(deps.led_driver, LedState.CRITICAL)
 
     audio = deps.audio
     _push_recording_status(

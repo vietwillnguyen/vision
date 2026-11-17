@@ -163,6 +163,9 @@ A single Python systemd service manages the full device lifecycle.
 - The worker thread is the sole owner of upload state (segment count, consecutive-failure count) and every upload-related LED transition; the main thread only records and enqueues.
 - The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop - a failed upload's file stays queued and the *next process startup's* flush (step 5 above) is the retry mechanism.
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
+  Critical is a latched condition rather than a momentary one, so it is derived from the consecutive-failure counter (`UploadHealth`) instead of being applied once at the moment of escalation.
+  That makes the red survive the following segments: while the counter is at or past the threshold, the segment's own upload shows red too, not the Uploading blue and the restored Recording green, and only the resetting success returns the LED to green or yellow.
+  Critical outranks both low battery and uploading in `next_led_state`, matching the battery-halt path, which already applies Critical last so it cannot be overwritten.
 - On successful upload, local file is deleted to free SD space.
 
 ### Audio Capture (as-built)
