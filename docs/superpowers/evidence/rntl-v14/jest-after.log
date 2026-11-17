@@ -1,0 +1,39 @@
+PASS __tests__/hooks/useAuth.test.tsx (34.98 s)
+PASS __tests__/containers/DeviceContainer.test.tsx (35.021 s)
+PASS __tests__/screens/ReonboardScreen.test.tsx (35.211 s)
+PASS __tests__/hooks/useSegments.test.tsx (35.834 s)
+PASS __tests__/containers/ReonboardContainer.test.tsx (36.881 s)
+PASS __tests__/logic/timeline.test.ts (36.188 s)
+PASS __tests__/hooks/useSlotThumbnails.test.tsx (35.718 s)
+PASS __tests__/hooks/useDeviceStatus.test.tsx (35.628 s)
+PASS __tests__/containers/ArchiveContainer.test.tsx (36.523 s)
+PASS __tests__/hooks/useReel.test.tsx (35.052 s)
+PASS __tests__/components/SegmentPreview.test.tsx (36.303 s)
+PASS __tests__/screens/AuthScreen.test.tsx (35.283 s)
+PASS __tests__/screens/DeviceScreen.test.tsx
+PASS __tests__/logic/dates.test.ts
+PASS __tests__/hooks/useSlotThumbnails.moduleMissing.test.tsx
+PASS __tests__/hooks/useSignedUrl.test.tsx
+PASS __tests__/containers/TodayReelContainer.test.tsx
+PASS __tests__/screens/ArchiveScreen.test.tsx
+PASS __tests__/components/ReelPlayer.test.tsx
+PASS __tests__/logic/segmentExport.test.ts
+PASS __tests__/hooks/useDevice.test.tsx
+PASS __tests__/containers/AuthContainer.test.tsx
+PASS __tests__/logic/regeneratePreferences.test.ts
+PASS __tests__/logic/heatmap.test.ts
+PASS __tests__/lib/supabase.test.ts
+PASS __tests__/components/TimelineScrubber.test.tsx
+PASS __tests__/lib/videoThumbnails.web.test.ts
+PASS __tests__/logic/authValidation.test.ts
+PASS __tests__/lib/mediaSave.web.test.ts
+PASS __tests__/lib/webColorScheme.test.ts
+PASS __tests__/containers/RawFootageContainer.test.tsx (41.963 s)
+PASS __tests__/hooks/useDeviceStatus.live.test.tsx (40.617 s)
+PASS __tests__/App.test.tsx (55.262 s)
+
+Test Suites: 33 passed, 33 total
+Tests:       130 passed, 130 total
+Snapshots:   0 total
+Time:        58.723 s
+Ran all test suites.
