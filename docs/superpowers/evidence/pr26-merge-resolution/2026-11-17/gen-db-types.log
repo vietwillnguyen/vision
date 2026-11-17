@@ -1,0 +1,11 @@
+$ (cd . && scripts/gen-db-types.sh && git diff --exit-code -- app/src/generated/database.ts integration/tests/fixtures/public_schema.json && echo no drift)
+gen-db-types: reusing running local Supabase, applying pending migrations
+Connecting to local database...
+{"applied":[],"message":"Migrations applied"}
+Connecting to db 5432
+Stopped services: [supabase_imgproxy_vision supabase_pg_meta_vision supabase_studio_vision supabase_edge_runtime_vision supabase_analytics_vision supabase_vector_vision supabase_pooler_vision]
+A new version of Supabase CLI is available: v3.1.0 (currently installed v2.109.0)
+We recommend updating regularly for new features and bug fixes: https://supabase.com/docs/guides/cli/getting-started#updating-the-supabase-cli
+gen-db-types: wrote app/src/generated/database.ts and integration/tests/fixtures/public_schema.json
+no drift
+exit=0

@@ -13,8 +13,17 @@ dev = [
     "mypy>=2.4.1",
 ]
 
-# Without a build-system table uv treats this as a virtual project: the package
-# is never installed into .venv and only imports because uv run puts the cwd on
+[project.scripts]
+# Operator-facing diagnostic. Without this (and the [build-system] table below)
+# the package is never installed into the venv, and `python3 -m
+# visio_recorder.preflight` only resolves when the caller happens to be cd'd
+# into firmware/ - see tests/test_preflight_entrypoint.py.
+visio-preflight = "visio_recorder.preflight:main"
+
+# Required, not cosmetic: with no [build-system] uv classifies the project as
+# "virtual" (uv.lock records source = { virtual = "." } rather than
+# editable = ".") and installs only its dependencies, never visio_recorder
+# itself. The package would then import only because uv run puts the cwd on
 # sys.path, so `python -m visio_recorder.*` breaks from any other directory.
 [build-system]
 requires = ["setuptools>=84"]

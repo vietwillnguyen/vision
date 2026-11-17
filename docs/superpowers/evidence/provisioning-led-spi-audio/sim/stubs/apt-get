@@ -1,0 +1,5 @@
+#!/bin/sh
+# Logs instead of installing: the packages preflight needs are baked into the
+# image, and rpicam-apps only exists in the Raspberry Pi archive.
+echo "STUB apt-get $*" >> /var/log/visio-sim-stubs.log
+exit 0

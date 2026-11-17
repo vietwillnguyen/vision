@@ -1,0 +1,58 @@
+=== provisioning revision 6db4c89450f43cd725a0eaca63aa77a14e6d66d7
+=== A) fresh device, raspi-config removed: run 1 (env-file checkpoint)
+[setup-device] Step 3/10: interfaces
+[setup-device] ERROR: raspi-config is not installed, so SPI and I2C were NOT enabled. This script provisions Raspberry Pi OS, which ships raspi-config; on any other image, install it or flash Raspberry Pi OS Lite and re-run.
+[setup-device] Wrote template /etc/visio-recorder.env - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script
+[setup-device] REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or /boot/firmware/config.txt. The re-run reports it again.
+[setup-device] INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config (see the step 3 error above) - without SPI the status LED cannot be driven and 'visio-preflight' will report spidev0.0 as a blocking failure.
+[setup-device] Setup incomplete - see the INCOMPLETE lines above. Fix what they name, fill in /etc/visio-recorder.env and re-run this script.
+exit=1
+--- /etc/visio-recorder.env template written? / owed-reboot marker:
+-rw------- 1 root root 2603 Nov 17 10:01 /etc/visio-recorder.env
+-rw-r--r-- 1 root root 0 Nov 17 10:01 /run/visio-setup-reboot-required
+marker-present
+--- config.txt spi/i2c lines (must still be commented: nothing enabled them)
+6:#dtparam=i2c_arm=on
+8:#dtparam=spi=on
+--- A2) operator fills the env file and re-runs, still without raspi-config
+[setup-device] Step 3/10: interfaces
+[setup-device] ERROR: raspi-config is not installed, so SPI and I2C were NOT enabled. This script provisions Raspberry Pi OS, which ships raspi-config; on any other image, install it or flash Raspberry Pi OS Lite and re-run.
+[setup-device] INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config (see the step 3 error above) - without SPI the status LED cannot be driven and 'visio-preflight' will report spidev0.0 as a blocking failure.
+[setup-device] REBOOT REQUIRED: swap, interface or /boot/firmware/config.txt changes need a reboot to take effect before the daemon will work.
+[setup-device] Setup incomplete - see the INCOMPLETE lines above. Fix what they name and re-run this script.
+exit=1
+--- A3) raspi-config installed again, re-run converges
+[setup-device] Step 3/10: interfaces
+[setup-device] SPI was disabled - enabled now via raspi-config, reboot required
+[setup-device] I2C was disabled - enabled now via raspi-config, reboot required
+[setup-device] Camera already enabled
+[setup-device] REBOOT REQUIRED: swap, interface or /boot/firmware/config.txt changes need a reboot to take effect before the daemon will work.
+[setup-device] Setup complete.
+exit=0
+get_spi=0
+get_i2c=0
+=== B) fresh device, /boot/firmware/config.txt on a read-only mount (real upstream raspi-config)
+--- upstream do_spi 0 exit status on the read-only file:
+do_spi_exit=0
+get_spi=1
+[setup-device] Step 3/10: interfaces
+[setup-device] ERROR: 'raspi-config nonint do_spi 0' left SPI disabled. Check that /boot/firmware/config.txt is on a mounted, writable boot partition with free space.
+[setup-device] ERROR: 'raspi-config nonint do_i2c 0' left I2C disabled. Check that /boot/firmware/config.txt is on a mounted, writable boot partition with free space.
+[setup-device] Camera already enabled
+[setup-device] ERROR: could not write 'core_freq_fixed=1' into /boot/firmware/config.txt - it is unchanged. Check that the boot partition is mounted read-write and has free space.
+[setup-device] ERROR: could not write 'dtoverlay=adau7002-simple' into /boot/firmware/config.txt - it is unchanged. Check that the boot partition is mounted read-write and has free space.
+[setup-device] Wrote template /etc/visio-recorder.env - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script
+[setup-device] REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or /boot/firmware/config.txt. The re-run reports it again.
+[setup-device] INCOMPLETE: /boot/firmware/config.txt could not be edited (see the step 3 error above), so core_freq_fixed=1 or the microphone overlay may be missing - the status LED colours can be corrupted and the daemon may record video only.
+[setup-device] INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config (see the step 3 error above) - without SPI the status LED cannot be driven and 'visio-preflight' will report spidev0.0 as a blocking failure.
+[setup-device] Setup incomplete - see the INCOMPLETE lines above. Fix what they name, fill in /etc/visio-recorder.env and re-run this script.
+exit=1
+marker-present
+=== C) control: fresh healthy device, run 1 checkpoint
+[setup-device] Step 3/10: interfaces
+[setup-device] SPI was disabled - enabled now via raspi-config, reboot required
+[setup-device] I2C was disabled - enabled now via raspi-config, reboot required
+[setup-device] Camera already enabled
+[setup-device] Wrote template /etc/visio-recorder.env - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script
+[setup-device] REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or /boot/firmware/config.txt. The re-run reports it again.
+exit=0

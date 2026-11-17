@@ -1,0 +1,2689 @@
+"""Tests for the parts of setup-device.sh that can run without a real device.
+
+Most of that script is OS provisioning (apt, raspi-config, systemd) and is only
+verifiable on hardware. Two pieces are not, and both are easy to get subtly
+wrong, so they are pinned here:
+
+* the ``~/.bashrc`` managed block, whose whole contract is that re-running the
+  script is a byte-for-byte no-op rather than an append - and that disabling
+  the gate removes it again, leaving the rest of the file untouched;
+* the ``VISIO_DEV_SHELL`` gate that lets an appliance image opt out, including
+  the step ordering that makes it reachable at all.
+
+A third class is pinned here too: the failure signalling of the steps that can
+report success while having done nothing. Provisioning that resolves a stale
+revision, a gate that reads a quoted value as its opposite, and a strip that
+truncates the operator's file are all silent, so each has a test that asserts
+the loud outcome rather than the happy path.
+
+Rather than restate the shell logic, each test extracts the real functions out
+of the script and runs them, so drift between script and test is impossible.
+"""
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import urllib.error
+import urllib.request
+from collections.abc import Iterator, Mapping
+from pathlib import Path
+
+import pytest
+
+_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "setup-device.sh"
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("bash") is None or shutil.which("awk") is None,
+    reason="setup-device.sh's managed-block logic needs bash and awk",
+)
+
+
+def _script_text() -> str:
+    return _SCRIPT.read_text()
+
+
+def _extract_function(name: str) -> str:
+    match = re.search(
+        rf"^{re.escape(name)}\(\) \{{\n.*?^\}}$",
+        _script_text(),
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, f"{name}() not found in {_SCRIPT} - did it get renamed?"
+    return match.group(0)
+
+
+def _extract_constants() -> str:
+    return "\n".join(
+        line
+        for line in _script_text().splitlines()
+        if re.match(r"^BASHRC_(BEGIN|END)=", line)
+    )
+
+
+def _extract_assignment(name: str) -> str:
+    match = re.search(rf"^{re.escape(name)}=.*$", _script_text(), re.MULTILINE)
+    assert match, f"{name}= not found in {_SCRIPT} - did it get renamed?"
+    return match.group(0)
+
+
+def _marker(name: str) -> str:
+    """The literal begin/end line the script writes, as the script defines it."""
+    match = re.search(rf'^BASHRC_{name}="(.*)"$', _script_text(), re.MULTILINE)
+    assert match, f"BASHRC_{name} not found in {_SCRIPT}"
+    return match.group(1)
+
+
+def _step_block(step: int) -> str:
+    """Everything the script does between step ``step`` and the step after it."""
+    text = _script_text()
+    start = text.index(f'log "Step {step}/10: ')
+    return text[start : text.index(f'log "Step {step + 1}/10: ', start)]
+
+
+def _extract_bashrc_body() -> str:
+    match = re.search(
+        r"dev_shell_body=.*?<<'BASHRC_BODY'\n(.*?)\nBASHRC_BODY\n",
+        _script_text(),
+        re.DOTALL,
+    )
+    assert match, "the managed ~/.bashrc body heredoc was not found in setup-device.sh"
+    return match.group(1)
+
+
+def _shell_lib(tmp_path: Path, *functions: str) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    lib = tmp_path / "extracted.sh"
+    # log() comes along unconditionally: the error paths under test call it, and
+    # a missing log would abort them at 127 before they could report anything.
+    lib.write_text(
+        _extract_constants()
+        + "\n"
+        + "\n".join(_extract_function(f) for f in ("log", *functions))
+        + "\n"
+    )
+    return lib
+
+
+def _run(
+    lib: Path, snippet: str, env_file: Path | None = None
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\nsource "{lib}"\n{snippet}'],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": "/usr/bin:/bin", "ENV_FILE": str(env_file or "/nonexistent")},
+    )
+
+
+def _dev_shell_step() -> str:
+    return (
+        _script_text()
+        .split('log "Step 8/10: developer shell"')[1]
+        .split('log "Step 9/10')[0]
+    )
+
+
+def _reboot_prelude(marker: Path) -> str:
+    """The script's real owed-reboot setup before step 1, with the marker moved."""
+    text = _script_text()
+    start = text.index("\nload_pending_reboot\n")
+    return "\n".join(
+        [
+            _extract_function("load_pending_reboot"),
+            _extract_function("record_pending_reboot"),
+            f'REBOOT_MARKER="{marker}"',
+            "reboot_needed=false",
+            text[start : text.index('log "Step 1/10: ', start)],
+        ]
+    )
+
+
+# Both managed-block entry points reach the operator's file through
+# replace_file_via_tmp, so every lib that exercises one carries the whole chain.
+_BLOCK_HELPERS = (
+    "strip_managed_block",
+    "warn_unterminated_block",
+    "replace_file_via_tmp",
+)
+_WRITE_FUNCTIONS = (*_BLOCK_HELPERS, "write_managed_block")
+_REMOVE_FUNCTIONS = (*_BLOCK_HELPERS, "remove_managed_block")
+
+
+def _write_block(tmp_path: Path, rc: Path, times: int) -> None:
+    lib = _shell_lib(tmp_path, *_WRITE_FUNCTIONS)
+    body = tmp_path / "body.txt"
+    body.write_text(_extract_bashrc_body())
+    snippet = "\n".join(
+        [f'body="$(cat "{body}")"']
+        + [f'write_managed_block "{rc}" "$body" "$(id -un):$(id -gn)"'] * times
+    )
+    result = _run(lib, snippet)
+    assert result.returncode == 0, result.stderr
+
+
+def _remove_block(tmp_path: Path, rc: Path, times: int = 1) -> None:
+    lib = _shell_lib(tmp_path, *_REMOVE_FUNCTIONS)
+    snippet = "\n".join([f'remove_managed_block "{rc}" "$(id -un):$(id -gn)"'] * times)
+    result = _run(lib, snippet)
+    assert result.returncode == 0, result.stderr
+
+
+_EXISTING_BASHRC = """\
+# ~/.bashrc
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+export OPERATOR_SETTING=1
+"""
+
+
+def test_second_run_leaves_bashrc_byte_identical(tmp_path):
+    once, twice = tmp_path / "once" / ".bashrc", tmp_path / "twice" / ".bashrc"
+    for rc in (once, twice):
+        rc.parent.mkdir()
+        rc.write_text(_EXISTING_BASHRC)
+
+    _write_block(tmp_path / "a", once, times=1)
+    _write_block(tmp_path / "b", twice, times=2)
+
+    assert twice.read_bytes() == once.read_bytes()
+
+
+def test_repeated_runs_never_duplicate_the_managed_block(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+
+    _write_block(tmp_path / "w", rc, times=5)
+
+    text = rc.read_text()
+    assert text.count("# >>> visio-recorder dev shell") == 1
+    assert text.count("# <<< visio-recorder dev shell") == 1
+
+
+def test_managed_block_preserves_content_outside_it(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+
+    _write_block(tmp_path / "w", rc, times=3)
+
+    assert "export OPERATOR_SETTING=1" in rc.read_text()
+
+
+def test_managed_block_is_written_when_bashrc_does_not_exist(tmp_path):
+    rc = tmp_path / "fresh" / ".bashrc"
+    rc.parent.mkdir()
+
+    _write_block(tmp_path / "w", rc, times=2)
+
+    assert rc.is_file()
+    assert rc.read_text().count("# >>> visio-recorder dev shell") == 1
+
+
+def test_disabling_the_switch_removes_the_managed_block(tmp_path):
+    # Turning VISIO_DEV_SHELL off has to reverse the shell change, not merely
+    # stop refreshing it, or an appliance image can never be reached.
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    _write_block(tmp_path / "w", rc, times=1)
+    assert "visio-recorder dev shell" in rc.read_text()
+
+    _remove_block(tmp_path / "r", rc)
+
+    assert rc.read_bytes() == _EXISTING_BASHRC.encode()
+
+
+def test_removing_the_block_is_a_no_op_when_none_is_present(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+
+    _remove_block(tmp_path / "r", rc, times=3)
+
+    assert rc.read_bytes() == _EXISTING_BASHRC.encode()
+
+
+def test_removing_the_block_is_a_no_op_when_the_file_does_not_exist(tmp_path):
+    rc = tmp_path / "fresh" / ".bashrc"
+    rc.parent.mkdir()
+
+    _remove_block(tmp_path / "r", rc)
+
+    assert not rc.exists()
+
+
+def test_removing_and_rewriting_the_block_round_trips_to_the_same_bytes(tmp_path):
+    # Flipping the switch off and back on must land on the enabled fixed
+    # point, not accumulate blank lines at the seam.
+    once, cycled = tmp_path / "once" / ".bashrc", tmp_path / "cycled" / ".bashrc"
+    for rc in (once, cycled):
+        rc.parent.mkdir()
+        rc.write_text(_EXISTING_BASHRC)
+    _write_block(tmp_path / "a", once, times=1)
+
+    _write_block(tmp_path / "b", cycled, times=1)
+    _remove_block(tmp_path / "c", cycled)
+    _write_block(tmp_path / "d", cycled, times=1)
+
+    assert cycled.read_bytes() == once.read_bytes()
+
+
+# --------------------------------------------------------------------------
+# A begin marker with no end marker. "Skip to EOF" would delete every personal
+# setting below it, permanently and silently, on the next run - so both paths
+# must refuse the file instead of rewriting it.
+# --------------------------------------------------------------------------
+
+_UNTERMINATED_BASHRC = f"""\
+# ~/.bashrc
+{_marker("BEGIN")}
+alias ll='ls -la'
+export OPERATOR_SETTING=1
+"""
+
+
+def test_writing_refuses_a_managed_block_with_no_end_marker(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_UNTERMINATED_BASHRC)
+    lib = _shell_lib(tmp_path / "lib", *_WRITE_FUNCTIONS)
+    body = tmp_path / "body.txt"
+    body.write_text(_extract_bashrc_body())
+    snippet = "\n".join(
+        [
+            f'body="$(cat "{body}")"',
+            f'if write_managed_block "{rc}" "$body" "$(id -un):$(id -gn)"; then',
+            "  echo WROTE",
+            "else",
+            "  echo REFUSED",
+            "fi",
+        ]
+    )
+
+    result = _run(lib, snippet)
+
+    assert result.returncode == 0, result.stderr
+    assert "REFUSED" in result.stdout
+    assert "no matching end marker" in result.stdout
+    assert rc.read_text() == _UNTERMINATED_BASHRC, (
+        "the operator's settings must survive"
+    )
+    assert not (tmp_path / ".bashrc.visio-setup.tmp").exists()
+
+
+def test_removing_refuses_a_managed_block_with_no_end_marker(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_UNTERMINATED_BASHRC)
+    lib = _shell_lib(tmp_path / "lib", *_REMOVE_FUNCTIONS)
+    snippet = "\n".join(
+        [
+            f'if remove_managed_block "{rc}" "$(id -un):$(id -gn)"; then',
+            "  echo REMOVED",
+            "else",
+            "  echo REFUSED",
+            "fi",
+        ]
+    )
+
+    result = _run(lib, snippet)
+
+    assert result.returncode == 0, result.stderr
+    assert "REFUSED" in result.stdout
+    assert rc.read_text() == _UNTERMINATED_BASHRC
+    assert not (tmp_path / ".bashrc.visio-setup.tmp").exists()
+
+
+# --------------------------------------------------------------------------
+# A failing write. Both functions are called as `if fn ...; then`, which
+# suppresses errexit for their whole body, so nothing but an explicit check
+# stands between a half-written temp file and an mv over the operator's
+# ~/.bashrc. A full SD card is the realistic cause: step 2 and step 8 both
+# apt-install into this filesystem.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="a read-only directory does not stop root"
+)
+def test_writing_leaves_the_original_intact_when_the_temp_write_fails(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    lib = _shell_lib(tmp_path / "lib", *_WRITE_FUNCTIONS)
+    body = tmp_path / "body.txt"
+    body.write_text(_extract_bashrc_body())
+    snippet = "\n".join(
+        [
+            f'body="$(cat "{body}")"',
+            f'if write_managed_block "{rc}" "$body" "$(id -un):$(id -gn)"; then',
+            "  echo WROTE",
+            "else",
+            "  echo FAILED",
+            "fi",
+        ]
+    )
+    home.chmod(0o555)
+    try:
+        result = _run(lib, snippet)
+    finally:
+        home.chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    assert "FAILED" in result.stdout, "an unwritable temp path must not report success"
+    assert "is unchanged" in result.stdout
+    assert rc.read_bytes() == _EXISTING_BASHRC.encode()
+    assert not (home / ".bashrc.visio-setup.tmp").exists(), (
+        "no temp litter in the operator's home"
+    )
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="a read-only directory does not stop root"
+)
+def test_removing_leaves_the_original_intact_when_the_temp_write_fails(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    _write_block(tmp_path / "w", rc, times=1)
+    with_block = rc.read_bytes()
+    lib = _shell_lib(tmp_path / "lib", *_REMOVE_FUNCTIONS)
+    snippet = "\n".join(
+        [
+            f'if remove_managed_block "{rc}" "$(id -un):$(id -gn)"; then',
+            "  echo REMOVED",
+            "else",
+            "  echo FAILED",
+            "fi",
+        ]
+    )
+    home.chmod(0o555)
+    try:
+        result = _run(lib, snippet)
+    finally:
+        home.chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    assert "FAILED" in result.stdout
+    assert rc.read_bytes() == with_block
+    assert not (home / ".bashrc.visio-setup.tmp").exists()
+
+
+def test_a_partial_temp_file_is_never_moved_over_the_original(tmp_path):
+    # The ENOSPC window the checks above cannot reach: a write that reports
+    # success but lands short. Only a temp file whose byte count matches the
+    # content may be renamed over the operator's file.
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    lib = _shell_lib(tmp_path / "lib", "replace_file_via_tmp")
+    tmp_file = tmp_path / ".bashrc.visio-setup.tmp"
+    snippet = "\n".join(
+        [
+            # A short write that still reports success: full output down a pipe
+            # (so the expected length is honest), truncated to a file.
+            "printf() {",
+            '  if [[ -p /dev/stdout ]]; then command printf "$@"',
+            '  else command printf "%s" "${2:0:4}"; fi',
+            "}",
+            f'if replace_file_via_tmp "{rc}" "{tmp_file}" "$(id -un):$(id -gn)" '
+            '"a much longer body"; then',
+            "  echo REPLACED",
+            "else",
+            "  echo REFUSED",
+            "fi",
+        ]
+    )
+
+    result = _run(lib, snippet)
+
+    assert result.returncode == 0, result.stderr
+    assert "REFUSED" in result.stdout
+    assert "refusing to move a partial file" in result.stdout
+    assert rc.read_bytes() == _EXISTING_BASHRC.encode()
+    assert not tmp_file.exists()
+
+
+def test_a_refused_bashrc_rewrite_does_not_abort_the_run():
+    # Same rule as the unresolvable-user guard: an optional convenience must
+    # never cost the data dir and the summary that follow it.
+    step = _dev_shell_step()
+
+    assert "if write_managed_block" in step
+    assert "if remove_managed_block" in step
+
+
+def test_generated_bashrc_is_valid_bash_and_defines_the_conveniences(tmp_path):
+    rc = tmp_path / ".bashrc"
+    rc.write_text(_EXISTING_BASHRC)
+    _write_block(tmp_path / "w", rc, times=1)
+
+    syntax = subprocess.run(
+        ["bash", "-n", str(rc)], capture_output=True, text=True, timeout=60
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+    # An interactive shell: the fixture's `case $- in *i*)` guard - the one
+    # Raspberry Pi OS ships - returns early otherwise, so a non-interactive
+    # source would never reach the managed block at all.
+    sourced = subprocess.run(
+        [
+            "bash",
+            "--norc",
+            "-i",
+            "-c",
+            f'source "{rc}"; alias ll; echo "HC=$HISTCONTROL"; '
+            "type -t __visio_git_branch",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert "ls -la" in sourced.stdout, sourced.stderr
+    assert "HC=ignoreboth:erasedups" in sourced.stdout
+    assert "function" in sourced.stdout
+
+
+# The env file is a systemd EnvironmentFile, where quoting the value is both
+# valid and idiomatic - and unavoidable once SUPABASE_ANON_KEY is a real JWT.
+# A gate that reads VISIO_DEV_SHELL="0" as anything but 0 ships a pendant with
+# a dev toolchain on it, silently, which is the outcome the gate exists to
+# prevent. So the quoted and space-padded spellings are pinned on both sides.
+_GATE = ("env_file_value", "dev_shell_enabled")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0",
+        "no",
+        "off",
+        "false",
+        "FALSE",
+        "Off",
+        "NO",
+        '"0"',
+        "'0'",
+        '"off"',
+        "0 ",
+        " 0",
+        " false ",
+    ],
+)
+def test_dev_shell_gate_is_disabled_for_falsey_values(tmp_path, value):
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text(f"SUPABASE_URL=x\nVISIO_DEV_SHELL={value}\n")
+
+    result = _run(_shell_lib(tmp_path, *_GATE), "dev_shell_enabled", env_file)
+
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "value", ["1", "yes", "true", "", '"1"', "'yes'", '"true"', "1 ", '""', "TRUE"]
+)
+def test_dev_shell_gate_is_enabled_for_truthy_values(tmp_path, value):
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text(f"VISIO_DEV_SHELL={value}\n")
+
+    result = _run(_shell_lib(tmp_path, *_GATE), "dev_shell_enabled", env_file)
+
+    assert result.returncode == 0
+
+
+def test_dev_shell_gate_defaults_to_enabled_when_key_or_file_is_absent(tmp_path):
+    lib = _shell_lib(tmp_path, *_GATE)
+    without_key = tmp_path / "visio-recorder.env"
+    without_key.write_text("SUPABASE_URL=x\n")
+
+    assert _run(lib, "dev_shell_enabled", without_key).returncode == 0
+    assert _run(lib, "dev_shell_enabled", tmp_path / "missing.env").returncode == 0
+
+
+def test_quoted_but_empty_supabase_values_are_reported_as_missing(tmp_path):
+    # Same parser, same class of bug: SUPABASE_ANON_KEY="" is empty as far as
+    # the daemon is concerned, so the env-file check must not let it through on
+    # the strength of the two quote characters.
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text('SUPABASE_URL="https://x.supabase.co"\nSUPABASE_ANON_KEY=""\n')
+
+    result = _run(_shell_lib(tmp_path, "env_file_value"), _step_block(7), env_file)
+
+    assert result.returncode == 1
+    assert "missing values for: SUPABASE_ANON_KEY" in result.stdout
+
+
+def test_quoted_supabase_values_satisfy_the_env_file_check(tmp_path):
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text(
+        'SUPABASE_URL="https://x.supabase.co"\nSUPABASE_ANON_KEY="ey.a.jwt"\n'
+    )
+
+    result = _run(_shell_lib(tmp_path, "env_file_value"), _step_block(7), env_file)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "already configured" in result.stdout
+
+
+def test_env_file_template_documents_the_dev_shell_switch():
+    text = _script_text()
+
+    assert "VISIO_DEV_SHELL=1" in text, (
+        "the env-file template must ship the key, defaulting to enabled"
+    )
+    template = text.split("""cat > "${ENV_FILE}" <<'EOF'""")[1].split("\nEOF\n")[0]
+    # The switch cannot uninstall packages, and pre-seeding is the only route
+    # to a device that never carries the toolchain. Both are limitations an
+    # operator must read rather than discover.
+    assert "does NOT uninstall" in template
+    assert "first run" in template
+
+
+# --------------------------------------------------------------------------
+# Step ordering. The gate is only honest if the operator can see the switch
+# before anything acts on it: on a fresh device the env-file step writes the
+# template and exits, so the developer-shell step first runs on the re-run.
+# --------------------------------------------------------------------------
+
+
+def test_the_env_file_step_runs_before_the_developer_shell_step():
+    text = _script_text()
+
+    assert text.index('log "Step 7/10: env file"') < text.index(
+        'log "Step 8/10: developer shell"'
+    )
+
+
+def test_step_numbering_is_contiguous_and_matches_the_stated_total():
+    numbers = [int(n) for n in re.findall(r'log "Step (\d+)/10: ', _script_text())]
+
+    assert numbers == list(range(1, 11))
+
+
+def test_the_disabled_branch_removes_the_block_rather_than_only_skipping():
+    disabled = (
+        _dev_shell_step()
+        .split("elif ! dev_shell_enabled; then")[1]
+        .split("\nelse\n")[0]
+    )
+
+    assert "remove_managed_block" in disabled
+    assert "apt-get" not in disabled, "the disabled branch must not install anything"
+
+
+def test_an_unresolvable_dev_user_skips_the_step_instead_of_aborting(tmp_path):
+    # `getent passwd` exits 2 for an unknown account and pipefail propagates
+    # that, so an unguarded lookup takes the whole run down at step 8 - losing
+    # the data dir and summary over an optional convenience. The guard's own
+    # message says "skipping", so it has to skip.
+    step = _dev_shell_step()
+    lookup = step.split('dev_user="${SUDO_USER:-root}"')[1].split(
+        "elif ! dev_shell_enabled"
+    )[0]
+    snippet = "\n".join(
+        [
+            'log() { echo "[log] $*"; }',
+            'dev_user="definitely-no-such-user"',
+            lookup.rstrip(),
+            "fi",
+            "echo REACHED_THE_NEXT_STEP",
+        ]
+    )
+
+    result = _run(_shell_lib(tmp_path), snippet)
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping the developer shell step" in result.stdout
+    assert "REACHED_THE_NEXT_STEP" in result.stdout
+
+
+def test_dev_shell_targets_the_invoking_user_not_root():
+    # The script re-execs itself as root at the top, so $HOME is /root from
+    # then on. Every path under the dev-shell step must derive from SUDO_USER.
+    step = _dev_shell_step()
+
+    assert 'dev_user="${SUDO_USER:-root}"' in step
+    assert 'dev_home="$(getent passwd "${dev_user}"' in step
+
+    # Comments and the two quoted heredocs are operator-facing text evaluated
+    # by the operator's own shell, where $HOME and ~ are correct; only the
+    # script's own statements are checked.
+    body = _extract_bashrc_body()
+    code = "\n".join(
+        line
+        for line in step.replace(body, "").splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", "--"))
+    )
+    assert "HOME" not in code, (
+        f"the dev-shell step must not write to root's home:\n{code}"
+    )
+    assert "~/" not in code, f"tilde would expand to root's home here:\n{code}"
+
+
+def test_provisioning_pins_an_explicit_revision_instead_of_pulling():
+    text = _script_text()
+
+    code = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert not re.search(r"\bgit\b.*\bpull\b", code), (
+        "a bare git pull makes provisioning non-reproducible"
+    )
+    assert 'checkout --force --detach "${sha}"' in text
+    assert "VISIO_GIT_REF" in text
+
+
+# --------------------------------------------------------------------------
+# checkout_revision, exercised against a real local repository. These cover the
+# failure modes a bare `git pull` has: a moving branch, a diverged checkout,
+# and local edits.
+# --------------------------------------------------------------------------
+
+_GIT_ENV = {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/nonexistent",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@example.com",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@example.com",
+}
+
+pytest_git = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+
+
+def _git(cwd: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=_GIT_ENV,
+    )
+    assert result.returncode == 0, f"git {' '.join(args)}: {result.stderr}"
+    return result.stdout.strip()
+
+
+@pytest.fixture
+def origin(tmp_path):
+    """A two-commit upstream repo, plus a tag on the first commit."""
+    repo = tmp_path / "origin"
+    repo.mkdir()
+    _git(repo, "init", "--quiet", "--initial-branch=main")
+    (repo / "firmware.txt").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "v1")
+    first = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "tag", "v1.0.0")
+    (repo / "firmware.txt").write_text("v2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "v2")
+    second = _git(repo, "rev-parse", "HEAD")
+    return repo, first, second
+
+
+def _checkout(
+    tmp_path: Path, install: Path, repo: Path, ref: str
+) -> subprocess.CompletedProcess:
+    lib = _shell_lib(tmp_path / "lib", "checkout_revision")
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'set -euo pipefail\nsource "{lib}"\n'
+            f'checkout_revision "{install}" "{repo}" "{ref}"',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=_GIT_ENV,
+    )
+
+
+@pytest_git
+def test_checkout_revision_clones_and_pins_a_tag(tmp_path, origin):
+    repo, first, _ = origin
+    install = tmp_path / "opt"
+
+    result = _checkout(tmp_path, install, repo, "v1.0.0")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == first
+    assert (install / "firmware.txt").read_text() == "v1\n"
+
+
+@pytest_git
+def test_checkout_revision_pins_a_bare_sha(tmp_path, origin):
+    repo, first, _ = origin
+    install = tmp_path / "opt"
+
+    result = _checkout(tmp_path, install, repo, first)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == first
+
+
+@pytest_git
+def test_checkout_revision_prefers_the_remote_branch_over_a_stale_local_one(
+    tmp_path, origin
+):
+    repo, first, second = origin
+    install = tmp_path / "opt"
+    _checkout(tmp_path, install, repo, "main")
+    # Rewind the local branch: a `git pull` here would merge, and any resolution
+    # that consulted the local ref first would provision the wrong commit.
+    _git(install, "checkout", "--quiet", "-B", "main", first)
+
+    result = _checkout(tmp_path / "second", install, repo, "main")
+
+    assert result.stdout.strip() == second, result.stderr
+
+
+@pytest_git
+def test_checkout_revision_converges_from_a_diverged_branch_with_local_edits(
+    tmp_path, origin
+):
+    repo, first, second = origin
+    install = tmp_path / "opt"
+    _checkout(tmp_path, install, repo, "main")
+    # Exactly the state a bare `git pull` refuses: a divergent commit plus an
+    # uncommitted edit to a tracked file.
+    _git(install, "checkout", "--quiet", "-B", "local-drift", first)
+    (install / "firmware.txt").write_text("hand-edited on the device\n")
+    _git(install, "commit", "--quiet", "-am", "drift")
+    (install / "firmware.txt").write_text("and then edited again\n")
+
+    result = _checkout(tmp_path / "second", install, repo, "main")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == second
+    assert (install / "firmware.txt").read_text() == "v2\n"
+
+
+@pytest_git
+def test_checkout_revision_preserves_untracked_paths(tmp_path, origin):
+    # firmware/.venv lives inside the checkout and must survive an update.
+    repo, _, second = origin
+    install = tmp_path / "opt"
+    _checkout(tmp_path, install, repo, "main")
+    venv = install / ".venv" / "bin"
+    venv.mkdir(parents=True)
+    (venv / "visio-preflight").write_text("#!/bin/sh\n")
+
+    result = _checkout(tmp_path / "second", install, repo, "main")
+
+    assert result.returncode == 0, result.stderr
+    assert (venv / "visio-preflight").is_file()
+
+
+@pytest_git
+def test_checkout_revision_fails_on_an_unresolvable_ref(tmp_path, origin):
+    repo, _, _ = origin
+    install = tmp_path / "opt"
+
+    result = _checkout(tmp_path, install, repo, "no-such-branch")
+
+    assert result.returncode == 1, (
+        "status 1 is what makes the caller print the ref advice"
+    )
+    assert result.stdout.strip() == ""
+    # The two failures need different operator advice - push your branch versus
+    # fix your network - so they must not report each other.
+    assert "fetching" not in result.stderr
+
+
+@pytest_git
+def test_checkout_revision_fails_loudly_when_the_fetch_fails(tmp_path, origin):
+    # The case that otherwise reports success on stale firmware. The install dir
+    # already carries a remote-tracking origin/main from an earlier run, so an
+    # unchecked fetch failure falls straight through to rev-parse, resolves that
+    # OLD commit, prints it and returns 0 - and the script logs "Provisioned
+    # revision <old sha>" over a device that never received the new firmware.
+    repo, _, second = origin
+    install = tmp_path / "opt"
+    _checkout(tmp_path, install, repo, "main")
+    assert _git(install, "rev-parse", "refs/remotes/origin/main") == second
+    (repo / "firmware.txt").write_text("v3\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "v3")
+    third = _git(repo, "rev-parse", "HEAD")
+
+    result = _checkout(
+        tmp_path / "second", install, tmp_path / "unreachable-origin", "main"
+    )
+
+    assert result.returncode == 2, (
+        "git failures report themselves and must not draw ref advice"
+    )
+    assert result.stdout.strip() == "", (
+        "a SHA on stdout is read by the caller as a good provision"
+    )
+    assert second not in result.stdout and third not in result.stdout
+    assert "fetching" in result.stderr
+    assert (install / "firmware.txt").read_text() == "v2\n", (
+        "the checkout is left where it was"
+    )
+
+
+@pytest_git
+def test_checkout_revision_fails_loudly_when_the_clone_fails(tmp_path):
+    install = tmp_path / "opt"
+
+    result = _checkout(tmp_path, install, tmp_path / "unreachable-origin", "main")
+
+    assert result.returncode == 2
+    assert result.stdout.strip() == ""
+    assert "cloning" in result.stderr
+
+
+@pytest_git
+def test_checkout_revision_fails_loudly_when_the_install_dir_is_not_a_healthy_repo(
+    tmp_path, origin
+):
+    # A .git that is not a repository takes the update path rather than the
+    # clone path, so the first git command to run is `remote set-url`.
+    repo, _, _ = origin
+    install = tmp_path / "opt"
+    (install / ".git").mkdir(parents=True)
+
+    result = _checkout(tmp_path, install, repo, "main")
+
+    assert result.returncode == 2
+    assert result.stdout.strip() == ""
+    assert "origin remote" in result.stderr
+
+
+@pytest_git
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="a read-only directory does not stop root"
+)
+def test_checkout_revision_fails_loudly_when_the_working_tree_cannot_be_written(
+    tmp_path, origin
+):
+    # Stands in for the disk-full checkout: fetch succeeds and the ref resolves,
+    # so an unchecked `git checkout` leaves the tree on the old revision while
+    # the function prints the new SHA - and uv sync then installs from it.
+    repo, first, second = origin
+    install = tmp_path / "opt"
+    _checkout(tmp_path, install, repo, first)
+    install.chmod(0o555)
+    try:
+        result = _checkout(tmp_path / "second", install, repo, "main")
+    finally:
+        install.chmod(0o755)
+
+    assert result.returncode == 2
+    assert second not in result.stdout
+    assert (install / "firmware.txt").read_text() == "v1\n"
+
+
+# --------------------------------------------------------------------------
+# The caller's advice. checkout_revision fails for five distinct reasons; only
+# one of them is "that ref does not exist". The last line on the operator's
+# screen must not contradict the three lines above it.
+# --------------------------------------------------------------------------
+
+
+def _checkout_caller() -> str:
+    text = _script_text()
+    start = text.index("checkout_status=0")
+    return text[start : text.index('log "Provisioned revision', start)]
+
+
+def _run_caller(tmp_path: Path, status: int) -> subprocess.CompletedProcess:
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            'INSTALL_DIR="/opt/visio-recorder"',
+            'REPO_URL="https://example.invalid/vision.git"',
+            'requested_ref="some-ref"',
+            f"checkout_revision() {{ return {status}; }}",
+            _checkout_caller(),
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+
+
+def test_the_caller_gives_ref_advice_only_when_the_ref_is_the_problem(tmp_path):
+    unresolvable = _run_caller(tmp_path, 1)
+
+    assert unresolvable.returncode == 1
+    assert "cannot resolve 'some-ref'" in unresolvable.stdout
+    assert "push it first" in unresolvable.stdout
+
+
+def test_the_caller_stays_silent_when_the_function_already_explained(tmp_path):
+    git_failure = _run_caller(tmp_path, 2)
+
+    assert git_failure.returncode == 1, "a reported git failure is still fatal"
+    assert "push it first" not in git_failure.stdout, "this contradicts the real cause"
+    assert "cannot resolve" not in git_failure.stdout
+
+
+@pytest_git
+def test_same_ref_on_two_devices_installs_the_same_revision(tmp_path, origin):
+    repo, _, second = origin
+
+    a = _checkout(tmp_path / "a", tmp_path / "device-a", repo, "main")
+    b = _checkout(tmp_path / "b", tmp_path / "device-b", repo, "main")
+
+    assert a.stdout.strip() == b.stdout.strip() == second
+
+
+def test_uv_installer_is_version_pinned_and_checksum_verified():
+    text = _script_text()
+
+    assert re.search(r'^UV_VERSION="\d+\.\d+\.\d+"$', text, re.MULTILINE)
+    assert re.search(r'^UV_INSTALLER_SHA256="[0-9a-f]{64}"$', text, re.MULTILINE)
+    assert "sha256sum --check --status" in text
+    assert "astral.sh/uv/install.sh" not in text, (
+        "the unpinned installer URL must not be piped to sh"
+    )
+
+
+def test_the_pinned_digest_matches_what_astral_actually_serves():
+    # A digest that is merely well-formed proves nothing: a typo, a bad
+    # copy-paste, or a version bump that moved UV_VERSION without moving
+    # UV_INSTALLER_SHA256 all leave the pin syntactically perfect and make
+    # every device's step 4 abort at the checksum. Fetch the real artifact and
+    # compare. A mismatch here is also the signal that upstream re-published
+    # that URL's contents, which is exactly what pinning exists to catch.
+    version_match = re.search(r'^UV_VERSION="([^"]+)"$', _script_text(), re.MULTILINE)
+    digest_match = re.search(
+        r'^UV_INSTALLER_SHA256="([^"]+)"$', _script_text(), re.MULTILINE
+    )
+    # Named rather than left to an AttributeError on None: a renamed or deleted
+    # constant should say which one went missing.
+    assert version_match is not None, "setup-device.sh has no UV_VERSION pin"
+    assert digest_match is not None, "setup-device.sh has no UV_INSTALLER_SHA256 pin"
+    version = version_match.group(1)
+    expected = digest_match.group(1)
+    url = f"https://astral.sh/uv/{version}/install.sh"
+    # astral.sh answers urllib's default User-Agent with 403, so send the one
+    # the script's own curl invocation would - otherwise this test looks like a
+    # network outage and skips itself on every run.
+    request = urllib.request.Request(url, headers={"User-Agent": "curl/8"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        pytest.skip(
+            f"cannot reach {url} ({exc}) - the pin was not verified against upstream"
+        )
+
+    assert hashlib.sha256(payload).hexdigest() == expected, (
+        f"{url} no longer hashes to the digest pinned in setup-device.sh. Either the "
+        f"pin is wrong and every device will abort at step 4, or upstream changed the "
+        f"artifact - re-record it deliberately, do not paste the new value in blind."
+    )
+
+
+def test_uv_installs_to_a_directory_later_runs_can_actually_see():
+    # The installer's default is ${HOME}/.local/bin, which is root's home after
+    # the re-exec and is on no later run's PATH, because sudo hands the script
+    # `secure_path`. Installing there makes every re-run download again.
+    text = _script_text()
+
+    assert 'UV_INSTALL_DIR="${BIN_DIR}"' in text
+    assert 'BIN_DIR="/usr/local/bin"' in text, (
+        "the install dir has to be on sudo's secure_path"
+    )
+    code = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "${HOME}/.local/bin" not in code
+
+
+def test_uv_step_reuses_an_existing_install_instead_of_downloading_again(tmp_path):
+    # An operator re-runs this on a device with no working internet to repair
+    # drift - the one scenario the rest of the script tolerates, since the git
+    # checkout converges from cache. A curl that is never called is the point.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    installed = bin_dir / "uv"
+    installed.write_text("#!/bin/sh\necho 'uv 0.0.0-stub'\n")
+    installed.chmod(0o755)
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    curl = stubs / "curl"
+    curl.write_text("#!/bin/sh\necho CURL_WAS_CALLED >&2\nexit 1\n")
+    curl.chmod(0o755)
+
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            _extract_assignment("UV_VERSION"),
+            _extract_assignment("UV_INSTALLER_SHA256"),
+            f'BIN_DIR="{bin_dir}"',
+            # PATH deliberately excludes ${BIN_DIR}, the way sudo's secure_path
+            # excludes wherever the installer's default would have put it.
+            _step_block(4),
+            "uv --version",
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin", "HOME": str(tmp_path / "home")},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "CURL_WAS_CALLED" not in result.stderr, (
+        "an installed uv must not be downloaded again"
+    )
+    assert "reusing it, nothing downloaded" in result.stdout
+    assert "uv 0.0.0-stub" in result.stdout, "the reused uv has to end up on PATH"
+
+
+# --------------------------------------------------------------------------
+# Step 1's swap sizing. `set -euo pipefail` is on from line 2, so every value
+# CONF_SWAPSIZE can legitimately hold has to survive an arithmetic comparison:
+# "auto", "1024M", a trailing comment, or the key being absent entirely. Any of
+# those aborting takes the whole provision down at the first step, before a
+# single package is installed - and dphys-swapfile itself accepts them.
+# --------------------------------------------------------------------------
+
+
+def _run_swap_step(
+    tmp_path: Path, conf_text: str | None
+) -> subprocess.CompletedProcess:
+    """Run the real step 1, with only its three path constants redirected."""
+    conf = tmp_path / "dphys-swapfile"
+    if conf_text is not None:
+        conf.write_text(conf_text)
+    block = _step_block(1)
+    for name, value in (
+        ("SWAP_CONF", str(conf)),
+        # Absent on purpose: the dphys-swapfile branch is the one under test,
+        # and it is checked first, so these must not exist.
+        ("RPI_SWAP_CONF", str(tmp_path / "no-rpi-swap.conf")),
+        ("RPI_SWAP_DROPIN", str(tmp_path / "no-rpi-swap.conf.d" / "10-visio.conf")),
+    ):
+        block, count = re.subn(
+            rf'^{name}="[^"]*"$', f'{name}="{value}"', block, flags=re.MULTILINE
+        )
+        assert count == 1, f"{name} is no longer a single quoted assignment in step 1"
+
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    systemctl = stubs / "systemctl"
+    systemctl.write_text('#!/bin/sh\necho "SYSTEMCTL $*"\n')
+    systemctl.chmod(0o755)
+
+    snippet = "\n".join([_extract_function("log"), "reboot_needed=false", block])
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "auto",  # dphys-swapfile's own "size it from RAM" setting
+        "1024M",  # a unit suffix, which the file's own comments use
+        "512 # bumped by hand during bring-up",
+        '"1024"',  # quoted, the way the env file's keys are
+        "",  # CONF_SWAPSIZE= with nothing after it
+    ],
+)
+def test_a_non_numeric_swap_size_does_not_abort_the_run(tmp_path, value):
+    result = _run_swap_step(tmp_path, f"CONF_SWAPSIZE={value}\n")
+
+    assert result.returncode == 0, (
+        f"step 1 aborted on CONF_SWAPSIZE={value!r}: {result.stderr}"
+    )
+    assert "not a plain integer" in result.stdout
+    # Treated as 0, so the script goes on to write the size it guarantees.
+    assert (tmp_path / "dphys-swapfile").read_text() == "CONF_SWAPSIZE=1024\n"
+
+
+def test_a_missing_swap_size_key_does_not_abort_the_run(tmp_path):
+    # grep matches nothing, and pipefail makes that a failure without the
+    # script's `|| true`; the empty string then reaches the comparison.
+    result = _run_swap_step(tmp_path, "# CONF_SWAPSIZE is commented out\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "missing or not a plain integer" in result.stdout
+
+
+def test_a_swap_size_below_the_floor_is_raised_without_complaint(tmp_path):
+    result = _run_swap_step(tmp_path, "CONF_SWAPSIZE=100\nCONF_SWAPFILE=/var/swap\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "not a plain integer" not in result.stdout, "100 is a plain integer"
+    assert "increased to 1024MB" in result.stdout
+    assert (
+        tmp_path / "dphys-swapfile"
+    ).read_text() == "CONF_SWAPSIZE=1024\nCONF_SWAPFILE=/var/swap\n"
+
+
+def test_a_sufficient_swap_size_is_left_alone(tmp_path):
+    result = _run_swap_step(tmp_path, "CONF_SWAPSIZE=2048\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "no change needed" in result.stdout
+    assert "SYSTEMCTL" not in result.stdout, "nothing to restart when nothing changed"
+    assert (tmp_path / "dphys-swapfile").read_text() == "CONF_SWAPSIZE=2048\n"
+
+
+# --------------------------------------------------------------------------
+# Step 1 on trixie's rpi-swap (issue #49). A 1024 MiB swap file reports as
+# 1048572 kB in /proc/meminfo - mkswap keeps one 4 KiB page for its header - so
+# an integer-MiB comparison read 1023 < 1024 on every run, rewrote the drop-in
+# and printed REBOOT REQUIRED forever, even on a device with nothing to do.
+# --------------------------------------------------------------------------
+
+
+def _run_rpi_swap_step(
+    tmp_path: Path, swap_total_kb: int, dropin_text: str | None
+) -> subprocess.CompletedProcess:
+    """Run the real step 1 down its rpi-swap branch with a fake /proc/meminfo."""
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(f"MemTotal: 427880 kB\nSwapTotal: {swap_total_kb} kB\n")
+    rpi_conf = tmp_path / "rpi" / "swap.conf"
+    rpi_conf.parent.mkdir(parents=True)
+    rpi_conf.write_text("[Main]\nMechanism=zram+file\n")
+    dropin = tmp_path / "rpi" / "swap.conf.d" / "10-visio.conf"
+    if dropin_text is not None:
+        dropin.parent.mkdir(parents=True)
+        dropin.write_text(dropin_text)
+    block = _step_block(1)
+    for name, value in (
+        ("SWAP_CONF", str(tmp_path / "no-dphys-swapfile")),
+        ("RPI_SWAP_CONF", str(rpi_conf)),
+        ("RPI_SWAP_DROPIN", str(dropin)),
+        ("MEMINFO", str(meminfo)),
+    ):
+        block, count = re.subn(
+            rf'^{name}="[^"]*"$', f'{name}="{value}"', block, flags=re.MULTILINE
+        )
+        assert count == 1, f"{name} is no longer a single quoted assignment in step 1"
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    systemctl = stubs / "systemctl"
+    systemctl.write_text('#!/bin/sh\necho "SYSTEMCTL $*"\n')
+    systemctl.chmod(0o755)
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            "reboot_needed=false",
+            block,
+            'echo "REBOOT_NEEDED=${reboot_needed}"',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+
+def _written_dropin(tmp_path: Path) -> str:
+    """The drop-in a first run writes, so later runs can start from it."""
+    first = tmp_path / "first"
+    first.mkdir()
+    result = _run_rpi_swap_step(first, 0, None)
+    assert result.returncode == 0, result.stderr
+    return (first / "rpi" / "swap.conf.d" / "10-visio.conf").read_text()
+
+
+def test_an_applied_1024mb_swap_file_is_a_no_op_on_re_run(tmp_path):
+    # The exact reading from issue #49: the drop-in this script wrote, applied
+    # by a reboot, reporting one page short of 1024 MiB.
+    dropin = _written_dropin(tmp_path)
+    run = tmp_path / "rerun"
+    run.mkdir()
+
+    result = _run_rpi_swap_step(run, 1048572, dropin)
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT_NEEDED=false" in result.stdout, result.stdout
+    assert "SYSTEMCTL" not in result.stdout, "nothing changed, nothing to reload"
+    assert (run / "rpi" / "swap.conf.d" / "10-visio.conf").read_text() == dropin
+
+
+def test_a_fresh_trixie_device_gets_the_dropin_and_a_reboot(tmp_path):
+    result = _run_rpi_swap_step(tmp_path, 214000, None)
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT_NEEDED=true" in result.stdout
+    dropin = (tmp_path / "rpi" / "swap.conf.d" / "10-visio.conf").read_text()
+    assert "Mechanism=swapfile" in dropin
+    assert "FixedSizeMiB=1024" in dropin
+
+
+def test_a_written_but_unapplied_dropin_still_asks_for_the_reboot(tmp_path):
+    # Re-running before rebooting must not go quiet: the swap file is still not
+    # active, so the reboot is still required - but nothing is rewritten.
+    dropin = _written_dropin(tmp_path)
+    run = tmp_path / "rerun"
+    run.mkdir()
+
+    result = _run_rpi_swap_step(run, 214000, dropin)
+
+    assert "REBOOT_NEEDED=true" in result.stdout
+    assert "SYSTEMCTL" not in result.stdout, "the drop-in was already in place"
+    assert "not active yet" in result.stdout
+
+
+def test_a_hand_edited_dropin_is_put_back(tmp_path):
+    run = tmp_path / "rerun"
+    run.mkdir()
+
+    result = _run_rpi_swap_step(run, 1048572, "[File]\nFixedSizeMiB=256\n")
+
+    assert "REBOOT_NEEDED=true" in result.stdout
+    assert (
+        "FixedSizeMiB=1024"
+        in (run / "rpi" / "swap.conf.d" / "10-visio.conf").read_text()
+    )
+
+
+# --------------------------------------------------------------------------
+# Step 5's venv. ${PREFLIGHT_BIN} and the systemd unit's ExecStart/ExecStartPre
+# all run firmware/.venv/bin/python3, and the daemon's real drivers import
+# gpiozero, spidev and pijuice - none of which are in
+# firmware/pyproject.toml, because they do not build off a Pi. `uv sync` alone
+# builds a venv that can import none of them: it is isolated from the system
+# site-packages, and uv resolves an interpreter it downloaded for itself rather
+# than /usr/bin/python3, whose dist-packages are where apt puts them. The
+# result is a fully provisioned device on which preflight can never exit 0, so
+# ExecStartPre never lets the daemon start.
+# --------------------------------------------------------------------------
+
+
+def _system_python() -> str:
+    match = re.search(r'^SYSTEM_PYTHON="([^"]+)"$', _script_text(), re.MULTILINE)
+    assert match, "SYSTEM_PYTHON= not found in setup-device.sh - did it get renamed?"
+    return match.group(1)
+
+
+_VENV_FUNCTIONS = ("venv_sees_system_packages", "ensure_system_site_venv")
+
+pytest_uv = pytest.mark.skipif(
+    shutil.which("uv") is None or not Path(_system_python()).exists(),
+    reason=f"needs uv and {_system_python()} to build a real venv",
+)
+
+
+def _venv_lib(tmp_path: Path) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    lib = tmp_path / "venv.sh"
+    lib.write_text(
+        "\n".join(
+            [
+                _extract_function("log"),
+                _extract_assignment("SYSTEM_PYTHON"),
+                *(_extract_function(f) for f in _VENV_FUNCTIONS),
+            ]
+        )
+        + "\n"
+    )
+    return lib
+
+
+def _run_venv(
+    lib: Path, snippet: str, home: Path, path: str = ""
+) -> subprocess.CompletedProcess:
+    uv_dir = os.path.dirname(shutil.which("uv") or "/nonexistent")
+    home.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\nsource "{lib}"\n{snippet}'],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={"PATH": f"{path}{uv_dir}:/usr/bin:/bin", "HOME": str(home)},
+    )
+
+
+def _sys_path(python: Path | str) -> list[str]:
+    result = subprocess.run(
+        [str(python), "-c", "import json, sys; print(json.dumps(sys.path))"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest_uv
+def test_the_provisioned_venv_can_import_the_apt_installed_hardware_libraries(tmp_path):
+    venv = tmp_path / "firmware" / ".venv"
+
+    result = _run_venv(
+        _venv_lib(tmp_path / "lib"),
+        f'ensure_system_site_venv "{venv}"',
+        tmp_path / "home",
+    )
+
+    assert result.returncode == 0, result.stderr
+    cfg = (venv / "pyvenv.cfg").read_text()
+    assert "include-system-site-packages = true" in cfg, cfg
+    system_sites = subprocess.run(
+        [
+            _system_python(),
+            "-c",
+            "import json, site; print(json.dumps(site.getsitepackages()))",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert system_sites.returncode == 0, system_sites.stderr
+    shared = set(json.loads(system_sites.stdout)) & set(
+        _sys_path(venv / "bin" / "python3")
+    )
+    assert shared, (
+        "the provisioned venv cannot see a single system site-packages directory, so "
+        "gpiozero and pijuice - apt packages on the device - are unimportable from it "
+        "and preflight blocks on them. venv sys.path: "
+        f"{_sys_path(venv / 'bin' / 'python3')}"
+    )
+
+
+@pytest_uv
+def test_a_healthy_venv_is_reused_rather_than_rebuilt_on_a_re_run(tmp_path):
+    # Rebuilding on every pass would re-download and reinstall every uv.lock
+    # wheel, which is minutes on a Pi Zero 2W.
+    venv = tmp_path / ".venv"
+    lib, home = _venv_lib(tmp_path / "lib"), tmp_path / "home"
+    assert _run_venv(lib, f'ensure_system_site_venv "{venv}"', home).returncode == 0
+    marker = venv / "installed-by-a-previous-run"
+    marker.write_text("x")
+
+    result = _run_venv(lib, f'ensure_system_site_venv "{venv}"', home)
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists(), (
+        "a venv that already sees the system packages must be left alone"
+    )
+    assert "recreating it" not in result.stdout
+
+
+def test_a_venv_uv_built_on_its_own_is_recreated_from_the_system_interpreter(tmp_path):
+    # Exactly what `uv sync` leaves behind with no venv present: isolated, and
+    # built from an interpreter uv downloaded for itself, whose site-packages
+    # hold nothing apt ever installed. Flipping the flag in pyvenv.cfg would
+    # not help - the base interpreter is fixed at creation - so it is rebuilt.
+    venv = tmp_path / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text(
+        "home = /root/.local/share/uv/python/cpython-3.13.1-linux-aarch64-gnu/bin\n"
+        "implementation = CPython\n"
+        "version_info = 3.13.1\n"
+        "include-system-site-packages = false\n"
+    )
+    stale = venv / "left-by-the-isolated-venv"
+    stale.write_text("x")
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    uv = stubs / "uv"
+    uv.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" > "{tmp_path}/uv-argv"\n')
+    uv.chmod(0o755)
+
+    result = _run_venv(
+        _venv_lib(tmp_path / "lib"),
+        f'ensure_system_site_venv "{venv}"',
+        tmp_path / "home",
+        path=f"{stubs}:",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "cannot see the system site-packages" in result.stdout
+    assert not stale.exists(), "the isolated venv has to be replaced, not added to"
+    argv = (tmp_path / "uv-argv").read_text()
+    assert "--system-site-packages" in argv, argv
+    assert f"--python {_system_python()}" in argv, argv
+
+
+def test_step_5_builds_the_venv_before_syncing_and_rechecks_it_afterwards():
+    step = _step_block(5)
+
+    assert step.index('ensure_system_site_venv "${VENV_DIR}"') < step.index(
+        "uv sync --locked"
+    )
+    # A venv that lost system-site-packages during the sync is the exact
+    # failure this step exists to prevent, and it is invisible until the daemon
+    # will not start, so the run refuses to report success on one.
+    assert "if ! venv_sees_system_packages" in step
+    # Exact, now that nothing outside uv.lock is installed into the venv: a
+    # device provisioned before the SPI rewire loses its compiled rpi_ws281x.
+    assert "uv sync --locked)" in step
+    assert "--inexact" not in step
+
+
+def _apt_installed_packages(tmp_path: Path) -> list[str]:
+    """Run the real step 2 against stub apt tools; return every package installed."""
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    installs = tmp_path / "apt-installs"
+    for name, body in (
+        ("dpkg", "exit 0"),
+        ("apt-get", f'[ "$1" = install ] && echo "$@" >> "{installs}"; exit 0'),
+        ("apt-cache", "printf '  Installed: (none)\\n  Candidate: 1.8\\n'"),
+    ):
+        (stubs / name).write_text(f"#!/bin/sh\n{body}\n")
+        (stubs / name).chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{_extract_function('log')}\n{_step_block(2)}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    return [
+        word
+        for line in installs.read_text().splitlines()
+        for word in line.split()
+        if not word.startswith("-") and word != "install"
+    ]
+
+
+def test_the_hardware_libraries_preflight_blocks_on_are_actually_provisioned(
+    tmp_path,
+):
+    # preflight blocks on gpiozero and spidev (see visio_recorder/preflight.py's
+    # run_checks), so provisioning has to supply both or no device it produces
+    # can pass its own preflight. Both are apt packages the venv reaches
+    # through --system-site-packages.
+    packages = _apt_installed_packages(tmp_path)
+
+    assert "python3-gpiozero" in packages, "gpiozero is an apt package on the target"
+    assert "python3-spidev" in packages, "the SPI LED driver imports spidev"
+    assert "pijuice-base" in packages
+
+
+def test_nothing_is_compiled_on_the_device_any_more(tmp_path):
+    # The SPI LED rewire (#85) retired rpi_ws281x, the one library that had to
+    # be built from source - and with it the C toolchain it needed.
+    packages = _apt_installed_packages(tmp_path)
+
+    assert not [p for p in packages if "ws281x" in p.lower()]
+    assert "build-essential" not in packages
+    assert "python3-dev" not in packages
+
+
+# --------------------------------------------------------------------------
+# Step 8's remaining unguarded writes. The step promises twice in its own
+# comments that optional convenience work is skippable - an account with no
+# passwd entry, a ~/.bashrc it refuses to parse - and honours that for both via
+# `if remove_managed_block` / `if write_managed_block`. Under `set -e` the
+# neovim config write and the dev-package install had no such guard, so a home
+# on a full or read-only filesystem, a regular file where ~/.config should be,
+# or a transient apt mirror error took the whole run down at step 8 - before
+# step 9 creates the data dir, which preflight then blocks on.
+# --------------------------------------------------------------------------
+
+
+def _nvim_block() -> str:
+    step = _dev_shell_step()
+    start = step.index('  nvim_starter_config="$(cat ')
+    return step[start : step.index("  # Quoted heredoc:", start)]
+
+
+def _run_nvim_block(tmp_path: Path, home: Path) -> subprocess.CompletedProcess:
+    lib = _shell_lib(tmp_path / "lib", *_BLOCK_HELPERS)
+    snippet = "\n".join(
+        [
+            f'dev_home="{home}"',
+            'dev_user="$(id -un)"',
+            'dev_group="$(id -gn)"',
+            _nvim_block().rstrip(),
+            "echo REACHED_THE_NEXT_STEP",
+        ]
+    )
+    return _run(lib, snippet)
+
+
+def test_a_failed_nvim_config_write_does_not_abort_the_run(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    # A regular file where the directory belongs: mkdir -p fails with EEXIST.
+    (home / ".config").write_text("not a directory\n")
+
+    result = _run_nvim_block(tmp_path, home)
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping the starter neovim config" in result.stdout
+    assert "REACHED_THE_NEXT_STEP" in result.stdout
+
+
+def test_the_starter_nvim_config_is_written_once_and_then_left_alone(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    first = _run_nvim_block(tmp_path / "first", home)
+
+    init = home / ".config" / "nvim" / "init.lua"
+    assert first.returncode == 0, first.stderr
+    assert "Wrote starter" in first.stdout
+    assert init.read_text().startswith(
+        "-- Starting point written once by setup-device.sh."
+    )
+    assert init.read_text().endswith("\n")
+    assert not (home / ".config" / "nvim" / "init.lua.visio-setup.tmp").exists()
+
+    init.write_text("-- edited by the operator\n")
+    second = _run_nvim_block(tmp_path / "second", home)
+
+    assert second.returncode == 0, second.stderr
+    assert "left untouched" in second.stdout
+    assert init.read_text() == "-- edited by the operator\n"
+
+
+def test_a_failed_dev_package_install_does_not_abort_the_run(tmp_path):
+    step = _dev_shell_step()
+    block = step[step.index("  dev_packages=(") : step.index("  # System-wide default")]
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    for name, body in (
+        ("apt-cache", '#!/bin/sh\necho "  Candidate: 1.0"\n'),
+        ("apt-get", "#!/bin/sh\nexit 100\n"),
+    ):
+        stub = stubs / name
+        stub.write_text(body)
+        stub.chmod(0o755)
+    lib = tmp_path / "lib.sh"
+    lib.write_text(
+        "\n".join(
+            _extract_function(f) for f in ("log", "apt_candidate", "apt_has_candidate")
+        )
+        + "\n"
+    )
+    snippet = "\n".join([block.rstrip(), "echo REACHED_THE_NEXT_STEP"])
+    result = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\nsource "{lib}"\n{snippet}'],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "continuing without them" in result.stdout
+    assert "REACHED_THE_NEXT_STEP" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# Steps 9 and 10. A non-fatal step-5 failure that leaves the daemon unable to
+# start has to reach the summary: on a Pi Zero 2W thousands of lines of apt
+# output scroll between the two, so a mid-run warning is realistically gone by
+# the time the operator reads "Setup complete". And the directory step 9
+# creates must be the one preflight checks and the daemon records into, or
+# preflight blocks on a path nothing ever creates and advises a re-run that
+# would not create it either.
+# --------------------------------------------------------------------------
+
+
+def _run_final_steps(
+    tmp_path: Path,
+    env_text: str,
+    config_txt_failed: str = "false",
+    reboot_needed: str = "false",
+    interfaces_failed: str = "false",
+) -> subprocess.CompletedProcess:
+    """Run steps 9 and 10 for real, with DATA_DIR and REBOOT_MARKER redirected."""
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text(env_text)
+    (tmp_path / "run").mkdir()
+    block = (
+        'log "Step 9/10: data dir"'
+        + _script_text().split('log "Step 9/10: data dir"')[1]
+    )
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            _extract_function("env_file_value"),
+            _reboot_prelude(tmp_path / "run" / "visio-setup-reboot-required"),
+            _extract_function("report_step3_incomplete"),
+            _extract_assignment("PREFLIGHT_BIN"),
+            'CONFIG_TXT="/boot/firmware/config.txt"',
+            f'DATA_DIR="{tmp_path}/default-data-dir"',
+            'target_sha="deadbee"',
+            f"reboot_needed={reboot_needed}",
+            "data_dir_failed=false",
+            f"config_txt_failed={config_txt_failed}",
+            f"interfaces_failed={interfaces_failed}",
+            block,
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={"PATH": "/usr/bin:/bin", "ENV_FILE": str(env_file)},
+    )
+
+
+_CONFIGURED_ENV = "SUPABASE_URL=u\nSUPABASE_ANON_KEY=k\nVISIO_BATTERY_SOURCE=none\n"
+
+
+def test_a_config_txt_that_could_not_be_edited_is_repeated_in_the_summary(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, config_txt_failed="true")
+
+    assert "INCOMPLETE" in result.stdout
+    assert "config.txt" in result.stdout
+    assert "core_freq_fixed=1" in result.stdout
+    # Still non-fatal where it happened: the data dir and the rest of the
+    # summary happen anyway. Only the very end reports the outcome.
+    assert (tmp_path / "default-data-dir").is_dir()
+    assert "Setup complete." not in result.stdout
+    assert "Setup incomplete" in result.stdout
+    assert result.returncode == 1, (
+        "a device whose LED cannot be driven is not a successful run"
+    )
+
+
+def test_interfaces_raspi_config_could_not_enable_are_repeated_in_the_summary(
+    tmp_path,
+):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, interfaces_failed="true")
+
+    assert "INCOMPLETE" in result.stdout
+    assert "raspi-config" in result.stdout
+    assert "spidev0.0" in result.stdout
+    assert "Setup complete." not in result.stdout
+    assert "Setup incomplete" in result.stdout
+    assert result.returncode == 1, "a device with SPI off cannot drive its LED"
+
+
+def test_a_successful_run_says_nothing_about_config_txt(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, config_txt_failed="false")
+
+    assert result.returncode == 0, result.stderr
+    assert "INCOMPLETE" not in result.stdout
+
+
+def test_the_data_dir_step_provisions_the_configured_directory(tmp_path):
+    configured = tmp_path / "usb-mount" / "visio"
+    result = _run_final_steps(
+        tmp_path,
+        _CONFIGURED_ENV + f"VISIO_DATA_DIR={configured}\n",
+        config_txt_failed="false",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert configured.is_dir(), (
+        "preflight checks this path, so provisioning has to create it"
+    )
+    assert not (tmp_path / "default-data-dir").exists()
+    assert str(configured) in result.stdout, (
+        "the summary has to name the directory it made"
+    )
+
+
+def test_the_data_dir_step_falls_back_to_the_default_when_unset(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, config_txt_failed="false")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "default-data-dir").is_dir()
+
+
+def test_a_quoted_data_dir_is_unquoted_the_way_systemd_reads_it(tmp_path):
+    # The env file is a systemd EnvironmentFile, where quoting is idiomatic;
+    # a literal directory named '"/mnt/usb"' would be a silent mis-provision.
+    configured = tmp_path / "quoted-mount"
+    result = _run_final_steps(
+        tmp_path,
+        _CONFIGURED_ENV + f'VISIO_DATA_DIR="{configured}"\n',
+        config_txt_failed="false",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert configured.is_dir()
+
+
+# --------------------------------------------------------------------------
+# Step 9's argument is operator input now, not a constant the script owns.
+# `mkdir -p /var/lib/visio-recorder` as root is effectively infallible; an
+# env-file value is not, and dying here would take step 10 with it - the very
+# report that tells the operator what went wrong.
+# --------------------------------------------------------------------------
+
+
+def test_an_uncreatable_data_dir_is_reported_in_the_summary_instead_of_aborting(
+    tmp_path,
+):
+    blocked = tmp_path / "occupied"
+    blocked.write_text("a regular file where the data dir should be\n")
+
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={blocked}/visio\n"
+    )
+
+    assert "cannot create" in result.stdout
+    assert "VISIO_DATA_DIR" in result.stdout
+    assert "INCOMPLETE" in result.stdout
+    assert "was NOT created" in result.stdout
+    # What aborting at step 9 would have swallowed: the run still reaches the
+    # end and prints everything the operator needs.
+    assert "Provisioned revision: deadbee" in result.stdout
+    assert "No reboot required" in result.stdout
+    # ...and only then reports the outcome honestly, in both channels.
+    assert "Setup complete." not in result.stdout
+    assert "Setup incomplete" in result.stdout
+    assert result.returncode == 1, (
+        "a device with nowhere to record is not a successful run"
+    )
+
+
+def test_a_relative_data_dir_is_rejected_rather_than_silently_diverging(tmp_path):
+    # It would resolve against this script's cwd here but against the unit's
+    # WorkingDirectory= for the daemon, so the two would record to different
+    # places without either one reporting a problem.
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV + "VISIO_DATA_DIR=recordings\n")
+
+    assert "not an absolute path" in result.stdout
+    assert "INCOMPLETE" in result.stdout
+    assert not (tmp_path / "recordings").exists()
+    assert not (tmp_path / "default-data-dir").exists(), (
+        "a bad value must not fall back silently"
+    )
+    assert "Setup complete." not in result.stdout
+    assert "Setup incomplete" in result.stdout
+    assert result.returncode == 1
+
+
+def test_a_created_data_dir_says_nothing_about_being_incomplete(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "default-data-dir").is_dir()
+    assert "INCOMPLETE" not in result.stdout
+
+
+def test_the_env_template_does_not_promise_preflight_can_read_it(tmp_path):
+    # The file is chmod 600 root-owned, so the unprivileged read fails; the
+    # template must not document that path as working.
+    template = _env_template(tmp_path)
+
+    assert "VISIO_DATA_DIR" in template
+    assert template.count("VISIO_DATA_DIR=") == 1, "the key must not be duplicated"
+    assert "600" in template or "root-owned" in template
+    assert "sudo" in template
+
+
+def test_a_healthy_run_still_reports_success_in_both_channels(tmp_path):
+    # The other half of the contract: "finished but broken" must be
+    # distinguishable from "finished and fine", not merely louder.
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+
+    assert result.returncode == 0, result.stderr
+    assert "Setup complete." in result.stdout
+    assert "Setup incomplete" not in result.stdout
+
+
+# --------------------------------------------------------------------------
+# A reboot owed by one run must survive into the next. On a fresh device run 1
+# changes config.txt, swap and I2C and then stops at the env-file checkpoint,
+# before the summary that prints REBOOT REQUIRED; run 2 then finds every edit
+# "already set" and, without this, reported "No reboot required" on a device
+# whose SPI bus did not exist yet (found by the end-to-end simulation under
+# docs/superpowers/evidence/provisioning-led-spi-audio/). The marker lives in
+# /run, a tmpfs, so only an actual reboot clears it.
+# --------------------------------------------------------------------------
+
+
+def test_a_reboot_this_run_needs_is_remembered_in_run(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, reboot_needed="true")
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT REQUIRED" in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def test_a_run_needing_no_reboot_leaves_no_marker(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, reboot_needed="false")
+
+    assert "No reboot required." in result.stdout
+    assert not (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def _run_load_pending_reboot(tmp_path: Path) -> subprocess.CompletedProcess:
+    lib = _shell_lib(tmp_path / "lib", "load_pending_reboot")
+    return _run(
+        lib,
+        f'REBOOT_MARKER="{tmp_path}/visio-setup-reboot-required"\n'
+        "reboot_needed=false\nload_pending_reboot\n"
+        'echo "REBOOT_NEEDED=${reboot_needed}"',
+    )
+
+
+def test_a_reboot_an_earlier_run_asked_for_is_still_owed(tmp_path):
+    (tmp_path / "visio-setup-reboot-required").touch()
+
+    result = _run_load_pending_reboot(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT_NEEDED=true" in result.stdout
+    assert "has not rebooted since" in result.stdout
+
+
+def test_no_marker_means_no_owed_reboot(tmp_path):
+    result = _run_load_pending_reboot(tmp_path)
+
+    assert "REBOOT_NEEDED=false" in result.stdout
+
+
+def _run_after_reboot_prelude(
+    tmp_path: Path, body: str, env_file: Path | None = None
+) -> subprocess.CompletedProcess:
+    (tmp_path / "run").mkdir(exist_ok=True)
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            _extract_function("env_file_value"),
+            _reboot_prelude(tmp_path / "run" / "visio-setup-reboot-required"),
+            body,
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": "/usr/bin:/bin", "ENV_FILE": str(env_file or "/nonexistent")},
+    )
+
+
+@pytest.mark.parametrize("failure", ["exit 1", "false"])
+def test_a_run_that_fails_after_a_reboot_needing_change_still_owes_it(
+    tmp_path, failure
+):
+    # Run 1 writes the swap drop-in and edits config.txt, then a later step
+    # fails - an explicit exit 1, or errexit on a flaky-network uv sync. Run 2
+    # finds both already converged, so only the marker can still report it.
+    result = _run_after_reboot_prelude(
+        tmp_path, f"reboot_needed=true\n{failure}\necho UNREACHABLE"
+    )
+
+    assert result.returncode == 1
+    assert "UNREACHABLE" not in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def test_a_failed_run_that_needed_no_reboot_leaves_no_marker(tmp_path):
+    result = _run_after_reboot_prelude(tmp_path, "exit 1")
+
+    assert result.returncode == 1
+    assert not (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def _run_env_step(
+    tmp_path: Path, reboot_needed: str, before: str = ""
+) -> subprocess.CompletedProcess:
+    """Run the real step 7 on a device with no env file yet, after ``before``."""
+    return _run_after_reboot_prelude(
+        tmp_path,
+        "\n".join(
+            [
+                _extract_function("report_step3_incomplete"),
+                _extract_assignment("PREFLIGHT_BIN"),
+                'CONFIG_TXT="/boot/firmware/config.txt"',
+                "config_txt_failed=false",
+                "interfaces_failed=false",
+                f"reboot_needed={reboot_needed}",
+                before,
+                _step_block(7),
+                "echo PAST_THE_CHECKPOINT",
+            ]
+        ),
+        env_file=tmp_path / "visio-recorder.env",
+    )
+
+
+def test_the_env_template_checkpoint_keeps_the_reboot_and_still_exits_zero(
+    tmp_path,
+):
+    # Writing the template and stopping is a deliberate re-run checkpoint, not
+    # a failure - and run 1's reboot has to survive it for run 2 to report.
+    result = _run_env_step(tmp_path, reboot_needed="true")
+
+    assert result.returncode == 0, result.stderr
+    assert "PAST_THE_CHECKPOINT" not in result.stdout
+    assert "REBOOT REQUIRED" in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+    assert (tmp_path / "visio-recorder.env").stat().st_mode & 0o777 == 0o600
+
+
+def test_the_env_template_checkpoint_owes_no_reboot_it_was_not_asked_for(tmp_path):
+    result = _run_env_step(tmp_path, reboot_needed="false")
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT REQUIRED" not in result.stdout
+    assert not (tmp_path / "run" / "visio-setup-reboot-required").exists()
+    assert "INCOMPLETE" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("flag", "incomplete"),
+    [
+        ("config_txt_failed", "could not be edited"),
+        ("interfaces_failed", "could not be enabled through raspi-config"),
+    ],
+)
+def test_the_env_template_checkpoint_reports_a_step_3_failure_and_exits_one(
+    tmp_path, flag, incomplete
+):
+    result = _run_env_step(tmp_path, reboot_needed="true", before=f"{flag}=true")
+
+    assert result.returncode == 1, result.stderr
+    assert "PAST_THE_CHECKPOINT" not in result.stdout
+    lines = result.stdout.splitlines()
+    assert [line for line in lines if "INCOMPLETE:" in line] == [
+        next(line for line in lines if incomplete in line)
+    ]
+    assert "Setup incomplete" in result.stdout
+    assert "REBOOT REQUIRED" in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+    assert (tmp_path / "visio-recorder.env").stat().st_mode & 0o777 == 0o600
+
+
+def test_a_first_run_without_raspi_config_stops_at_the_checkpoint_with_exit_one(
+    tmp_path,
+):
+    # A fresh non-Raspberry-Pi OS device: the real step 3 finds no raspi-config,
+    # then step 7 writes the template. That run must not end on exit 0.
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+
+    result = _run_env_step(
+        tmp_path,
+        reboot_needed="false",
+        before="\n".join(
+            [
+                f'CONFIG_TXT="{config}"',
+                "config_txt_changed=false",
+                _step_block(3),
+            ]
+        ),
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert "ERROR: raspi-config is not installed" in result.stdout
+    assert (
+        "INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config"
+        in result.stdout
+    )
+    assert "REBOOT REQUIRED" in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def test_env_file_value_reads_an_indented_key_the_way_systemd_does(tmp_path):
+    # systemd's EnvironmentFile parser skips leading whitespace. A reader
+    # anchored at column 0 would miss the key here while the daemon and
+    # preflight both saw it, so this script would provision one data dir and
+    # the unit would then block on another.
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text(
+        "  VISIO_DATA_DIR=/mnt/usb/visio\n\tVISIO_BATTERY_SOURCE=none\n"
+    )
+    lib = _shell_lib(tmp_path / "lib", "env_file_value")
+
+    result = _run(
+        lib,
+        "env_file_value VISIO_DATA_DIR\nenv_file_value VISIO_BATTERY_SOURCE",
+        env_file,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["/mnt/usb/visio", "none"]
+
+
+def test_an_indented_data_dir_is_provisioned_rather_than_missed(tmp_path):
+    configured = tmp_path / "indented-mount"
+
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV + f"   VISIO_DATA_DIR={configured}\n"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert configured.is_dir(), "systemd would have given the daemon this path"
+    assert not (tmp_path / "default-data-dir").exists()
+
+
+# --------------------------------------------------------------------------
+# Step 3's own /boot/firmware/config.txt edits, for the two settings
+# raspi-config has no option for. The SPI LED needs the core clock held fixed
+# (spi-bcm2835 caches the core clock at probe, so a scaling clock skews the
+# WS2812B bit timing), and the INMP441 needs the adau7002-simple overlay.
+# config.txt is the file a bad edit can stop the Pi booting from, so the edits
+# are pinned against a real stock file: added once in a section that applies
+# to the Zero 2W, a conflicting value replaced in place rather than shadowed,
+# and a second run byte-for-byte identical. SPI and I2C themselves are enabled
+# through raspi-config, tested further down against its upstream functions.
+# --------------------------------------------------------------------------
+
+# Raspberry Pi OS trixie's stock /boot/firmware/config.txt (abridged comments).
+_STOCK_CONFIG_TXT = """\
+# For more options and information see
+# http://rptl.io/configtxt
+# Some settings may impact device functionality. See link above for details
+
+# Uncomment some or all of these to enable the optional hardware interfaces
+#dtparam=i2c_arm=on
+#dtparam=i2s=on
+#dtparam=spi=on
+
+# Enable audio (loads snd_bcm2835)
+dtparam=audio=on
+
+# Automatically load overlays for detected cameras
+camera_auto_detect=1
+
+# Automatically load overlays for detected DSI displays
+display_auto_detect=1
+
+# Automatically load initramfs files, if found
+auto_initramfs=1
+
+# Enable DRM VC4 V3D driver
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+
+# Don't have the firmware create an initial video= setting in cmdline.txt.
+# Use the kernel's default instead.
+disable_fw_kms_setup=1
+
+# Run in 64-bit mode
+arm_64bit=1
+
+# Disable compensation for displays with overscan
+disable_overscan=1
+
+# Run as fast as firmware / board allows
+arm_boost=1
+
+[cm4]
+# Enable host mode on the 2711 built-in XHCI USB controller.
+# This line should be removed if the legacy DWC2 controller is required
+# (e.g. for USB device mode) or if USB support is not required.
+otg_mode=1
+
+[cm5]
+dtoverlay=dwc2,dr_mode=host
+
+[all]
+"""
+
+_CONFIG_TXT_EDITS = """\
+ensure_config_txt_setting "${CONFIG_TXT}" core_freq_fixed 1
+ensure_config_txt_line "${CONFIG_TXT}" dtoverlay=adau7002-simple
+echo "CHANGED=${config_txt_changed} FAILED=${config_txt_failed}"
+"""
+
+
+def _run_config_txt(tmp_path: Path, config: Path) -> subprocess.CompletedProcess:
+    lib = _shell_lib(
+        tmp_path / "lib",
+        "config_txt_edit",
+        "ensure_config_txt_setting",
+        "ensure_config_txt_line",
+        "config_txt_apply",
+    )
+    return _run(
+        lib,
+        f'CONFIG_TXT="{config}"\nconfig_txt_changed=false\nconfig_txt_failed=false\n'
+        + _CONFIG_TXT_EDITS,
+    )
+
+
+def _effective_all_scope(text: str) -> list[str]:
+    """The active lines a Pi Zero 2W applies: global or under [all]."""
+    lines, applies = [], True
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            applies = line == "[all]"
+        elif applies and line and not line.startswith("#"):
+            lines.append(line)
+    return lines
+
+
+def test_a_stock_config_txt_gains_the_led_and_microphone_settings(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text(_STOCK_CONFIG_TXT)
+
+    result = _run_config_txt(tmp_path, config)
+
+    assert result.returncode == 0, result.stderr
+    assert "CHANGED=true FAILED=false" in result.stdout
+    text = config.read_text()
+    assert text.startswith(_STOCK_CONFIG_TXT), "nothing above is rewritten"
+    effective = _effective_all_scope(text)
+    for line in ("core_freq_fixed=1", "dtoverlay=adau7002-simple"):
+        assert effective.count(line) == 1, f"{line} must apply exactly once"
+
+
+def test_a_second_config_txt_pass_changes_nothing(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text(_STOCK_CONFIG_TXT)
+    assert _run_config_txt(tmp_path / "a", config).returncode == 0
+    after_first = config.read_bytes()
+
+    result = _run_config_txt(tmp_path / "b", config)
+
+    assert result.returncode == 0, result.stderr
+    assert "CHANGED=false FAILED=false" in result.stdout
+    assert config.read_bytes() == after_first
+
+
+def test_a_conflicting_core_clock_is_fixed_in_place_not_shadowed(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text("dtparam=audio=on\ncore_freq_fixed=0\narm_64bit=1\n")
+
+    result = _run_config_txt(tmp_path, config)
+
+    assert result.returncode == 0, result.stderr
+    assert config.read_text() == (
+        "dtparam=audio=on\ncore_freq_fixed=1\narm_64bit=1\ndtoverlay=adau7002-simple\n"
+    )
+
+
+def test_a_setting_under_another_boards_filter_does_not_count(tmp_path):
+    # [pi4] lines never reach a Zero 2W, so they neither satisfy the check nor
+    # get edited - and a file ending in a board filter gets an [all] first.
+    config = tmp_path / "config.txt"
+    config.write_text(
+        "arm_64bit=1\n[pi4]\ncore_freq_fixed=1\ndtoverlay=adau7002-simple\n"
+    )
+
+    result = _run_config_txt(tmp_path, config)
+
+    assert result.returncode == 0, result.stderr
+    assert config.read_text() == (
+        "arm_64bit=1\n[pi4]\ncore_freq_fixed=1\ndtoverlay=adau7002-simple\n"
+        "[all]\ncore_freq_fixed=1\ndtoverlay=adau7002-simple\n"
+    )
+
+
+def test_a_config_txt_without_a_final_newline_is_not_glued_together(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text("arm_64bit=1")
+
+    assert _run_config_txt(tmp_path, config).returncode == 0
+
+    assert config.read_text().splitlines()[:2] == ["arm_64bit=1", "core_freq_fixed=1"]
+
+
+def test_an_unwritable_config_txt_is_reported_without_aborting(tmp_path):
+    boot = tmp_path / "boot"
+    boot.mkdir()
+    config = boot / "config.txt"
+    config.write_text(_STOCK_CONFIG_TXT)
+    boot.chmod(0o555)
+    try:
+        if os.access(boot, os.W_OK):
+            pytest.skip("running as root: a read-only directory is still writable")
+        result = _run_config_txt(tmp_path, config)
+    finally:
+        boot.chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    assert "FAILED=true" in result.stdout
+    assert "ERROR" in result.stdout
+    assert config.read_text() == _STOCK_CONFIG_TXT, "the original is untouched"
+    assert list(boot.iterdir()) == [config], "no temp file left on the boot partition"
+
+
+def test_a_missing_config_txt_is_a_failure_not_a_crash(tmp_path):
+    result = _run_config_txt(tmp_path, tmp_path / "no-such-config.txt")
+
+    assert result.returncode == 0, result.stderr
+    assert "FAILED=true" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# Step 3's interfaces go through raspi-config nonint. tests/fixtures/raspi-config
+# carries upstream's get_/do_ functions byte-for-byte (checked against
+# upstream below), editing a temp config.txt instead of the boot partition, so
+# these tests exercise the real enable path, including the parts of its
+# contract that make it easy to misuse: get_* answers on stdout rather than in
+# its exit status, and do_* exits 0 even when it changed nothing.
+# --------------------------------------------------------------------------
+
+_FAKE_RASPI_CONFIG = Path(__file__).resolve().parent / "fixtures" / "raspi-config"
+
+
+def _raspi_config_bin(tmp_path: Path, script: str | None = None) -> Path:
+    """A PATH directory whose raspi-config is the fake, or ``script`` if given."""
+    bin_dir = tmp_path / "raspi-bin"
+    bin_dir.mkdir(parents=True)
+    target = bin_dir / "raspi-config"
+    if script is None:
+        shutil.copyfile(_FAKE_RASPI_CONFIG, target)
+    else:
+        target.write_text(script)
+    target.chmod(0o755)
+    return bin_dir
+
+
+def _run_interfaces_step(
+    tmp_path: Path, config: Path, raspi_bin: Path | None = None
+) -> subprocess.CompletedProcess:
+    """Run the real step 3 against ``config``, with ``raspi_bin`` on PATH."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            f'CONFIG_TXT="{config}"',
+            "reboot_needed=false",
+            "config_txt_changed=false",
+            "config_txt_failed=false",
+            "interfaces_failed=false",
+            _step_block(3),
+            'echo "REBOOT_NEEDED=${reboot_needed} FAILED=${config_txt_failed}'
+            ' INTERFACES_FAILED=${interfaces_failed}"',
+        ]
+    )
+    path = "/usr/bin:/bin" if raspi_bin is None else f"{raspi_bin}:/usr/bin:/bin"
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            "PATH": path,
+            "RASPI_CONFIG_CONFIG_TXT": str(config),
+            "RASPI_CONFIG_BLACKLIST": str(tmp_path / "raspi-blacklist.conf"),
+            "RASPI_CONFIG_MODULES": str(config.parent / "modules"),
+            "RASPI_CONFIG_LOG": str(tmp_path / "raspi-config.log"),
+        },
+    )
+
+
+def _raspi_config_calls(tmp_path: Path) -> list[str]:
+    log = tmp_path / "raspi-config.log"
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_step_3_enables_spi_and_i2c_through_raspi_config(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+
+    result = _run_interfaces_step(tmp_path / "run", config, _raspi_config_bin(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT_NEEDED=true FAILED=false INTERFACES_FAILED=false" in result.stdout
+    assert "SPI was disabled - enabled now via raspi-config" in result.stdout
+    assert "I2C was disabled - enabled now via raspi-config" in result.stdout
+    assert "Camera already enabled" in result.stdout, "stock camera_auto_detect=1"
+    calls = _raspi_config_calls(tmp_path / "run")
+    assert "raspi-config nonint do_spi 0" in calls
+    assert "raspi-config nonint do_i2c 0" in calls
+    assert "raspi-config nonint do_camera 0" not in calls
+    text = config.read_text()
+    # raspi-config uncomments the stock file's own lines in place.
+    assert "#dtparam=spi=on" not in text
+    assert "#dtparam=i2c_arm=on" not in text
+    effective = _effective_all_scope(text)
+    for line in (
+        "dtparam=spi=on",
+        "dtparam=i2c_arm=on",
+        "core_freq_fixed=1",
+        "dtoverlay=adau7002-simple",
+    ):
+        assert effective.count(line) == 1, f"{line} must apply exactly once"
+    assert (config.parent / "modules").read_text() == "i2c-dev\n"
+
+
+def test_a_second_step_3_changes_nothing_and_asks_for_no_reboot(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+    raspi_bin = _raspi_config_bin(tmp_path)
+    assert _run_interfaces_step(tmp_path / "a", config, raspi_bin).returncode == 0
+    after_first = config.read_bytes()
+
+    second = _run_interfaces_step(tmp_path / "b", config, raspi_bin)
+
+    assert second.returncode == 0, second.stderr
+    assert "REBOOT_NEEDED=false FAILED=false INTERFACES_FAILED=false" in second.stdout
+    assert "SPI already enabled" in second.stdout
+    assert "I2C already enabled" in second.stdout
+    assert config.read_bytes() == after_first
+    assert not [c for c in _raspi_config_calls(tmp_path / "b") if " do_" in c], (
+        "an enabled interface must not be re-enabled"
+    )
+
+
+def test_a_disabled_camera_is_enabled_through_raspi_config(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(
+        _STOCK_CONFIG_TXT.replace("camera_auto_detect=1", "camera_auto_detect=0")
+    )
+
+    result = _run_interfaces_step(tmp_path / "run", config, _raspi_config_bin(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert "Camera was disabled - enabled now via raspi-config" in result.stdout
+    assert "camera_auto_detect=1" in _effective_all_scope(config.read_text())
+
+
+def test_without_raspi_config_step_3_fails_loudly_instead_of_falling_back(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+
+    result = _run_interfaces_step(tmp_path / "run", config, raspi_bin=None)
+
+    assert result.returncode == 0, result.stderr
+    assert "INTERFACES_FAILED=true" in result.stdout
+    assert "ERROR: raspi-config is not installed" in result.stdout
+    effective = _effective_all_scope(config.read_text())
+    assert "dtparam=spi=on" not in effective, "no silent fallback edit of SPI"
+    assert "dtparam=i2c_arm=on" not in effective
+    # The settings raspi-config does not cover are still ours to make.
+    assert "core_freq_fixed=1" in effective
+    assert "dtoverlay=adau7002-simple" in effective
+
+
+def test_a_do_spi_that_changes_nothing_is_caught_by_asking_again(tmp_path):
+    # Upstream's do_spi exits 0 even when its config.txt write failed, so its
+    # exit status says nothing. One that "succeeds" without writing must still
+    # be reported, and must not claim a reboot would fix it.
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+    stub = '#!/bin/sh\ncase "$2" in get_*) echo 1 ;; esac\nexit 0\n'
+
+    result = _run_interfaces_step(
+        tmp_path / "run", config, _raspi_config_bin(tmp_path, stub)
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INTERFACES_FAILED=true" in result.stdout
+    assert "'raspi-config nonint do_spi 0' left SPI disabled" in result.stdout
+    assert "'raspi-config nonint do_i2c 0' left I2C disabled" in result.stdout
+    assert "enabled now via raspi-config" not in result.stdout
+
+
+def test_a_raspi_config_without_the_spi_function_is_a_failure(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+    stub = '#!/bin/sh\ncase "$2" in get_i2c|get_camera) echo 0 ;; *) exit 127 ;; esac\n'
+
+    result = _run_interfaces_step(
+        tmp_path / "run", config, _raspi_config_bin(tmp_path, stub)
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INTERFACES_FAILED=true" in result.stdout
+    assert "'raspi-config nonint get_spi' failed" in result.stdout
+    assert "I2C already enabled" in result.stdout
+
+
+def test_a_raspi_config_without_a_camera_toggle_is_skipped_not_failed(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+    stub = '#!/bin/sh\ncase "$2" in get_spi|get_i2c) echo 0 ;; *) exit 127 ;; esac\n'
+
+    result = _run_interfaces_step(
+        tmp_path / "run", config, _raspi_config_bin(tmp_path, stub)
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INTERFACES_FAILED=false" in result.stdout
+    assert "no get_camera - skipping the Camera toggle" in result.stdout
+
+
+_UPSTREAM_FUNCTION = re.compile(r"^(\w+)\(\) ?\{\n.*?^\}$", re.MULTILINE | re.DOTALL)
+
+
+def _shell_functions(text: str) -> dict[str, str]:
+    return {m.group(1): m.group(0) for m in _UPSTREAM_FUNCTION.finditer(text)}
+
+
+def test_the_fake_raspi_config_matches_upstream():
+    # The interface tests above are only as good as the fake's fidelity, so
+    # every function it copies is compared with the pinned upstream revision
+    # it names. A mismatch means the copy was edited, or the pin moved without
+    # the copy being refreshed from it.
+    fake = _FAKE_RASPI_CONFIG.read_text()
+    pin = re.search(r"^#\s+RASPI_CONFIG_UPSTREAM=(\S+)$", fake, re.MULTILINE)
+    assert pin is not None, "the fake raspi-config names no upstream revision"
+    url = pin.group(1).replace(
+        "https://github.com/RPi-Distro/raspi-config/blob/",
+        "https://raw.githubusercontent.com/RPi-Distro/raspi-config/",
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            upstream = _shell_functions(response.read().decode())
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        pytest.skip(f"cannot reach {url} ({exc}) - the fake was not verified")
+    copied = _shell_functions(
+        fake.split("# BEGIN upstream functions\n")[1].split(
+            "# END upstream functions\n"
+        )[0]
+    )
+
+    assert {"get_spi", "do_spi", "get_i2c", "do_i2c", "set_config_var"} <= set(copied)
+    for name, body in copied.items():
+        assert name in upstream, f"{name} is not an upstream function"
+        assert body == upstream[name].replace("/etc/modules", "$MODULES"), (
+            f"the fake's {name} differs from upstream"
+        )
+
+
+# --------------------------------------------------------------------------
+# Step 6's ALSA config: firmware/alsa/visio-mic.conf becomes /etc/asound.conf,
+# which is what defines the visio_mic PCM the daemon records from. Installed
+# idempotently, and an operator's own asound.conf is kept, not destroyed.
+# --------------------------------------------------------------------------
+
+
+def _run_alsa_install(tmp_path: Path, etc: Path) -> subprocess.CompletedProcess:
+    lib = _shell_lib(tmp_path / "lib", "install_alsa_config")
+    src = Path(__file__).resolve().parent.parent / "alsa" / "visio-mic.conf"
+    return _run(lib, f'install_alsa_config "{src}" "{etc}/asound.conf"')
+
+
+def test_the_alsa_config_is_installed_once(tmp_path):
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    src = (
+        Path(__file__).resolve().parent.parent / "alsa" / "visio-mic.conf"
+    ).read_bytes()
+
+    first = _run_alsa_install(tmp_path / "a", etc)
+    second = _run_alsa_install(tmp_path / "b", etc)
+
+    assert first.returncode == 0, first.stderr
+    assert (etc / "asound.conf").read_bytes() == src
+    assert second.returncode == 0, second.stderr
+    assert "already installed" in second.stdout
+    assert sorted(p.name for p in etc.iterdir()) == ["asound.conf"]
+
+
+def test_an_operators_own_asound_conf_is_kept_aside(tmp_path):
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "asound.conf").write_text("pcm.!default { type hw card 1 }\n")
+
+    result = _run_alsa_install(tmp_path, etc)
+
+    assert result.returncode == 0, result.stderr
+    assert "pcm.visio_mic" in (etc / "asound.conf").read_text()
+    assert (etc / "asound.conf.pre-visio").read_text() == (
+        "pcm.!default { type hw card 1 }\n"
+    )
+
+
+def test_step_6_installs_the_alsa_config_from_the_provisioned_checkout(tmp_path):
+    firmware = Path(__file__).resolve().parent.parent
+    install_dir = tmp_path / "opt"
+    for relative in ("alsa/visio-mic.conf", "systemd/visio-recorder.service"):
+        target = install_dir / "firmware" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(firmware / relative, target)
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    systemctl = stubs / "systemctl"
+    systemctl.write_text('#!/bin/sh\necho "SYSTEMCTL $*"\n')
+    systemctl.chmod(0o755)
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            _extract_function("install_alsa_config"),
+            _extract_assignment("SYSTEMD_UNIT_SRC"),
+            f'INSTALL_DIR="{install_dir}"',
+            f'SYSTEMD_UNIT_DST="{etc}/visio-recorder.service"',
+            f'ALSA_CONF_DST="{etc}/asound.conf"',
+            _step_block(6),
+        ]
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (etc / "asound.conf").read_bytes() == (
+        firmware / "alsa" / "visio-mic.conf"
+    ).read_bytes()
+    assert "SYSTEMCTL enable visio-recorder" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# Step 7's env file template lists every key the daemon reads, so an operator
+# filling it in sees the video, upload-limit and audio tunables (#86, #87)
+# without reading the source - commented out at their defaults, because
+# VISIO_SEGMENT_DURATION_MS is derived from the others only while it is unset.
+# --------------------------------------------------------------------------
+
+
+def _env_template(tmp_path: Path) -> str:
+    """The env file step 7 writes on a fresh device."""
+    result = _run_env_step(tmp_path, reboot_needed="false")
+    assert result.returncode == 0, result.stderr
+    return (tmp_path / "visio-recorder.env").read_text()
+
+
+class _RecordingEnv(Mapping[str, str]):
+    """An environment that remembers every key looked up in it."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.read: set[str] = set()
+
+    def __getitem__(self, key: str) -> str:
+        self.read.add(key)
+        return self._values[key]
+
+    def __contains__(self, key: object) -> bool:
+        if isinstance(key, str):
+            self.read.add(key)
+        return key in self._values
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+
+def _daemon_env_keys() -> set[str]:
+    from visio_recorder import preflight
+    from visio_recorder.daemon import load_config
+
+    env = _RecordingEnv({"SUPABASE_URL": "http://x", "SUPABASE_ANON_KEY": "k"})
+    load_config(env)
+    preflight.resolve_data_dir(env)
+    preflight.resolve_battery_source(env, read_file=lambda _path: {})
+    preflight.resolve_audio_device(env, read_file=lambda _path: {})
+    return env.read
+
+
+def test_the_env_template_lists_every_key_the_daemon_reads(tmp_path):
+    template = _env_template(tmp_path)
+    keys = _daemon_env_keys()
+    assert {"VISIO_VIDEO_BITRATE", "VISIO_AUDIO", "VISIO_MAX_UPLOAD_BYTES"} <= keys, (
+        "the recorded lookups no longer reach the daemon's config reads"
+    )
+
+    for key in sorted(keys):
+        assert re.search(rf"^#? ?{key}=", template, re.MULTILINE), (
+            f"{key} is read by the daemon but missing from the env template"
+        )
+
+
+def test_the_env_template_leaves_derived_and_tunable_keys_at_their_defaults(
+    tmp_path,
+):
+    from visio_recorder.capture import AudioSettings, VideoSettings
+    from visio_recorder.segment_size import DEFAULT_MAX_UPLOAD_BYTES
+
+    template = _env_template(tmp_path)
+    video, audio = VideoSettings(), AudioSettings()
+    for line in (
+        f"# VISIO_VIDEO_WIDTH={video.width}",
+        f"# VISIO_VIDEO_HEIGHT={video.height}",
+        f"# VISIO_FRAMERATE={video.framerate}",
+        f"# VISIO_VIDEO_BITRATE={video.bitrate_bps}",
+        f"# VISIO_MAX_UPLOAD_BYTES={DEFAULT_MAX_UPLOAD_BYTES}",
+        "# VISIO_SEGMENT_DURATION_MS=60000",
+        "# VISIO_AUDIO=on",
+        f"# VISIO_AUDIO_DEVICE={audio.device}",
+        f"# VISIO_AUDIO_BITRATE={audio.bitrate_bps}",
+    ):
+        assert line in template.splitlines(), f"{line!r} missing from the env template"
+
+
+def test_the_env_template_parses_to_a_config_the_daemon_accepts(tmp_path):
+    from visio_recorder.daemon import load_config
+    from visio_recorder.preflight import read_env_file
+
+    env_file = tmp_path / "parsed" / "visio-recorder.env"
+    env_file.parent.mkdir()
+    env_file.write_text(
+        _env_template(tmp_path)
+        .replace("SUPABASE_URL=\n", "SUPABASE_URL=http://x\n")
+        .replace("SUPABASE_ANON_KEY=\n", "SUPABASE_ANON_KEY=k\n")
+    )
+    env = read_env_file(env_file)
+    assert env is not None
+
+    config = load_config(env)
+
+    assert config.segment_duration_ms == 60000
+    assert config.audio is not None and config.audio.device == "visio_mic"
+    assert config.battery_source == "none"

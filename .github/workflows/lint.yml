@@ -1,8 +1,10 @@
 name: lint
 
+# Deliberately unfiltered on pull_request: unlike tests.yml, which only runs
+# for PRs targeting an explicit branch list, this must also run on PRs stacked
+# onto a feature branch - shell, Python and app changes all land there first.
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -14,8 +16,44 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # No job here needs Docker or a Supabase instance: ruff and mypy read source
-  # only, and the app job type-checks and lints without bundling or running.
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check shellcheck is available
+        # Preinstalled on the ubuntu-latest runner image; install as a fallback
+        # so a runner image change fails loudly here rather than silently
+        # skipping the lint. An explicit `if` rather than `a || b && c`, which
+        # groups as `(a || b) && c` and would run the install on every path -
+        # including the common one, where the runner's apt lists are cleaned
+        # and an install with no preceding update fails the job outright.
+        run: |
+          if ! shellcheck --version; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+      - name: ShellCheck
+        # These are every file in the repo carrying a shell shebang. Add new
+        # ones here - `git ls-files | xargs -r awk 'FNR==1 && /^#!.*sh/'` lists them.
+        run: |
+          shellcheck --severity=style \
+            docs/superpowers/evidence/app-jest-container-flake/run-loaded.sh \
+            docs/superpowers/evidence/audio-capture/mixed_reel_before.sh \
+            docs/superpowers/evidence/dependabot-triage/seed-screens.sh \
+            docs/superpowers/evidence/provisioning-led-spi-audio/sim/failure-paths.sh \
+            docs/superpowers/evidence/provisioning-led-spi-audio/sim/run.sh \
+            docs/superpowers/evidence/provisioning-led-spi-audio/sim/stubs/* \
+            firmware/scripts/setup-device.sh \
+            firmware/tests/fixtures/raspi-config \
+            scripts/ci/supabase-images.sh \
+            scripts/ci/tests/test-supabase-images.sh \
+            scripts/gen-db-types.sh \
+            scripts/hooks/pre-commit \
+            scripts/hooks/tests/test-pre-commit.sh
+
+  # Neither job below needs Docker or a Supabase instance: ruff and mypy read
+  # source only, and the app job type-checks and lints without bundling or
+  # running.
   python:
     runs-on: ubuntu-latest
     strategy:

@@ -1,0 +1,42 @@
+Using CPython 3.14.2
+Creating virtual environment at: .venv
+   Building visio-pipeline @ file://<repo>/pipeline
+Downloading hf-xet (4.3MiB)
+Downloading litellm (15.9MiB)
+Downloading aiohttp (1.7MiB)
+Downloading tokenizers (3.2MiB)
+Downloading openai (1.3MiB)
+Downloading tiktoken (1.1MiB)
+ Downloaded tiktoken
+ Downloaded aiohttp
+ Downloaded openai
+ Downloaded tokenizers
+ Downloaded hf-xet
+ Downloaded litellm
+      Built visio-pipeline @ file://<repo>/pipeline
+Installed 75 packages in 285ms
+============================= test session starts ==============================
+platform linux -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: <repo>/pipeline
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.14.1
+collected 130 items
+
+tests/test_adapters.py .......................                           [ 17%]
+tests/test_audio_scoring.py ....                                         [ 20%]
+tests/test_composite_scoring.py ....                                     [ 23%]
+tests/test_ffmpeg_assembler.py .......                                   [ 29%]
+tests/test_highlight_selector.py .......                                 [ 34%]
+tests/test_ingestion.py .............                                    [ 44%]
+tests/test_main.py ...                                                   [ 46%]
+tests/test_models.py ..                                                  [ 48%]
+tests/test_motion_scoring.py .....                                       [ 52%]
+tests/test_notifier.py .                                                 [ 53%]
+tests/test_orchestrator.py ....................                          [ 68%]
+tests/test_scene_scoring.py .................                            [ 81%]
+tests/test_scoring_pipeline.py ..                                        [ 83%]
+tests/test_supabase_store.py ......................                      [100%]
+
+============================= 130 passed in 17.91s =============================
+exit=0

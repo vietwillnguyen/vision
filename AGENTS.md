@@ -8,7 +8,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Gates
 
-PRs are gated by `.github/workflows/tests.yml` (pytest, jest, web-bundle smoke, pgTAP, generated-database-types drift check), `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint, prettier), and `.github/workflows/hooks.yml` (the pre-commit hook's own suite plus a re-verification of the `docs/ARCHITECTURE.html` manifest); `tsc --noEmit` runs in both tests.yml and lint.yml, so a type error reddens both.
+PRs are gated by `.github/workflows/tests.yml` (pytest, jest, web-bundle smoke, pgTAP, generated-database-types drift check), `.github/workflows/lint.yml` (ruff check, ruff format, mypy, eslint, prettier, shellcheck), and `.github/workflows/hooks.yml` (the pre-commit hook's own suite plus a re-verification of the `docs/ARCHITECTURE.html` manifest); `tsc --noEmit` runs in both tests.yml and lint.yml, so a type error reddens both.
 README's "Lint, format, and type-check" section has the exact local commands.
 Run them before proposing a change is done; `uv run --locked` means a dependency edit must be followed by `uv lock` in that package.
 
@@ -55,9 +55,17 @@ anonymous rate limits shared runners kept hitting, so a stale list fails CI.
 ## Sharp edges
 
 - The Python rule set is shared: repo-root `ruff.toml`, extended from each package's `pyproject.toml`. Change it in one place, not three. mypy has no `extend`, so its config is per-package by necessity and the blocks are meant to stay identical.
-- `firmware/` and `pipeline/` are consumed by `integration/` as path dependencies. Both need their `[build-system]` table and their `py.typed` marker to stay put, or `integration/` silently degrades every cross-package call to `Any` and `python -m` stops resolving outside the package directory.
+- `firmware/` and `pipeline/` are consumed by `integration/` as path dependencies. Both need their `py.typed` marker and their `[build-system]` table to stay put, or `integration/` silently degrades every cross-package call to `Any` - see below for what dropping `[build-system]` does on its own.
 - Under jest-expo, `global.fetch` is React Native's XHR polyfill and resolves with `status`/`body` undefined against plain http localhost - live tests must inject a real fetch. `WebSocket` is *not* replaced, so Node's native one is used directly.
 - `app/AGENTS.md` pins the Expo SDK doc version to read before writing app code.
+
+## Python projects: `[build-system]` is not optional
+
+The repo has three independent uv projects (`firmware/`, `pipeline/`, `integration/`), so check each one separately.
+A `pyproject.toml` with no `[build-system]` table makes uv classify the project as **virtual**: it installs the dependencies and never installs the project's own package.
+`uv.lock` records this as `source = { virtual = "." }` (versus `editable = "."`), which is the fastest way to check.
+The package then imports only via the implicit current-directory entry `python -m` puts on `sys.path[0]`, so anything invoked from another directory - a console script, a systemd unit without a matching `WorkingDirectory=`, an operator over SSH - fails with `ModuleNotFoundError`.
+This shipped to the bring-up device in `firmware/`; see `firmware/tests/test_preflight_entrypoint.py` for the regression test.
 
 ## Maintaining this file
 

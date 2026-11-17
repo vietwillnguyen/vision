@@ -1,0 +1,6 @@
+$ (cd . && scripts/hooks/tests/test-pre-commit.sh && sed -n 's|^<!-- source-sha256: \(.*\) -->$|\1|p' docs/ARCHITECTURE.html | sha256sum -c -)
+16/16 pre-commit hook cases passed
+docs/superpowers/specs/2026-07-04-visio-pendant-design.md: OK
+docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md: OK
+docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md: OK
+exit=0

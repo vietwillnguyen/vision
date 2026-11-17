@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from visio_recorder import preflight
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import (
     AudioSettings,
@@ -22,6 +23,7 @@ from visio_recorder.device_identity import load_or_create_device_id, register_de
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
     PiJuiceBatteryReader,
+    UnmeteredPowerReader,
     Ws2812LedDriver,
 )
 from visio_recorder.flag_button import FlagUploadWorker, make_flag_press_handler
@@ -55,11 +57,26 @@ from visio_recorder.supabase_clients import build_supabase_clients
 from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
 from visio_recorder.uploader import StorageClient
 
-_DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
 _ONBOARDING_MAX_ATTEMPTS = 60
 _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
 _NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
 _DEVICE_NAME = "visio-pendant"
+
+_BATTERY_READER_FACTORIES: dict[str, Callable[[], BatteryReader]] = {
+    "pijuice": PiJuiceBatteryReader,
+    "none": UnmeteredPowerReader,
+}
+
+
+def resolve_battery_reader_factory(source: str) -> Callable[[], BatteryReader]:
+    try:
+        return _BATTERY_READER_FACTORIES[source]
+    except KeyError:
+        valid = ", ".join(sorted(_BATTERY_READER_FACTORIES))
+        raise ValueError(
+            f"unrecognized VISIO_BATTERY_SOURCE {source!r}; must be one of: {valid}"
+        ) from None
+
 
 _logger = logging.getLogger(__name__)
 
@@ -74,6 +91,7 @@ class DaemonConfig:
     max_upload_bytes: int
     # None when VISIO_AUDIO=off; otherwise the microphone to try at startup.
     audio: AudioSettings | None
+    battery_source: str
 
 
 def load_config(env: Mapping[str, str]) -> DaemonConfig:
@@ -138,11 +156,12 @@ def load_config(env: Mapping[str, str]) -> DaemonConfig:
     return DaemonConfig(
         supabase_url=env["SUPABASE_URL"],
         supabase_anon_key=env["SUPABASE_ANON_KEY"],
-        data_dir=Path(env.get("VISIO_DATA_DIR", _DEFAULT_DATA_DIR)),
+        data_dir=preflight.resolve_data_dir(env),
         segment_duration_ms=segment_duration_ms,
         video=video,
         max_upload_bytes=max_upload_bytes,
         audio=audio,
+        battery_source=env.get("VISIO_BATTERY_SOURCE", "pijuice"),
     )
 
 
@@ -205,6 +224,13 @@ class LoopDeps:
     upload_limit: UploadLimit
     # The microphone resolve_audio found at startup, or None for video only.
     audio: AudioSettings | None = None
+    # Seeded from the boot drain so both drain paths feed the same counter. The
+    # app renders it as "Segments uploaded today" from the segments_uploaded_today
+    # column, so the semantic is uploaded, not recorded: a backlog segment that
+    # goes up today counts wherever it is drained. on_segment_complete already
+    # counts the backlog its own drain clears; without this the identical
+    # overnight backlog would report 0 or 200 purely by which path reached it.
+    segments_uploaded_at_start: int = 0
 
 
 def _push_recording_status(
@@ -271,10 +297,10 @@ def run_recording_loop(
     """
     work: queue.Queue[Path | None] = queue.Queue()
     # Written only by the worker; read by the main thread only after join().
-    uploaded_today = [0]
+    uploaded_today = [deps.segments_uploaded_at_start]
 
     def worker() -> None:
-        segments_uploaded_today = 0
+        segments_uploaded_today = deps.segments_uploaded_at_start
         consecutive_failures = 0
         while True:
             item = work.get()
@@ -317,7 +343,7 @@ def run_recording_loop(
     audio = deps.audio
     _push_recording_status(
         deps,
-        segments_uploaded_today=0,
+        segments_uploaded_today=deps.segments_uploaded_at_start,
         recording_active=True,
         audio_active=audio is not None,
     )
@@ -387,6 +413,16 @@ def main() -> int:
     Epic 5 rather than through additional unit tests (see the plan's
     Handoff section).
     """
+    preflight_battery_source = os.environ.get("VISIO_BATTERY_SOURCE", "pijuice")
+    preflight_results = preflight.run_checks(
+        preflight_battery_source,
+        preflight.resolve_data_dir(os.environ),
+        audio_device=preflight.resolve_audio_device(os.environ),
+    )
+    print(preflight.format_report(preflight_results))
+    if preflight.has_blocking_failure(preflight_results):
+        return 1
+
     config = load_config(os.environ)
 
     session_path = config.data_dir / "session.json"
@@ -395,7 +431,7 @@ def main() -> int:
     queue_dir = config.data_dir / "queue"
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
-    battery_reader = PiJuiceBatteryReader()
+    battery_reader = resolve_battery_reader_factory(config.battery_source)()
     led_driver = Ws2812LedDriver()
 
     startup = run_startup_sequence(battery_reader, led_driver)
@@ -448,11 +484,18 @@ def main() -> int:
         config.segment_duration_ms,
         config.max_upload_bytes,
     )
-    flush_pending(queue_dir, clients.storage, device_id, upload_limit)
+    # Boot drain: flush what the queue already holds, recover captures an
+    # unclean stop left in data_dir, then flush again so the recovered ones go
+    # up before recording starts. Both drains seed the same uploaded counter.
+    segments_uploaded_at_start = flush_pending(
+        queue_dir, clients.storage, device_id, upload_limit
+    )
     if recover_orphaned_segments(
         config.data_dir, queue_dir, command_runner, config.video.framerate
     ):
-        flush_pending(queue_dir, clients.storage, device_id, upload_limit)
+        segments_uploaded_at_start += flush_pending(
+            queue_dir, clients.storage, device_id, upload_limit
+        )
 
     stop = threading.Event()
 
@@ -487,6 +530,7 @@ def main() -> int:
         video=config.video,
         upload_limit=upload_limit,
         audio=audio,
+        segments_uploaded_at_start=segments_uploaded_at_start,
     )
     try:
         run_recording_loop(deps, stop)

@@ -15,6 +15,7 @@ firmware/            -- Epic 1: visio-recorder Python systemd daemon
   visio_recorder/    -- battery, LED, muxer, upload queue, uploader, wifi/device onboarding, recording loop
   tests/             -- pytest suite (fakes for every hardware/network Protocol)
   systemd/           -- installable systemd unit
+  scripts/           -- `setup-device.sh`, the operator entry point for device bring-up
 pipeline/            -- Epic 2: nightly cloud AI pipeline (Python package)
   pipeline/          -- ingestion, scoring, selection, assembly, delivery stages,
                         nightly orchestrator + `python -m pipeline` entrypoint
@@ -59,8 +60,12 @@ Every pull request targeting `main`, and every push to `main`, is gated by the w
 They are split by what each needs to run, so a red check points at one thing:
 
 - [`tests.yml`](.github/workflows/tests.yml) - the subsystem test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) plus the pgTAP database contract, and a `ci-scripts` job that runs the stub-docker suite for [`scripts/ci/`](scripts/ci). Needs Docker and a live local Supabase instance, so it is the slowest gate.
-- [`lint.yml`](.github/workflows/lint.yml) - `ruff check`, `ruff format --check`, and `mypy` on the Python packages, plus `npm run lint` (eslint), `npm run format:check` (Prettier), and `npm run typecheck` (`tsc --noEmit`) on the app. Needs neither Docker nor Supabase, so it fails fast and independently of the suites above; see [Lint, format, and type-check](#lint-format-and-type-check). Type-checking is the one thing this split does not separate: `tsc --noEmit` runs here and in `tests.yml`, so a type error reddens both checks.
+- [`lint.yml`](.github/workflows/lint.yml) - `ruff check`, `ruff format --check`, and `mypy` on the Python packages, `npm run lint` (eslint), `npm run format:check` (Prettier), and `npm run typecheck` (`tsc --noEmit`) on the app, and `shellcheck` on the repo's shell scripts. Needs neither Docker nor Supabase, so it fails fast and independently of the suites above; see [Lint, format, and type-check](#lint-format-and-type-check). Type-checking is the one thing this split does not separate: `tsc --noEmit` runs here and in `tests.yml`, so a type error reddens both checks.
 - [`hooks.yml`](.github/workflows/hooks.yml) - the pre-commit architecture-sync guard's own suite, plus a re-check that the committed `source-sha256` manifest still matches every spec on disk (drift landed via `--no-verify` is invisible to the hook itself); see [Architecture doc](#architecture-doc) above.
+
+Each workflow's own `on:` block is the authoritative branch list, and two of them deviate from `main`-only on purpose.
+`lint.yml` is deliberately unfiltered on `pull_request`, so it also runs for pull requests stacked onto a feature branch - shell, Python and app changes all land there first.
+`tests.yml` and `hooks.yml` instead carry an explicit temporary entry per unmerged feature branch that has PRs stacked on it, each commented in place with the condition for removing it, so a stacked PR is not left with no suites and no manifest check at all.
 
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 - the floor all three packages declare (`requires-python = ">=3.11"`), so CI gates the oldest interpreter the firmware supports rather than the Python 3.13 the device's Raspberry Pi OS trixie ships; `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, a regeneration check on the committed database types (see [Generated database types](#generated-database-types)), `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
@@ -75,7 +80,7 @@ Bump [`.github/supabase-images.txt`](.github/supabase-images.txt) in the same PR
 
 ## Lint, format, and type-check
 
-[`.github/workflows/lint.yml`](.github/workflows/lint.yml) gates the same commands on every pull request targeting `main` and every push to `main`.
+[`.github/workflows/lint.yml`](.github/workflows/lint.yml) gates the same commands on every pull request, and on every push to `main`.
 It needs neither Docker nor a Supabase instance.
 
 Python uses [ruff](https://docs.astral.sh/ruff/) for both linting and formatting (it replaces black, flake8, and isort) and [mypy](https://mypy.readthedocs.io/) for type checking.
@@ -100,6 +105,9 @@ npm run format         # prettier --write .
 npm run format:check   # prettier --check . (what CI runs)
 npm run typecheck      # tsc --noEmit
 ```
+
+Shell scripts are linted with [shellcheck](https://www.shellcheck.net/) at `--severity=style`.
+The `shellcheck` job in [`lint.yml`](.github/workflows/lint.yml) holds the file list, and its comment records the one-liner that finds a script missing from it.
 
 ## Supabase foundation (Epic 0)
 
@@ -138,13 +146,34 @@ On boot it runs the battery/LED startup sequence, scans a QR code to onboard WiF
 Configuration is read from environment variables via the systemd unit's `EnvironmentFile=/etc/visio-recorder.env`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VISIO_DATA_DIR`, `VISIO_VIDEO_WIDTH` (1280), `VISIO_VIDEO_HEIGHT` (720), `VISIO_FRAMERATE` (30), `VISIO_VIDEO_BITRATE` (4000000 bps), `VISIO_MAX_UPLOAD_BYTES` (52428800, the hosted free plan's per-file limit), and `VISIO_SEGMENT_DURATION_MS` (derived from the bitrate and upload limit when unset: 60000 at the defaults).
 Audio: `VISIO_AUDIO` (`on`, or `off` to record video only without probing), `VISIO_AUDIO_DEVICE` (`visio_mic`, an ALSA PCM) and `VISIO_AUDIO_BITRATE` (64000).
 With audio on, the daemon opens the ALSA device at startup and, if it opens, records each segment with `rpicam-vid --codec libav --libav-audio --audio-source alsa` to MPEG-TS and remuxes it to MP4; if it does not, it logs a warning and records video only, and `device_status.audio_active` says which.
-The INMP441 I2S microphone needs `dtoverlay=adau7002-simple` in `/boot/firmware/config.txt` and [`firmware/alsa/visio-mic.conf`](firmware/alsa/visio-mic.conf) as `/etc/asound.conf`, wired SCK to GPIO 18, WS to GPIO 19, SD to GPIO 20 and L/R to GND; the status LED must already be on GPIO 10 (see below), since GPIO 18 was its old pin.
+The INMP441 I2S microphone needs `dtoverlay=adau7002-simple` in `/boot/firmware/config.txt` and [`firmware/alsa/visio-mic.conf`](firmware/alsa/visio-mic.conf) as `/etc/asound.conf` (both provisioned by `setup-device.sh`, below), wired SCK to GPIO 18, WS to GPIO 19, SD to GPIO 20 and L/R to GND; the status LED must already be on GPIO 10 (see below), since GPIO 18 was its old pin.
 See the design spec's [Audio Capture](docs/superpowers/specs/2026-07-04-visio-pendant-design.md#audio-capture-as-built) section for wiring, setup and the bench measurements still needed.
 Segments over the upload limit are split with `ffmpeg -c copy` before upload, and one that cannot be split is moved to `rejected/` and counted in `device_status.segments_rejected` instead of being retried forever; the [Segment Size Contract](docs/superpowers/specs/2026-07-04-visio-pendant-design.md#segment-size-contract) has the numbers.
 To measure real segment size on the Pi: `rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o /tmp/size-test.h264 && ls -l /tmp/size-test.h264`.
 Device prerequisites beyond this project's `uv.lock`: `apt install zbar-tools` for QR decoding, plus the `pijuice`, `python3-spidev`, and `python3-gpiozero` system packages for the battery, LED, and flag-button drivers on the Pi.
-The status LED is a WS2812B driven over SPI0 MOSI (GPIO 10), so the device needs `dtparam=spi=on` and `core_freq_fixed=1` in `/boot/firmware/config.txt`, and the daemon's user needs the `spi` group; GPIO 18-21 stay free for an I2S microphone.
+The status LED is a WS2812B driven over SPI0 MOSI (GPIO 10, header pin 19), so the device needs `dtparam=spi=on` and `core_freq_fixed=1` in `/boot/firmware/config.txt`, and the daemon's user needs access to `/dev/spidev0.0` (the `spi` group; the daemon still runs as root, see the provisioning spec's de-rooting follow-up); GPIO 18-21 stay free for an I2S microphone.
 The pendant spec's "GPIO Pin Map" and "LED driver" sections have the wiring and the SPI timing.
+
+Device setup: run `sudo firmware/scripts/setup-device.sh` on the target Pi (idempotent - safe to re-run after an SD re-flash or to repair drift).
+It installs `rpicam-apps`, `zbar-tools`, `ffmpeg`, `network-manager`, `git`, `python3-gpiozero`, `python3-spidev`, and `alsa-utils` (plus `pijuice-base` opportunistically - the Raspberry Pi archive ships it for bookworm but not trixie, and its absence never fails setup), enables SPI, I2C and the camera through Raspberry Pi OS's own `raspi-config nonint` (`do_spi 0`, `do_i2c 0`, each checked first with `get_spi` / `get_i2c` and verified afterwards), deploys the code via `uv sync --locked` into `/opt/visio-recorder`, installs the systemd unit, and installs [`firmware/alsa/visio-mic.conf`](firmware/alsa/visio-mic.conf) as `/etc/asound.conf` (an operator's own file is kept once as `/etc/asound.conf.pre-visio`).
+For the two `/boot/firmware/config.txt` settings `raspi-config` has no option for, `core_freq_fixed=1` and `dtoverlay=adau7002-simple`, it edits the file itself: each only once, in a section that applies to the Zero 2W (global or `[all]`), a conflicting value such as `core_freq_fixed=0` rewritten in place, and the file replaced atomically.
+A change to `config.txt`, the swap drop-in, SPI or I2C ends the run with `REBOOT REQUIRED`; a re-run with nothing to do changes no file and says `No reboot required.`
+Nothing is compiled on the device: the project venv is built from the system `python3` with `--system-site-packages`, because `gpiozero`, `spidev` and `pijuice` are apt packages rather than `uv.lock` entries and preflight blocks on the first two.
+A step that cannot finish (an uneditable `config.txt`, an interface `raspi-config` could not enable or a missing `raspi-config` on a non-Raspberry-Pi OS image, an uncreatable data dir) lets the remaining steps run, then the summary repeats it as an `INCOMPLETE` line and the script exits non-zero - a step-3 failure is repeated the same way at the env-file checkpoint, so even a fresh device's first run exits non-zero - so a device that cannot start is never reported as a clean setup.
+The env file template it writes lists every tunable above, commented out at its default.
+
+Preflight runs automatically before every start (`ExecStartPre=`) and standalone as **`visio-preflight`** for manual diagnostics - a console script symlinked into `/usr/local/bin`, so it works from any directory as a plain SSH user with no venv path and no `sudo`.
+Its first line reports which install the checks ran from, since a device typically carries both `/opt/visio-recorder` and your own clone.
+It checks the data dir the daemon will actually use, reading `VISIO_DATA_DIR` from the environment first and then from `/etc/visio-recorder.env`, and a failed import names the step that installs that module rather than always blaming `uv sync`.
+That env file stays mode 600 root-owned, so an unprivileged run cannot read it: when that happens preflight checks the default and says on its `data_dir` line that it could not confirm the configured value, rather than reporting a guess as a fact - run it under `sudo` to check a non-default `VISIO_DATA_DIR`.
+It blocks on `spidev` being importable and on `/dev/spidev0.0` opening read-write (missing means SPI is off or the device has not been rebooted since setup; an operator outside the `spi` group only gets a warning, since the daemon runs as root).
+It warns, without blocking, when `vcgencmd get_config core_freq_fixed` is not `1`, and when the microphone (`VISIO_AUDIO_DEVICE`, default `visio_mic`) does not open, naming the missing layer: no `adau7002` card (overlay missing or no reboot yet), no `visio_mic` PCM in `/etc/asound.conf`, or, with both present, the wiring - the daemon records video only in every one of those cases.
+Missing PiJuice hardware only warns (`VISIO_BATTERY_SOURCE=none` is the current bring-up default - see [`2026-07-21-visio-device-provisioning-design.md`](docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md)), everything else blocks startup with a clear reason in `journalctl`.
+
+The script provisions an explicit revision rather than pulling: it defaults to the exact commit of the clone you run it from, so two devices set up from the same checkout get identical firmware, and `VISIO_GIT_REF=<tag|branch|sha>` overrides it.
+It also installs editor and interactive shell conveniences (neovim as `EDITOR`/`VISUAL`, tmux, `ls`/history aliases, a branch-aware prompt) into the invoking user's `~/.bashrc`; set `VISIO_DEV_SHELL=0` in `/etc/visio-recorder.env` to skip that for an appliance image.
+The env file is written before the dev-shell step runs, so on a fresh device the script stops at the template with the switch already in it - setting it to `0` there gives a device that never installs those conveniences at all.
+Flipping it to `0` later removes the managed `~/.bashrc` block on the next run but deliberately leaves the installed packages alone, since silently purging an operator's editor mid-bring-up is worse than leaving it.
 
 ### Local development
 

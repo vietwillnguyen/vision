@@ -1,0 +1,29 @@
+### firmware
+All checks passed!
+35 files already formatted
+Success: no issues found in 35 source files
+exit=0
+### pipeline
+All checks passed!
+38 files already formatted
+Success: no issues found in 38 source files
+exit=0
+### integration
+Using CPython 3.14.2
+Creating virtual environment at: .venv
+   Building visio-recorder @ file://<repo>/firmware
+   Building visio-pipeline @ file://<repo>/pipeline
+   Building visio-integration @ file://<repo>/integration
+      Built visio-integration @ file://<repo>/integration
+      Built visio-recorder @ file://<repo>/firmware
+      Built visio-pipeline @ file://<repo>/pipeline
+Installed 77 packages in 410ms
+All checks passed!
+6 files already formatted
+Success: no issues found in 5 source files
+exit=0
+          shellcheck --severity=style \
+            firmware/scripts/setup-device.sh \
+            scripts/hooks/pre-commit \
+            scripts/hooks/tests/test-pre-commit.sh
+

@@ -1,0 +1,5 @@
+$ (cd firmware && uv run --locked --extra dev ruff check . && uv run --locked --extra dev ruff format --check . && uv run --locked --extra dev mypy)
+All checks passed!
+35 files already formatted
+Success: no issues found in 35 source files
+exit=0

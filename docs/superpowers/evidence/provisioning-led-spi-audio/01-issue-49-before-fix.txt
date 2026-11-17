@@ -1,0 +1,56 @@
+F.F.                                                                     [100%]
+=================================== FAILURES ===================================
+____________ test_an_applied_1024mb_swap_file_is_a_no_op_on_re_run _____________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-231/test_an_applied_1024mb_swap_fi0')
+
+    def test_an_applied_1024mb_swap_file_is_a_no_op_on_re_run(tmp_path):
+        # The exact reading from issue #49: the drop-in this script wrote, applied
+        # by a reboot, reporting one page short of 1024 MiB.
+        dropin = _written_dropin(tmp_path)
+        run = tmp_path / "rerun"
+        run.mkdir()
+    
+        result = _run_rpi_swap_step(run, 1048572, dropin)
+    
+        assert result.returncode == 0, result.stderr
+>       assert "REBOOT_NEEDED=false" in result.stdout, result.stdout
+E       AssertionError: [setup-device] Step 1/10: swap size
+E         SYSTEMCTL daemon-reload
+E         [setup-device] Swap is 1023MB - wrote /tmp/pytest-of-user/pytest-231/test_an_applied_1024mb_swap_fi0/rerun/rpi/swap.conf.d/10-visio.conf pinning a 1024MB swap file, applied on the reboot reported at the end
+E         REBOOT_NEEDED=true
+E         
+E       assert 'REBOOT_NEEDED=false' in '[setup-device] Step 1/10: swap size\nSYSTEMCTL daemon-reload\n[setup-device] Swap is 1023MB - wrote /tmp/pytest-of-vi.../swap.conf.d/10-visio.conf pinning a 1024MB swap file, applied on the reboot reported at the end\nREBOOT_NEEDED=true\n'
+E        +  where '[setup-device] Step 1/10: swap size\nSYSTEMCTL daemon-reload\n[setup-device] Swap is 1023MB - wrote /tmp/pytest-of-vi.../swap.conf.d/10-visio.conf pinning a 1024MB swap file, applied on the reboot reported at the end\nREBOOT_NEEDED=true\n' = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\nlog() {\n  echo "[setup-device] $*"\n}\nreboot_needed=false\n.../10-visio.conf pinning a 1024MB swap file, applied on the reboot reported at the end\nREBOOT_NEEDED=true\n', stderr='').stdout
+
+tests/test_setup_device.py:1242: AssertionError
+________ test_a_written_but_unapplied_dropin_still_asks_for_the_reboot _________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-231/test_a_written_but_unapplied_d0')
+
+    def test_a_written_but_unapplied_dropin_still_asks_for_the_reboot(tmp_path):
+        # Re-running before rebooting must not go quiet: the swap file is still not
+        # active, so the reboot is still required - but nothing is rewritten.
+        dropin = _written_dropin(tmp_path)
+        run = tmp_path / "rerun"
+        run.mkdir()
+    
+        result = _run_rpi_swap_step(run, 214000, dropin)
+    
+        assert "REBOOT_NEEDED=true" in result.stdout
+>       assert "SYSTEMCTL" not in result.stdout, "the drop-in was already in place"
+E       AssertionError: the drop-in was already in place
+E       assert 'SYSTEMCTL' not in '[setup-devi...EEDED=true\n'
+E         
+E         'SYSTEMCTL' is contained here:
+E           [setup-device] Step 1/10: swap size
+E           SYSTEMCTL daemon-reload
+E         ? +++++++++
+E           [setup-device] Swap is 208MB - wrote /tmp/pytest-of-user/pytest-231/test_a_written_but_unapplied_d0/rerun/rpi/swap.conf.d/10-visio.conf pinning a 1024MB swap file, applied on the reboot reported at the end
+E           REBOOT_NEEDED=true
+
+tests/test_setup_device.py:1267: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_setup_device.py::test_an_applied_1024mb_swap_file_is_a_no_op_on_re_run
+FAILED tests/test_setup_device.py::test_a_written_but_unapplied_dropin_still_asks_for_the_reboot
+2 failed, 2 passed, 95 deselected in 0.19s

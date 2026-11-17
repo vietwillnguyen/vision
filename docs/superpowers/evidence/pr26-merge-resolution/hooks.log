@@ -1,0 +1,7 @@
+16/16 pre-commit hook cases passed
+hook-tests exit=0
+docs/superpowers/specs/2026-07-04-visio-pendant-design.md: OK
+docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md: OK
+docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md: OK
+manifest exit=0
+coverage check done

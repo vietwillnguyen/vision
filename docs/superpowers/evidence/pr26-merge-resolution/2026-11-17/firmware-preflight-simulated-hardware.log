@@ -1,0 +1,61 @@
+### 1. bare host, VISIO_BATTERY_SOURCE=none, VISIO_DATA_DIR=<sim>/data (missing)
+[INFO] install: <repo>/firmware/visio_recorder
+[BLOCK] rpicam-vid: rpicam-vid not found on PATH - check the apt install step
+[BLOCK] rpicam-still: rpicam-still not found on PATH - check the apt install step
+[BLOCK] zbarimg: zbarimg not found on PATH - check the apt install step
+[OK] ffmpeg: found on PATH
+[BLOCK] nmcli: nmcli not found on PATH - check the apt install step
+[BLOCK] rpi_ws281x: rpi_ws281x not importable - no archive packages it, so setup-device.sh builds it into the venv - check that build, which needs a C compiler, Python headers and network access
+[BLOCK] gpiozero: gpiozero not importable - installed by apt as python3-gpiozero and visible here only because the venv is built with --system-site-packages - check the apt install step
+[OK] supabase: importable
+[BLOCK] camera: rpicam-hello unavailable - PermissionError: check apt install step
+[BLOCK] networkmanager: nmcli unavailable - PermissionError: check apt install step
+[BLOCK] data_dir: <sim>/data missing or not writable - run setup-device.sh
+exit=1
+
+### 2. simulated Pi: stub camera/NM/QR binaries, stub LED/GPIO modules, writable data dir
+[INFO] install: <repo>/firmware/visio_recorder
+[OK] rpicam-vid: found on PATH
+[OK] rpicam-still: found on PATH
+[OK] zbarimg: found on PATH
+[OK] ffmpeg: found on PATH
+[OK] nmcli: found on PATH
+[OK] rpi_ws281x: importable
+[OK] gpiozero: importable
+[OK] supabase: importable
+[OK] camera: camera detected
+[OK] networkmanager: running
+[OK] data_dir: <sim>/data writable
+exit=0
+
+### 3. simulated Pi but camera ribbon unplugged (rpicam-hello lists no cameras)
+[INFO] install: <repo>/firmware/visio_recorder
+[OK] rpicam-vid: found on PATH
+[OK] rpicam-still: found on PATH
+[OK] zbarimg: found on PATH
+[OK] ffmpeg: found on PATH
+[OK] nmcli: found on PATH
+[OK] rpi_ws281x: importable
+[OK] gpiozero: importable
+[OK] supabase: importable
+[BLOCK] camera: no camera detected - check ribbon cable connection
+[OK] networkmanager: running
+[OK] data_dir: <sim>/data writable
+exit=1
+
+### 4. simulated Pi with VISIO_BATTERY_SOURCE=pijuice and no HAT (battery checks warn only, exit 0)
+[INFO] install: <repo>/firmware/visio_recorder
+[OK] rpicam-vid: found on PATH
+[OK] rpicam-still: found on PATH
+[OK] zbarimg: found on PATH
+[OK] ffmpeg: found on PATH
+[OK] nmcli: found on PATH
+[OK] rpi_ws281x: importable
+[OK] gpiozero: importable
+[OK] supabase: importable
+[OK] camera: camera detected
+[OK] networkmanager: running
+[OK] data_dir: <sim>/data writable
+[WARN] pijuice: pijuice not installed - expected when VISIO_BATTERY_SOURCE=none
+[WARN] i2c: I2C not enabled - run setup-device.sh, may need a reboot
+exit=0

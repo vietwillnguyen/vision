@@ -1,0 +1,32 @@
+$ cd firmware && uv run --locked --extra dev pytest
+============================= test session starts ==============================
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.16.0
+collected 453 items
+
+tests/test_battery.py ...                                                [  0%]
+tests/test_capture.py ..........                                         [  2%]
+tests/test_daemon.py ..............................................      [ 13%]
+tests/test_device_identity.py ........                                   [ 14%]
+tests/test_drivers.py .                                                  [ 15%]
+tests/test_flag_button.py ...........                                    [ 17%]
+tests/test_led.py ....                                                   [ 18%]
+tests/test_muxer.py ....                                                 [ 19%]
+tests/test_onboarding.py .........                                       [ 21%]
+tests/test_preflight.py ................................................ [ 31%]
+.......................................                                  [ 40%]
+tests/test_preflight_entrypoint.py ........                              [ 42%]
+tests/test_recording_loop.py ..........................                  [ 47%]
+tests/test_segment_size.py .........                                     [ 49%]
+tests/test_setup_device.py ............................................. [ 59%]
+........................................................................ [ 75%]
+............                                                             [ 78%]
+tests/test_supabase_clients.py ...............                           [ 81%]
+tests/test_upload_limit.py .....................                         [ 86%]
+tests/test_upload_queue.py .....                                         [ 87%]
+tests/test_uploader.py ..                                                [ 87%]
+tests/test_wifi_onboard.py .................................             [ 95%]
+tests/test_ws2812_spi.py ......................                          [100%]
+
+============================= 453 passed in 16.92s =============================

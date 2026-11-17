@@ -1,0 +1,11 @@
+tsc exit=0
+
+> app@1.0.0 lint
+> eslint . --max-warnings 0
+
+lint exit=0
+
+> app@1.0.0 typecheck
+> tsc --noEmit
+
+typecheck exit=0

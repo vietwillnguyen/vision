@@ -1,0 +1,3 @@
+#!/bin/sh
+# raspi-config's do_i2c loads i2c-dev; a container cannot load kernel modules.
+echo "STUB modprobe $*" >> /var/log/visio-sim-stubs.log

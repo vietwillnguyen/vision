@@ -25,10 +25,15 @@ from visio_recorder.daemon import (
     LoopDeps,
     load_config,
     resolve_audio,
+    resolve_battery_reader_factory,
     run_recording_loop,
     run_startup_sequence,
 )
-from visio_recorder.drivers import Ws2812LedDriver
+from visio_recorder.drivers import (
+    PiJuiceBatteryReader,
+    UnmeteredPowerReader,
+    Ws2812LedDriver,
+)
 from visio_recorder.led import LedPattern
 from visio_recorder.recording_loop import DiskStats
 
@@ -127,6 +132,42 @@ def test_load_config_missing_supabase_anon_key_raises_value_error_naming_it():
         load_config(env)
 
 
+def test_load_config_defaults_battery_source_to_pijuice():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+    }
+
+    config = load_config(env)
+
+    assert config.battery_source == "pijuice"
+
+
+def test_load_config_reads_battery_source_override():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_BATTERY_SOURCE": "none",
+    }
+
+    config = load_config(env)
+
+    assert config.battery_source == "none"
+
+
+def test_resolve_battery_reader_factory_returns_pijuice_reader_class():
+    assert resolve_battery_reader_factory("pijuice") is PiJuiceBatteryReader
+
+
+def test_resolve_battery_reader_factory_returns_unmetered_reader_class():
+    assert resolve_battery_reader_factory("none") is UnmeteredPowerReader
+
+
+def test_resolve_battery_reader_factory_rejects_unrecognized_source():
+    with pytest.raises(ValueError, match="bogus"):
+        resolve_battery_reader_factory("bogus")
+
+
 def _make_deps(
     tmp_path,
     *,
@@ -135,6 +176,7 @@ def _make_deps(
     led_driver,
     storage_client=None,
     status_client=None,
+    segments_uploaded_at_start=0,
     audio=None,
 ) -> LoopDeps:
     return LoopDeps(
@@ -151,6 +193,7 @@ def _make_deps(
         video=VideoSettings(),
         upload_limit=unlimited_upload_limit(),
         audio=audio,
+        segments_uploaded_at_start=segments_uploaded_at_start,
     )
 
 
@@ -182,6 +225,55 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
     ]
     # One upsert per segment, bracketed by the loop's start and exit reports.
     assert [u["segments_uploaded_today"] for u in status.upserts] == [0, 1, 2, 3, 3]
+
+
+def test_boot_drain_count_carries_into_the_status_the_worker_reports(tmp_path):
+    # main() feeds the startup flush_pending's return in here. The in-loop drain
+    # in on_segment_complete already adds whatever backlog it clears, so without
+    # this seed the same overnight backlog would reach the app's Device tab or
+    # not purely by which of the two drains happened to reach it first.
+    stop = threading.Event()
+    status = FakeStatusClient()
+    runner = FakeCommandRunner(
+        on_record=lambda count: stop.set() if count >= 1 else None
+    )
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        status_client=status,
+        segments_uploaded_at_start=7,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    # The recording_active=True push before the first capture and the
+    # recording_active=False push after the drain carry the seed too.
+    assert [u["segments_uploaded_today"] for u in status.upserts] == [7, 8, 8]
+
+
+def test_boot_drain_count_survives_a_stop_before_any_segment(tmp_path):
+    # Stopped before the first capture: the worker never runs, so the final
+    # recording_active=False row must still report the boot drain rather than
+    # resetting the app's "Segments uploaded today" to 0.
+    stop = threading.Event()
+    stop.set()
+    status = FakeStatusClient()
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        status_client=status,
+        segments_uploaded_at_start=7,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    assert [
+        (u["recording_active"], u["segments_uploaded_today"]) for u in status.upserts
+    ] == [(True, 7), (False, 7)]
 
 
 def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
@@ -287,8 +379,21 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
     led = FakeLedDriver()
     # Segments 1-4 fail (CRITICAL at 3 and STILL CRITICAL at 4: a sustained
     # outage must stay red, not blip red once), 5 succeeds (reset), 6-8 fail
-    # (counter climbs back to the threshold at 8).
-    storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 4, 6, 7, 8})
+    # (counter climbs back to the threshold at 8). Segment 5's success also
+    # drains the backlog, which retries 1-4 and - since this script is keyed on
+    # the file, not on a call count - fails them again, leaving the LED
+    # sequence and the uploaded list below about segments alone.
+    storage = ScriptedStorageClient(
+        failing_names={
+            "20260704_120000.mp4",
+            "20260704_120001.mp4",
+            "20260704_120002.mp4",
+            "20260704_120003.mp4",
+            "20260704_120005.mp4",
+            "20260704_120006.mp4",
+            "20260704_120007.mp4",
+        }
+    )
 
     runner = FakeCommandRunner(
         on_record=lambda count: stop.set() if count >= 8 else None
@@ -842,17 +947,25 @@ def test_startup_and_loop_drive_the_spi_led_through_every_colour(tmp_path):
     battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=15)
 
     class OutageThenLowBattery(ScriptedStorageClient):
-        # Uploads 2-4 fail; the battery reads low from upload 5 on. The worker
-        # reads the battery before each upload, so segment 6 is the first to
-        # see it - deterministic, unlike a main-loop trigger.
+        # Segments 2-4 fail; the battery reads low once segment 5 has gone up.
+        # The worker reads the battery before each upload, so segment 6 is the
+        # first to see it - deterministic, unlike a main-loop trigger. Keyed on
+        # the file rather than the attempt count, because segment 5's success
+        # also drains (and here re-fails) the 2-4 backlog.
         def upload(self, bucket, object_path, local_path):
             try:
                 super().upload(bucket, object_path, local_path)
             finally:
-                if self.attempts == 5:
+                if local_path.name == "20260704_120004.mp4":
                     battery.trigger_halt()
 
-    storage = OutageThenLowBattery(fail_on_attempts={2, 3, 4})
+    storage = OutageThenLowBattery(
+        failing_names={
+            "20260704_120001.mp4",
+            "20260704_120002.mp4",
+            "20260704_120003.mp4",
+        }
+    )
     stop = threading.Event()
     runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 6 else None)
 

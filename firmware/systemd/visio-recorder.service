@@ -6,11 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/visio-recorder.env
-ExecStart=/usr/bin/python3 -m visio_recorder.daemon
-WorkingDirectory=/opt/visio-recorder
+ExecStartPre=/opt/visio-recorder/firmware/.venv/bin/python3 -m visio_recorder.preflight
+ExecStart=/opt/visio-recorder/firmware/.venv/bin/python3 -m visio_recorder.daemon
+WorkingDirectory=/opt/visio-recorder/firmware
 Restart=on-failure
 RestartSec=5
-User=pi
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,51 @@
+$ (cd integration && uv run --locked --extra dev pytest -rs)
+============================= test session starts ==============================
+platform linux -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0
+rootdir: <repo>/integration
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.14.2
+collected 11 items
+
+tests/test_firmware_upload_live.py ....                                  [ 36%]
+tests/test_marker_contract.py ...                                        [ 63%]
+tests/test_rls_end_to_end.py .                                           [ 72%]
+tests/test_row_schema_contract.py ..                                     [ 90%]
+tests/test_storage_ingestion_live.py .                                   [100%]
+
+=============================== warnings summary ===============================
+tests/test_firmware_upload_live.py::test_next_boot_flush_clears_a_segment_that_already_reached_storage
+tests/test_firmware_upload_live.py::test_a_different_file_under_an_existing_key_is_refused_not_overwritten
+tests/test_firmware_upload_live.py::test_segment_is_stored_as_video_mp4
+tests/test_firmware_upload_live.py::test_segment_upload_does_not_hold_the_whole_file_in_memory
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase/_sync/client.py:320: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_firmware_upload_live.py::test_next_boot_flush_clears_a_segment_that_already_reached_storage
+tests/test_firmware_upload_live.py::test_a_different_file_under_an_existing_key_is_refused_not_overwritten
+tests/test_firmware_upload_live.py::test_segment_is_stored_as_video_mp4
+tests/test_firmware_upload_live.py::test_segment_upload_does_not_hold_the_whole_file_in_memory
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_rls_end_to_end.py::test_owner_can_read_pipeline_written_rows_but_other_user_cannot
+tests/test_storage_ingestion_live.py::test_firmware_uploaded_object_is_ingested_by_pipeline_listing
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase/_sync/client.py:320: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_firmware_upload_live.py: 8 warnings
+tests/test_storage_ingestion_live.py: 2 warnings
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase/_sync/client.py:270: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncStorageClient(
+
+tests/test_firmware_upload_live.py: 8 warnings
+tests/test_storage_ingestion_live.py: 2 warnings
+  <repo>/integration/.venv/lib/python3.14/site-packages/supabase/_sync/client.py:270: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncStorageClient(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 11 passed, 36 warnings in 5.25s ========================
+exit=0

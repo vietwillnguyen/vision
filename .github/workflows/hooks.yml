@@ -2,7 +2,12 @@ name: hooks
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      # Temporary: PR #26's branch. Without it a PR stacked onto #26 runs no
+      # hook checks at all - including the ARCHITECTURE.html manifest gate -
+      # until the whole stack lands on main. Remove this entry when #26 merges.
+      - worktree-visio-device-provisioning
   push:
     branches: [main]
 

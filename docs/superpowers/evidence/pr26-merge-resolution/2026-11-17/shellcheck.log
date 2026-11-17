@@ -1,0 +1,3 @@
+$ (cd . && shellcheck --severity=style docs/superpowers/evidence/dependabot-triage/seed-screens.sh firmware/scripts/setup-device.sh scripts/gen-db-types.sh scripts/hooks/pre-commit scripts/hooks/tests/test-pre-commit.sh && echo shellcheck clean)
+shellcheck clean
+exit=0
