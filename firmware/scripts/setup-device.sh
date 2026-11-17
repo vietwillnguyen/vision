@@ -14,17 +14,19 @@ PREFLIGHT_BIN="visio-preflight"
 
 # ${VENV_DIR}/bin/python3 is the interpreter behind both ${PREFLIGHT_BIN} and
 # the systemd unit's ExecStart/ExecStartPre, and the hardware libraries they
-# import - gpiozero, pijuice, rpi_ws281x - live outside this project (see
-# visio_recorder/drivers.py). Two of the three are apt packages, so the venv
-# has to be built from the system interpreter rather than one uv downloads for
-# itself, whose site-packages hold nothing apt has ever installed.
+# import - gpiozero, spidev, pijuice - live outside this project (see
+# visio_recorder/drivers.py). All three are apt packages, so the venv has to be
+# built from the system interpreter rather than one uv downloads for itself,
+# whose site-packages hold nothing apt has ever installed.
 SYSTEM_PYTHON="/usr/bin/python3"
 
-# The exception: no Debian or Raspberry Pi archive ships rpi_ws281x at all, and
-# upstream publishes a source distribution only, so it is compiled into the
-# venv rather than apt-installed. Pinned for the same reason the uv installer
-# is - two devices provisioned a week apart must get the same firmware.
-RPI_WS281X_SPEC="rpi-ws281x==5.0.0"
+# The boot firmware's config file on Raspberry Pi OS bookworm and later. Step 3
+# edits it for the SPI status LED and the I2S microphone.
+CONFIG_TXT="/boot/firmware/config.txt"
+
+# Where ALSA reads the system-wide config that defines the visio_mic capture
+# PCM (firmware/alsa/visio-mic.conf, installed in step 6).
+ALSA_CONF_DST="/etc/asound.conf"
 
 # Fallback revision, used only when neither VISIO_GIT_REF nor the script's own
 # checkout can supply one (see resolve_requested_ref). A branch name is a
@@ -46,7 +48,8 @@ BASHRC_BEGIN="# >>> visio-recorder dev shell (managed by setup-device.sh) >>>"
 BASHRC_END="# <<< visio-recorder dev shell (managed by setup-device.sh) <<<"
 
 reboot_needed=false
-ws281x_missing=false
+config_txt_changed=false
+config_txt_failed=false
 data_dir_failed=false
 
 log() {
@@ -94,11 +97,20 @@ SWAP_CONF="/etc/dphys-swapfile"
 RPI_SWAP_CONF="/etc/rpi/swap.conf"
 RPI_SWAP_DROPIN="/etc/rpi/swap.conf.d/10-visio.conf"
 SWAP_SIZE_MB=1024
+MEMINFO="/proc/meminfo"
 # The Pi Zero 2W's 512MB RAM needs a real swap file for apt/dpkg operations, or
 # package configuration can thrash swap badly enough to look like a hung or
 # dropped SSH session.
-active_swap_mb="$(awk '/^SwapTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
-active_swap_mb="${active_swap_mb:-0}"
+# Compared in KiB with a one-MiB allowance, not in whole MiB: mkswap keeps one
+# 4 KiB page of a swap file for its header, so the 1024 MiB file this step pins
+# reports as 1048572 kB. Truncated to MiB that read 1023 < 1024 on every run,
+# rewrote the drop-in and asked for a reboot forever (issue #49).
+active_swap_kb="$(awk '/^SwapTotal:/ {print $2}' "${MEMINFO}")"
+active_swap_kb="${active_swap_kb:-0}"
+active_swap_mb="$(( active_swap_kb / 1024 ))"
+swap_is_sufficient() {
+  [[ "$(( active_swap_kb + 1024 ))" -ge "$(( SWAP_SIZE_MB * 1024 ))" ]]
+}
 if [[ -f "${SWAP_CONF}" ]]; then
   # A hand-edited CONF_SWAPSIZE can hold anything at all ("auto", "1024M", a
   # trailing comment), and the `|| true` guard - which pipefail on line 2
@@ -125,21 +137,31 @@ elif [[ -f "${RPI_SWAP_CONF}" ]]; then
   # guaranteed on bookworm, via a drop-in rather than editing the vendor file
   # (see swap.conf(5)). rpi-swap applies this from a boot-time systemd generator,
   # so it takes a reboot - Step 2's apt still runs on current swap this pass.
-  if [[ "${active_swap_mb}" -lt "${SWAP_SIZE_MB}" ]]; then
-    mkdir -p "$(dirname "${RPI_SWAP_DROPIN}")"
-    cat > "${RPI_SWAP_DROPIN}" <<EOF
-# Managed by visio setup-device.sh - do not edit by hand.
+  #
+  # Converges on the drop-in's contents rather than on the active size alone,
+  # so a re-run neither rewrites a drop-in that is already right nor goes quiet
+  # about one that is written but not yet applied.
+  swap_dropin_text="# Managed by visio setup-device.sh - do not edit by hand.
 [Main]
 Mechanism=swapfile
 
 [File]
-FixedSizeMiB=${SWAP_SIZE_MB}
-EOF
+FixedSizeMiB=${SWAP_SIZE_MB}"
+  if [[ -f "${RPI_SWAP_DROPIN}" && "$(cat "${RPI_SWAP_DROPIN}")" == "${swap_dropin_text}" ]]; then
+    if swap_is_sufficient; then
+      log "Swap already ${active_swap_mb}MB and ${RPI_SWAP_DROPIN} is in place - no change needed"
+    else
+      reboot_needed=true
+      log "${RPI_SWAP_DROPIN} is already in place but not active yet (swap is ${active_swap_mb}MB) - it applies on the reboot reported at the end"
+    fi
+  elif [[ ! -f "${RPI_SWAP_DROPIN}" ]] && swap_is_sufficient; then
+    log "Swap already ${active_swap_mb}MB (>= ${SWAP_SIZE_MB}MB) - no change needed"
+  else
+    mkdir -p "$(dirname "${RPI_SWAP_DROPIN}")"
+    printf '%s\n' "${swap_dropin_text}" > "${RPI_SWAP_DROPIN}"
     systemctl daemon-reload
     reboot_needed=true
     log "Swap is ${active_swap_mb}MB - wrote ${RPI_SWAP_DROPIN} pinning a ${SWAP_SIZE_MB}MB swap file, applied on the reboot reported at the end"
-  else
-    log "Swap already ${active_swap_mb}MB (>= ${SWAP_SIZE_MB}MB) - no change needed"
   fi
 else
   log "Neither ${SWAP_CONF} nor ${RPI_SWAP_CONF} found - skipping swap sizing (SwapTotal is ${active_swap_mb}MB)"
@@ -157,11 +179,14 @@ export NEEDRESTART_MODE=a
 # rather than letting apt-get fail confusingly on a half-configured package.
 dpkg --configure -a
 apt-get update -y
-# python3-gpiozero is in the required list, not probed like pijuice-base below:
-# the flag-button driver imports gpiozero and preflight blocks on it, so a
-# release that cannot supply it should fail here rather than hand back a device
-# whose daemon never starts. Both Debian and the Raspberry Pi archive ship it.
-apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git python3-gpiozero
+# python3-gpiozero and python3-spidev are in the required list, not probed like
+# pijuice-base below: the flag-button driver imports gpiozero, the status LED
+# driver imports spidev, and preflight blocks on both, so a release that cannot
+# supply them should fail here rather than hand back a device whose daemon
+# never starts. Debian ships both (spidev prebuilt, so nothing compiles on the
+# device). alsa-utils provides arecord for checking the I2S microphone by hand.
+apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git \
+  python3-gpiozero python3-spidev alsa-utils
 
 # Whether this release's index offers a package at all. Probing beats
 # swallowing an install's exit code: a genuine failure (dependency conflict, no
@@ -209,6 +234,96 @@ if raspi-config nonint get_camera >/dev/null 2>&1; then
   fi
 else
   log "No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)"
+fi
+
+# Print ${1} with ${3} guaranteed to apply to every board, or exit 10 with ${1}
+# unchanged when it already does. "Applies" means an active line before any
+# section filter or under [all]; a line under another board's filter ([pi4],
+# [cm5]) never reaches a Zero 2W, so it neither satisfies the check nor gets
+# edited. ${2} is "setting", where ${3} is NAME=VALUE and NAME is single-valued
+# - the last applicable NAME= line wins on the Pi, so a conflicting one is
+# rewritten in place rather than shadowed - or "line", where ${3} must simply
+# be present (dtoverlay= is multi-valued). A missing line goes at the end of
+# the file, under a fresh [all] when the file ends inside another filter.
+config_txt_edit() {
+  local file="$1" mode="$2" want="$3"
+  awk -v mode="${mode}" -v want="${want}" '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+    BEGIN { applies = 1; hit = 0; header = ""; name = want; sub(/=[^=]*$/, "=", name) }
+    {
+      line[NR] = $0
+      t = trim($0)
+      if (t ~ /^\[[^]]*\]$/) { applies = (t == "[all]"); header = t; next }
+      if (!applies || t == "" || substr(t, 1, 1) == "#") next
+      if (mode == "line" ? t == want : index(t, name) == 1) hit = NR
+    }
+    END {
+      if (hit && trim(line[hit]) == want) exit 10
+      if (hit) line[hit] = want
+      for (i = 1; i <= NR; i++) print line[i]
+      if (!hit) {
+        if (header != "" && header != "[all]") print "[all]"
+        print want
+      }
+    }
+  ' "${file}"
+}
+
+# Make ${1} carry ${2}=${3} (setting) or the line ${2} (line), via a temp file
+# renamed over the original so a full or failing boot partition can never
+# leave a truncated config.txt behind. Records a change in
+# ${config_txt_changed} and a failure in ${config_txt_failed}, and never
+# aborts the run: the summary is where the operator learns about either.
+ensure_config_txt_setting() {
+  config_txt_apply "$1" setting "$2=$3"
+}
+
+ensure_config_txt_line() {
+  config_txt_apply "$1" line "$2"
+}
+
+config_txt_apply() {
+  local file="$1" mode="$2" want="$3" tmp status=0
+  tmp="${file}.visio-setup.tmp"
+  if [[ ! -f "${file}" ]]; then
+    config_txt_failed=true
+    log "ERROR: ${file} does not exist, so '${want}' could not be set. Is this a Raspberry Pi OS bookworm-or-later image with the boot partition mounted?"
+    return 0
+  fi
+  config_txt_edit "${file}" "${mode}" "${want}" > "${tmp}" 2>/dev/null || status=$?
+  if [[ "${status}" -eq 10 ]]; then
+    rm -f "${tmp}"
+    log "${file}: ${want} already set"
+    return 0
+  fi
+  if [[ "${status}" -ne 0 ]] || ! mv "${tmp}" "${file}" 2>/dev/null; then
+    rm -f "${tmp}" 2>/dev/null || true
+    config_txt_failed=true
+    log "ERROR: could not write '${want}' into ${file} - it is unchanged. Check that the boot partition is mounted read-write and has free space."
+    return 0
+  fi
+  config_txt_changed=true
+  log "${file}: set ${want}"
+}
+
+# The status LED is a WS2812B on SPI0 MOSI (GPIO 10) and the microphone an
+# INMP441 on the I2S pins (GPIO 18-20); see the pendant spec's GPIO Pin Map.
+#   dtparam=spi=on            - /dev/spidev0.0 for the LED driver.
+#   core_freq_fixed=1         - spi-bcm2835 caches the core clock at probe, so a
+#                               core clock scaling between 250 and 400 MHz would
+#                               skew the WS2812B bit timing by up to 1.6x. Holds
+#                               the higher rate, so H.264 encode keeps headroom.
+#   dtoverlay=adau7002-simple - registers the capture-only I2S card the
+#                               visio_mic PCM reads. A pendant with no microphone
+#                               wired just records video only.
+# raspi-config's do_spi writes the same dtparam line; editing the file directly
+# keeps all three edits on one idempotent, testable path.
+ensure_config_txt_setting "${CONFIG_TXT}" dtparam=spi on
+ensure_config_txt_setting "${CONFIG_TXT}" core_freq_fixed 1
+ensure_config_txt_line "${CONFIG_TXT}" dtoverlay=adau7002-simple
+if [[ "${config_txt_changed}" == "true" ]]; then
+  reboot_needed=true
+  log "${CONFIG_TXT} changed - reboot required for SPI, the core clock and the I2S overlay to take effect"
 fi
 
 log "Step 4/10: uv"
@@ -350,46 +465,16 @@ fi
 log "Provisioned revision ${target_sha} (requested '${requested_ref}')"
 
 ensure_system_site_venv "${VENV_DIR}"
-# --inexact: rpi_ws281x is installed into this venv below but is deliberately
-# absent from uv.lock, and an exact sync would delete it on every re-run and
-# recompile it, which is minutes of build time on a Pi Zero 2W.
-(cd "${FIRMWARE_DIR}" && uv sync --locked --inexact)
+# Exact: everything in this venv comes from uv.lock, and the apt-installed
+# hardware libraries are reached through --system-site-packages rather than
+# installed into it. On a device provisioned before the SPI LED rewire this
+# also removes the rpi_ws281x that used to be compiled in here.
+(cd "${FIRMWARE_DIR}" && uv sync --locked)
 if ! venv_sees_system_packages "${VENV_DIR}"; then
   log "ERROR: ${VENV_DIR} does not have access to the system site-packages after uv sync."
-  log "  gpiozero and pijuice are apt packages, so the daemon and ${PREFLIGHT_BIN} could not import them from this venv."
+  log "  gpiozero, spidev and pijuice are apt packages, so the daemon and ${PREFLIGHT_BIN} could not import them from this venv."
   log "  Delete ${VENV_DIR} and re-run; if it recurs, check that ${SYSTEM_PYTHON} exists and satisfies firmware/pyproject.toml's requires-python."
   exit 1
-fi
-
-# rpi_ws281x is the one hardware library with no apt package anywhere, so it is
-# built from source here, which is why a device that has to build it needs a C
-# compiler and the Python headers. Non-fatal on purpose: the systemd unit, the
-# env file and the data dir below are still worth provisioning on a device with
-# no compiler or no network, and ${PREFLIGHT_BIN} reports the missing module
-# itself rather than this script guessing on its behalf. A failure is carried to
-# the summary in ${ws281x_missing} the way ${reboot_needed} is - thousands of
-# lines of apt output scroll past between here and there.
-if "${VENV_DIR}/bin/python3" -c 'import rpi_ws281x' >/dev/null 2>&1; then
-  log "rpi_ws281x already importable from ${VENV_DIR} - nothing to build"
-else
-  ws281x_build_deps=()
-  for pkg in build-essential python3-dev; do
-    if apt_has_candidate "${pkg}"; then
-      ws281x_build_deps+=("${pkg}")
-    fi
-  done
-  if [[ "${#ws281x_build_deps[@]}" -gt 0 ]]; then
-    if ! apt-get install -y "${ws281x_build_deps[@]}"; then
-      log "WARNING: installing ${ws281x_build_deps[*]} failed - the ${RPI_WS281X_SPEC} build below needs them and will probably fail too"
-    fi
-  fi
-  if uv pip install --python "${VENV_DIR}/bin/python3" "${RPI_WS281X_SPEC}"; then
-    log "${RPI_WS281X_SPEC} built and installed into ${VENV_DIR}"
-  else
-    ws281x_missing=true
-    log "WARNING: could not install ${RPI_WS281X_SPEC} into ${VENV_DIR}. It ships as a source distribution, so the build needs a C compiler, Python headers and network access."
-    log "  ${PREFLIGHT_BIN} will report rpi_ws281x as a blocking failure, and the daemon will not start, until this succeeds. Fix the build prerequisites and re-run."
-  fi
 fi
 
 # Put preflight on PATH for a plain SSH user. /usr/local/bin is on the default
@@ -405,10 +490,32 @@ fi
 ln -sfn "${preflight_src}" "${BIN_DIR}/${PREFLIGHT_BIN}"
 log "${BIN_DIR}/${PREFLIGHT_BIN} -> ${preflight_src}"
 
-log "Step 6/10: systemd"
+# Install ${1} as ${2}, the system-wide ALSA config, leaving an identical file
+# alone. Any other file already there is kept as ${2}.pre-visio the first time
+# rather than destroyed, since it may be an operator's own; after that this
+# file is managed, so a later hand-edit is drift and is put back.
+install_alsa_config() {
+  local src="$1" dst="$2"
+  if [[ -f "${dst}" ]] && cmp -s "${src}" "${dst}"; then
+    log "${dst} already installed - no change"
+    return 0
+  fi
+  if [[ -f "${dst}" && ! -e "${dst}.pre-visio" ]]; then
+    cp -p "${dst}" "${dst}.pre-visio"
+    log "Kept the existing ${dst} as ${dst}.pre-visio"
+  fi
+  install -m 0644 "${src}" "${dst}"
+  log "Installed ${dst} from ${src} (defines the visio_mic capture device)"
+}
+
+log "Step 6/10: systemd and ALSA"
 cp "${INSTALL_DIR}/${SYSTEMD_UNIT_SRC}" "${SYSTEMD_UNIT_DST}"
 systemctl daemon-reload
 systemctl enable visio-recorder
+# The microphone's PCM. Installed whether or not a microphone is wired: the
+# daemon probes visio_mic at startup and records video only when it does not
+# open, so this file is harmless on a pendant without one.
+install_alsa_config "${INSTALL_DIR}/firmware/alsa/visio-mic.conf" "${ALSA_CONF_DST}"
 
 # Read one key out of ${ENV_FILE} the way systemd reads it as an
 # EnvironmentFile: the last assignment wins, and surrounding whitespace plus one
@@ -452,12 +559,6 @@ VISIO_BATTERY_SOURCE=none
 # whoever runs it. Useful during bring-up; set to 0 for a shipped appliance
 # image to skip them. The daemon ignores this key.
 #
-# Scope, so this is not mistaken for a wider switch: it covers those editor
-# and shell conveniences only. It does not control the LED driver's build
-# dependencies - rpi_ws281x currently has no apt package in any archive, so a
-# device that has to build it from source gets a C compiler and the Python
-# headers in step 5 regardless of this setting.
-#
 # Setting it to 0 later removes the managed block from that user's ~/.bashrc
 # on the next run, but deliberately does NOT uninstall the packages - purging
 # neovim out from under an operator mid-bring-up is worse than leaving it
@@ -475,6 +576,26 @@ VISIO_DEV_SHELL=1
 # claiming the configured path was verified. Run it under sudo to check the
 # configured one.
 # VISIO_DATA_DIR=/var/lib/visio-recorder
+#
+# Video and segment size. The defaults are shown commented out; uncomment a
+# line only to change it. A segment must fit under VISIO_MAX_UPLOAD_BYTES (the
+# hosted Supabase free plan's 50 MiB per-file limit) or it is split before
+# upload, so VISIO_SEGMENT_DURATION_MS is derived from the bitrate and the
+# limit while it stays unset - 60000 at these defaults. Setting it explicitly
+# pins it, even if the bitrate later changes.
+# VISIO_VIDEO_WIDTH=1280
+# VISIO_VIDEO_HEIGHT=720
+# VISIO_FRAMERATE=30
+# VISIO_VIDEO_BITRATE=4000000
+# VISIO_MAX_UPLOAD_BYTES=52428800
+# VISIO_SEGMENT_DURATION_MS=60000
+#
+# Audio from the INMP441 I2S microphone. "on" probes VISIO_AUDIO_DEVICE at
+# startup and records video only if it does not open; "off" skips the probe.
+# visio_mic is the ALSA PCM /etc/asound.conf defines.
+# VISIO_AUDIO=on
+# VISIO_AUDIO_DEVICE=visio_mic
+# VISIO_AUDIO_BITRATE=64000
 EOF
   chmod 600 "${ENV_FILE}"
   log "Wrote template ${ENV_FILE} - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script"
@@ -836,12 +957,12 @@ fi
 if [[ "${data_dir_failed}" == "true" ]]; then
   log "INCOMPLETE: ${data_dir} was NOT created (see the step 9 error above), so the daemon has nowhere to record and '${PREFLIGHT_BIN}' will report data_dir as a blocking failure."
 fi
-if [[ "${ws281x_missing}" == "true" ]]; then
-  log "INCOMPLETE: ${RPI_WS281X_SPEC} could not be installed (see the step 5 warning above), so the daemon will not start until it is - '${PREFLIGHT_BIN}' will report rpi_ws281x as a blocking failure."
+if [[ "${config_txt_failed}" == "true" ]]; then
+  log "INCOMPLETE: ${CONFIG_TXT} could not be edited (see the step 3 error above), so SPI may be off - the status LED cannot be driven and '${PREFLIGHT_BIN}' will report spidev0.0 as a blocking failure."
 fi
 log "Run '${PREFLIGHT_BIN}' from any directory to check the runtime environment."
 if [[ "${reboot_needed}" == "true" ]]; then
-  log "REBOOT REQUIRED: interface changes need a reboot to take effect before the daemon will work."
+  log "REBOOT REQUIRED: swap, interface or ${CONFIG_TXT} changes need a reboot to take effect before the daemon will work."
 else
   log "No reboot required."
 fi
@@ -850,7 +971,7 @@ fi
 # just has keys to fill in. Reaching here with an INCOMPLETE line means the
 # run finished and the device is not usable, which neither the last line an
 # operator reads nor an exit status a caller tests may report as success.
-if [[ "${data_dir_failed}" == "true" || "${ws281x_missing}" == "true" ]]; then
+if [[ "${data_dir_failed}" == "true" || "${config_txt_failed}" == "true" ]]; then
   log "Setup incomplete - see the INCOMPLETE lines above. Fix what they name and re-run this script."
   exit 1
 fi

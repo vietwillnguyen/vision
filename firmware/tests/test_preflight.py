@@ -20,17 +20,21 @@ from visio_recorder.preflight import (
     BLOCK,
     WARN,
     CheckResult,
+    check_audio_device,
     check_binary_on_path,
     check_camera_detected,
+    check_core_freq_fixed,
     check_data_dir_writable,
     check_i2c_enabled,
     check_importable,
     check_networkmanager_running,
     check_pijuice_importable,
+    check_spi_device,
     format_report,
     has_blocking_failure,
     main,
     read_env_file,
+    resolve_audio_device,
     resolve_battery_source,
     resolve_data_dir,
     resolve_reported_data_dir,
@@ -251,7 +255,8 @@ def test_non_daemon_caller_on_a_healthy_device_exits_zero(
         ),
     ]
     monkeypatch.setattr(
-        "visio_recorder.preflight.run_checks", lambda source, data_dir, caveat: healthy
+        "visio_recorder.preflight.run_checks",
+        lambda source, data_dir, caveat, **_: healthy,
     )
 
     exit_code = main()
@@ -270,7 +275,8 @@ def test_daemon_uid_on_the_same_device_still_blocks_startup(tmp_path, monkeypatc
         )
     ]
     monkeypatch.setattr(
-        "visio_recorder.preflight.run_checks", lambda source, data_dir, caveat: blocked
+        "visio_recorder.preflight.run_checks",
+        lambda source, data_dir, caveat, **_: blocked,
     )
 
     assert has_blocking_failure(blocked) is True
@@ -287,7 +293,7 @@ def test_a_missing_data_dir_blocks_startup_for_a_non_daemon_caller_too(
     ]
     monkeypatch.setattr(
         "visio_recorder.preflight.run_checks",
-        lambda source, data_dir, caveat: unprovisioned,
+        lambda source, data_dir, caveat, **_: unprovisioned,
     )
 
     assert has_blocking_failure(unprovisioned) is True
@@ -510,7 +516,7 @@ def test_run_checks_falls_back_to_the_default_data_dir():
 def test_main_checks_the_configured_data_dir(monkeypatch, capsys):
     seen = []
 
-    def record(source, data_dir, caveat):
+    def record(source, data_dir, caveat, **_):
         seen.append(data_dir)
         return []
 
@@ -527,14 +533,14 @@ def test_main_checks_the_configured_data_dir(monkeypatch, capsys):
 # Remediation advice. preflight is the operator's entry point, so pointing at
 # the wrong step costs real bring-up time: only supabase comes from uv sync,
 # gpiozero is apt's python3-gpiozero reaching the venv through
-# --system-site-packages, and rpi_ws281x is setup-device.sh's source build.
+# --system-site-packages, and so is spidev (python3-spidev).
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     ("module", "expected"),
     [
-        ("rpi_ws281x", "builds it into the venv"),
+        ("spidev", "python3-spidev"),
         ("gpiozero", "python3-gpiozero"),
         ("supabase", "uv sync"),
     ],
@@ -547,7 +553,7 @@ def test_a_failed_import_names_the_step_that_actually_installs_it(module, expect
 
 
 def test_no_module_is_advised_to_check_a_step_that_does_not_install_it():
-    for module in ("rpi_ws281x", "gpiozero"):
+    for module in ("spidev", "gpiozero"):
         detail = check_importable(module, find_spec=lambda mod: None).detail
 
         assert "uv sync" not in detail, f"{module} does not come from uv sync"
@@ -704,7 +710,7 @@ def test_an_unprivileged_run_reports_the_caveat_end_to_end(
     monkeypatch.setattr("visio_recorder.preflight.read_env_file", lambda path: None)
     monkeypatch.setattr(
         "visio_recorder.preflight.run_checks",
-        lambda source, data_dir, caveat: [
+        lambda source, data_dir, caveat, **_: [
             check_data_dir_writable(path=data_dir, caveat=caveat)
         ],
     )
@@ -805,3 +811,259 @@ def test_read_env_file_does_not_depend_on_the_ambient_locale(tmp_path):
     )
 
     assert result.stdout.strip() == "MATCH"
+
+
+# --------------------------------------------------------------------------
+# The SPI status LED (#85). The driver writes WS2812B frames to
+# /dev/spidev0.0 through py-spidev, so preflight blocks on the module, on the
+# device node (absent when dtparam=spi=on is missing or not yet rebooted
+# into), and on it opening for the daemon's uid. Opening is caller-relative
+# the way the data dir's writability is: an operator outside the spi group
+# gets a warning, not a provisioning failure.
+# --------------------------------------------------------------------------
+
+
+def _open_raising(exc: BaseException):
+    def open_device(path: Path) -> None:
+        raise exc
+
+    return open_device
+
+
+def test_run_checks_blocks_on_spidev_not_rpi_ws281x():
+    names = {r.name for r in run_checks("none")}
+
+    assert "spidev" in names
+    assert "spidev0.0" in names
+    assert "rpi_ws281x" not in names
+
+
+def test_spi_device_that_opens_is_ok(tmp_path):
+    result = check_spi_device(path=tmp_path / "spidev0.0", open_device=lambda p: None)
+
+    assert result.ok is True
+    assert result.severity == BLOCK
+
+
+def test_a_missing_spi_device_blocks_every_caller_and_names_the_fix(tmp_path):
+    for uid in (_DAEMON_UID, _OPERATOR_UID):
+        result = check_spi_device(
+            path=tmp_path / "spidev0.0",
+            getuid=_uid(uid),
+            open_device=_open_raising(FileNotFoundError(2, "No such file")),
+        )
+
+        assert result.ok is False
+        assert result.severity == BLOCK
+        assert "dtparam=spi=on" in result.detail
+        assert "reboot" in result.detail
+
+
+def test_an_spi_device_the_daemon_cannot_open_blocks(tmp_path):
+    result = check_spi_device(
+        path=tmp_path / "spidev0.0",
+        getuid=lambda: _DAEMON_UID,
+        open_device=_open_raising(PermissionError(13, "Permission denied")),
+    )
+
+    assert result.ok is False
+    assert result.severity == BLOCK
+
+
+def test_an_operator_outside_the_spi_group_only_gets_a_warning(tmp_path):
+    result = check_spi_device(
+        path=tmp_path / "spidev0.0",
+        getuid=lambda: _OPERATOR_UID,
+        open_device=_open_raising(PermissionError(13, "Permission denied")),
+    )
+
+    assert result.ok is False
+    assert result.severity == WARN
+    assert "spi group" in result.detail
+
+
+def test_the_default_open_seam_really_opens_the_node(tmp_path):
+    node = tmp_path / "spidev0.0"
+    node.write_bytes(b"")
+
+    assert check_spi_device(path=node).ok is True
+    assert check_spi_device(path=tmp_path / "absent").ok is False
+
+
+@pytest.mark.parametrize(
+    ("stdout", "ok"),
+    [("core_freq_fixed=1\n", True), ("core_freq_fixed=0\n", False), ("", False)],
+)
+def test_core_freq_fixed_is_read_from_the_firmware_config(stdout, ok):
+    result = check_core_freq_fixed(
+        run=lambda args: subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+    )
+
+    assert result.ok is ok
+    assert result.severity == WARN, (
+        "a scaling clock skews colours, it does not stop recording"
+    )
+    if not ok:
+        assert "core_freq_fixed=1" in result.detail
+
+
+def test_core_freq_fixed_without_vcgencmd_warns_rather_than_crashing():
+    def missing(args):
+        raise FileNotFoundError("vcgencmd")
+
+    result = check_core_freq_fixed(run=missing)
+
+    assert result.ok is False
+    assert result.severity == WARN
+
+
+# --------------------------------------------------------------------------
+# The I2S microphone (#87). A pendant without a working microphone records
+# video only, so every outcome here is WARN - preflight must never stop the
+# daemon over audio. What it adds over the daemon's own startup probe is the
+# diagnosis: which of the overlay, the ALSA config and the wiring is missing.
+# --------------------------------------------------------------------------
+
+_ADAU_CARDS = (
+    " 0 [adau7002       ]: adau7002 - adau7002\n                      adau7002\n"
+)
+
+
+def _audio(
+    tmp_path: Path,
+    *,
+    opens: bool,
+    cards: str = _ADAU_CARDS,
+    asound: str | None = "pcm.visio_mic {\n    type plug\n}\n",
+    device: str | None = "visio_mic",
+):
+    cards_path = tmp_path / "cards"
+    cards_path.write_text(cards)
+    asound_path = tmp_path / "asound.conf"
+    if asound is not None:
+        asound_path.write_text(asound)
+    probed: list[str] = []
+
+    def probe(name: str) -> bool:
+        probed.append(name)
+        return opens
+
+    result = check_audio_device(
+        device, probe=probe, cards_path=cards_path, asound_conf=asound_path
+    )
+    return result, probed
+
+
+def test_a_microphone_that_opens_is_ok(tmp_path):
+    result, probed = _audio(tmp_path, opens=True)
+
+    assert result.ok is True
+    assert result.severity == WARN
+    assert result.name == "audio"
+    assert probed == ["visio_mic"]
+
+
+def test_a_missing_i2s_card_points_at_the_overlay(tmp_path):
+    result, _ = _audio(
+        tmp_path, opens=False, cards=" 0 [vc4hdmi        ]: vc4-hdmi - vc4-hdmi\n"
+    )
+
+    assert result.ok is False
+    assert result.severity == WARN
+    assert "dtoverlay=adau7002-simple" in result.detail
+    assert "video only" in result.detail
+
+
+def test_a_missing_pcm_definition_points_at_the_alsa_config(tmp_path):
+    result, _ = _audio(tmp_path, opens=False, asound=None)
+
+    assert result.severity == WARN
+    assert "firmware/alsa/visio-mic.conf" in result.detail
+    assert "/etc/asound.conf" in result.detail or str(tmp_path) in result.detail
+
+
+def test_card_and_config_present_but_no_open_points_at_wiring(tmp_path):
+    result, _ = _audio(tmp_path, opens=False)
+
+    assert result.severity == WARN
+    assert "wiring" in result.detail
+    assert "in use" in result.detail, "a recording daemon holds the device"
+
+
+def test_audio_off_is_not_probed(tmp_path):
+    result, probed = _audio(tmp_path, opens=False, device=None)
+
+    assert result.ok is True
+    assert probed == []
+    assert "VISIO_AUDIO=off" in result.detail
+
+
+def test_no_audio_outcome_can_block_startup(tmp_path):
+    for kwargs in (
+        {"opens": False},
+        {"opens": False, "asound": None},
+        {"opens": False, "cards": ""},
+    ):
+        result, _ = _audio(tmp_path, **kwargs)
+        assert has_blocking_failure([result]) is False
+
+
+def test_the_audio_check_reuses_the_daemons_own_probe(monkeypatch):
+    # One definition of "the microphone opens": the ffmpeg capture the daemon
+    # runs at startup, so preflight and the daemon cannot disagree.
+    from visio_recorder import capture, preflight
+
+    calls: list[capture.AudioSettings] = []
+
+    def probe(runner, audio: capture.AudioSettings) -> bool:
+        calls.append(audio)
+        return True
+
+    monkeypatch.setattr(preflight, "probe_audio_device", probe)
+
+    result = check_audio_device("visio_mic")
+
+    assert result.ok is True
+    assert calls == [capture.AudioSettings(device="visio_mic")]
+
+
+@pytest.mark.parametrize(
+    ("env", "file_values", "expected"),
+    [
+        ({}, {}, "visio_mic"),
+        ({"VISIO_AUDIO": "off"}, {}, None),
+        ({}, {"VISIO_AUDIO": "OFF"}, None),
+        ({}, {"VISIO_AUDIO_DEVICE": "hw:1"}, "hw:1"),
+        (
+            {"VISIO_AUDIO_DEVICE": "plughw:2"},
+            {"VISIO_AUDIO_DEVICE": "hw:1"},
+            "plughw:2",
+        ),
+    ],
+)
+def test_resolve_audio_device_matches_the_daemon(tmp_path, env, file_values, expected):
+    assert resolve_audio_device(env, read_file=lambda path: file_values) == expected
+
+
+def test_run_checks_reports_audio_without_blocking(monkeypatch):
+    from visio_recorder import preflight
+
+    monkeypatch.setattr(preflight, "probe_audio_device", lambda runner, audio: False)
+
+    results = run_checks("none", audio_device="visio_mic")
+    audio = next(r for r in results if r.name == "audio")
+
+    assert audio.ok is False
+    assert audio.severity == WARN
+
+
+def test_the_real_probe_keeps_ffmpegs_stderr_out_of_the_report(capfd):
+    # On any machine without the I2S card the probe fails; what matters is
+    # that ffmpeg's and ALSA's own error lines do not interleave with the
+    # [OK]/[WARN] report an operator reads, or flood journalctl.
+    result = check_audio_device("visio_mic_test_device_that_does_not_exist")
+
+    assert result.ok is False
+    captured = capfd.readouterr()
+    assert captured.err == ""
+    assert captured.out == ""

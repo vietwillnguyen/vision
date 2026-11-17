@@ -1167,9 +1167,124 @@ def test_a_sufficient_swap_size_is_left_alone(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Step 1 on trixie's rpi-swap (issue #49). A 1024 MiB swap file reports as
+# 1048572 kB in /proc/meminfo - mkswap keeps one 4 KiB page for its header - so
+# an integer-MiB comparison read 1023 < 1024 on every run, rewrote the drop-in
+# and printed REBOOT REQUIRED forever, even on a device with nothing to do.
+# --------------------------------------------------------------------------
+
+
+def _run_rpi_swap_step(
+    tmp_path: Path, swap_total_kb: int, dropin_text: str | None
+) -> subprocess.CompletedProcess:
+    """Run the real step 1 down its rpi-swap branch with a fake /proc/meminfo."""
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(f"MemTotal: 427880 kB\nSwapTotal: {swap_total_kb} kB\n")
+    rpi_conf = tmp_path / "rpi" / "swap.conf"
+    rpi_conf.parent.mkdir(parents=True)
+    rpi_conf.write_text("[Main]\nMechanism=zram+file\n")
+    dropin = tmp_path / "rpi" / "swap.conf.d" / "10-visio.conf"
+    if dropin_text is not None:
+        dropin.parent.mkdir(parents=True)
+        dropin.write_text(dropin_text)
+    block = _step_block(1)
+    for name, value in (
+        ("SWAP_CONF", str(tmp_path / "no-dphys-swapfile")),
+        ("RPI_SWAP_CONF", str(rpi_conf)),
+        ("RPI_SWAP_DROPIN", str(dropin)),
+        ("MEMINFO", str(meminfo)),
+    ):
+        block, count = re.subn(
+            rf'^{name}="[^"]*"$', f'{name}="{value}"', block, flags=re.MULTILINE
+        )
+        assert count == 1, f"{name} is no longer a single quoted assignment in step 1"
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    systemctl = stubs / "systemctl"
+    systemctl.write_text('#!/bin/sh\necho "SYSTEMCTL $*"\n')
+    systemctl.chmod(0o755)
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            "reboot_needed=false",
+            block,
+            'echo "REBOOT_NEEDED=${reboot_needed}"',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+
+def _written_dropin(tmp_path: Path) -> str:
+    """The drop-in a first run writes, so later runs can start from it."""
+    first = tmp_path / "first"
+    first.mkdir()
+    result = _run_rpi_swap_step(first, 0, None)
+    assert result.returncode == 0, result.stderr
+    return (first / "rpi" / "swap.conf.d" / "10-visio.conf").read_text()
+
+
+def test_an_applied_1024mb_swap_file_is_a_no_op_on_re_run(tmp_path):
+    # The exact reading from issue #49: the drop-in this script wrote, applied
+    # by a reboot, reporting one page short of 1024 MiB.
+    dropin = _written_dropin(tmp_path)
+    run = tmp_path / "rerun"
+    run.mkdir()
+
+    result = _run_rpi_swap_step(run, 1048572, dropin)
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT_NEEDED=false" in result.stdout, result.stdout
+    assert "SYSTEMCTL" not in result.stdout, "nothing changed, nothing to reload"
+    assert (run / "rpi" / "swap.conf.d" / "10-visio.conf").read_text() == dropin
+
+
+def test_a_fresh_trixie_device_gets_the_dropin_and_a_reboot(tmp_path):
+    result = _run_rpi_swap_step(tmp_path, 214000, None)
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT_NEEDED=true" in result.stdout
+    dropin = (tmp_path / "rpi" / "swap.conf.d" / "10-visio.conf").read_text()
+    assert "Mechanism=swapfile" in dropin
+    assert "FixedSizeMiB=1024" in dropin
+
+
+def test_a_written_but_unapplied_dropin_still_asks_for_the_reboot(tmp_path):
+    # Re-running before rebooting must not go quiet: the swap file is still not
+    # active, so the reboot is still required - but nothing is rewritten.
+    dropin = _written_dropin(tmp_path)
+    run = tmp_path / "rerun"
+    run.mkdir()
+
+    result = _run_rpi_swap_step(run, 214000, dropin)
+
+    assert "REBOOT_NEEDED=true" in result.stdout
+    assert "SYSTEMCTL" not in result.stdout, "the drop-in was already in place"
+    assert "not active yet" in result.stdout
+
+
+def test_a_hand_edited_dropin_is_put_back(tmp_path):
+    run = tmp_path / "rerun"
+    run.mkdir()
+
+    result = _run_rpi_swap_step(run, 1048572, "[File]\nFixedSizeMiB=256\n")
+
+    assert "REBOOT_NEEDED=true" in result.stdout
+    assert (
+        "FixedSizeMiB=1024"
+        in (run / "rpi" / "swap.conf.d" / "10-visio.conf").read_text()
+    )
+
+
+# --------------------------------------------------------------------------
 # Step 5's venv. ${PREFLIGHT_BIN} and the systemd unit's ExecStart/ExecStartPre
 # all run firmware/.venv/bin/python3, and the daemon's real drivers import
-# gpiozero, pijuice and rpi_ws281x - none of which are in
+# gpiozero, spidev and pijuice - none of which are in
 # firmware/pyproject.toml, because they do not build off a Pi. `uv sync` alone
 # builds a venv that can import none of them: it is isolated from the system
 # site-packages, and uv resolves an interpreter it downloaded for itself rather
@@ -1271,8 +1386,8 @@ def test_the_provisioned_venv_can_import_the_apt_installed_hardware_libraries(tm
 
 @pytest_uv
 def test_a_healthy_venv_is_reused_rather_than_rebuilt_on_a_re_run(tmp_path):
-    # Rebuilding on every pass would throw away the compiled rpi_ws281x below
-    # it and recompile it, which is minutes on a Pi Zero 2W.
+    # Rebuilding on every pass would re-download and reinstall every uv.lock
+    # wheel, which is minutes on a Pi Zero 2W.
     venv = tmp_path / ".venv"
     lib, home = _venv_lib(tmp_path / "lib"), tmp_path / "home"
     assert _run_venv(lib, f'ensure_system_site_venv "{venv}"', home).returncode == 0
@@ -1334,84 +1449,37 @@ def test_step_5_builds_the_venv_before_syncing_and_rechecks_it_afterwards():
     # failure this step exists to prevent, and it is invisible until the daemon
     # will not start, so the run refuses to report success on one.
     assert "if ! venv_sees_system_packages" in step
-    # The compiled hardware wheel is not in uv.lock, so an exact sync deletes
-    # it on every re-run and rebuilds it from source.
-    assert "uv sync --locked --inexact" in step
+    # Exact, now that nothing outside uv.lock is installed into the venv: a
+    # device provisioned before the SPI rewire loses its compiled rpi_ws281x.
+    assert "uv sync --locked)" in step
+    assert "--inexact" not in step
 
 
 def test_the_hardware_libraries_preflight_blocks_on_are_actually_provisioned():
-    # preflight blocks on all three (see visio_recorder/preflight.py's
-    # run_checks), so provisioning has to supply all three or no device it
-    # produces can pass its own preflight.
-    text = _script_text()
+    # preflight blocks on gpiozero and spidev (see visio_recorder/preflight.py's
+    # run_checks), so provisioning has to supply both or no device it produces
+    # can pass its own preflight. Both are apt packages the venv reaches
+    # through --system-site-packages.
+    apt_step = _step_block(2)
 
-    assert "python3-gpiozero" in _step_block(2), (
-        "gpiozero is an apt package on the target"
-    )
-    assert "pijuice-base" in _step_block(2)
-    assert re.search(
-        r'^RPI_WS281X_SPEC="rpi-ws281x==\d+\.\d+\.\d+"$', text, re.MULTILINE
-    ), (
-        "no archive ships rpi_ws281x, so it is built into the venv - pinned, "
-        "like the uv installer"
-    )
-    assert (
-        'uv pip install --python "${VENV_DIR}/bin/python3" "${RPI_WS281X_SPEC}"'
-        in _step_block(5)
-    )
+    assert "python3-gpiozero" in apt_step, "gpiozero is an apt package on the target"
+    assert "python3-spidev" in apt_step, "the SPI LED driver imports spidev"
+    assert "pijuice-base" in apt_step
 
 
-def _ws281x_block() -> str:
-    step = _step_block(5)
-    start = step.index("if \"${VENV_DIR}/bin/python3\" -c 'import rpi_ws281x'")
-    return step[start : step.index("# Put preflight on PATH", start)]
-
-
-def test_a_failed_rpi_ws281x_build_does_not_abort_provisioning(tmp_path):
-    # A device with no compiler or no network still needs its systemd unit, its
-    # env file and its data dir; preflight reports the missing module itself.
-    stubs = tmp_path / "stubs"
-    stubs.mkdir()
-    for name, body in (
-        # No candidate for anything, so the build-dependency install is skipped.
-        ("apt-cache", "#!/bin/sh\nexit 0\n"),
-        ("apt-get", '#!/bin/sh\necho "APT_GET_WAS_CALLED $*" >&2\nexit 100\n'),
-        ("uv", "#!/bin/sh\necho 'error: failed to build rpi-ws281x' >&2\nexit 1\n"),
-    ):
-        stub = stubs / name
-        stub.write_text(body)
-        stub.chmod(0o755)
-    lib = tmp_path / "lib.sh"
-    lib.write_text(
-        "\n".join(
-            _extract_function(f) for f in ("log", "apt_candidate", "apt_has_candidate")
-        )
-        + "\n"
-    )
-    snippet = "\n".join(
-        [
-            _extract_assignment("PREFLIGHT_BIN"),
-            _extract_assignment("RPI_WS281X_SPEC"),
-            f'VENV_DIR="{tmp_path}/no-such-venv"',
-            _ws281x_block().rstrip(),
-            "echo REACHED_THE_NEXT_STEP",
-        ]
-    )
-    result = subprocess.run(
-        ["bash", "-c", f'set -euo pipefail\nsource "{lib}"\n{snippet}'],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+def test_nothing_is_compiled_on_the_device_any_more():
+    # The SPI LED rewire (#85) retired rpi_ws281x, the one library that had to
+    # be built from source - and with it the C toolchain step 5 installed.
+    text = "\n".join(
+        line
+        for line in _script_text().splitlines()
+        if not line.lstrip().startswith("#")
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "APT_GET_WAS_CALLED" not in result.stderr, (
-        "nothing to install when there is no candidate"
-    )
-    assert "could not install rpi-ws281x" in result.stdout
-    assert "blocking failure" in result.stdout
-    assert "REACHED_THE_NEXT_STEP" in result.stdout
+    assert "ws281x" not in text.lower()
+    assert "build-essential" not in text
+    assert "python3-dev" not in text
+    assert "uv pip install" not in text
 
 
 # --------------------------------------------------------------------------
@@ -1527,7 +1595,7 @@ def test_a_failed_dev_package_install_does_not_abort_the_run(tmp_path):
 
 
 def _run_final_steps(
-    tmp_path: Path, env_text: str, ws281x_missing: str = "false"
+    tmp_path: Path, env_text: str, config_txt_failed: str = "false"
 ) -> subprocess.CompletedProcess:
     """Run steps 9 and 10 for real, with only DATA_DIR redirected."""
     env_file = tmp_path / "visio-recorder.env"
@@ -1541,12 +1609,12 @@ def _run_final_steps(
             _extract_function("log"),
             _extract_function("env_file_value"),
             _extract_assignment("PREFLIGHT_BIN"),
-            _extract_assignment("RPI_WS281X_SPEC"),
+            'CONFIG_TXT="/boot/firmware/config.txt"',
             f'DATA_DIR="{tmp_path}/default-data-dir"',
             'target_sha="deadbee"',
             "reboot_needed=false",
             "data_dir_failed=false",
-            f"ws281x_missing={ws281x_missing}",
+            f"config_txt_failed={config_txt_failed}",
             block,
         ]
     )
@@ -1563,28 +1631,27 @@ def _run_final_steps(
 _CONFIGURED_ENV = "SUPABASE_URL=u\nSUPABASE_ANON_KEY=k\nVISIO_BATTERY_SOURCE=none\n"
 
 
-def test_a_failed_ws281x_build_is_repeated_in_the_summary(tmp_path):
-    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, ws281x_missing="true")
+def test_a_config_txt_that_could_not_be_edited_is_repeated_in_the_summary(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, config_txt_failed="true")
 
     assert "INCOMPLETE" in result.stdout
-    assert "rpi_ws281x" in result.stdout
-    assert "daemon will not start" in result.stdout
+    assert "config.txt" in result.stdout
+    assert "LED" in result.stdout
     # Still non-fatal where it happened: the data dir and the rest of the
     # summary happen anyway. Only the very end reports the outcome.
     assert (tmp_path / "default-data-dir").is_dir()
     assert "Setup complete." not in result.stdout
     assert "Setup incomplete" in result.stdout
     assert result.returncode == 1, (
-        "a device whose daemon cannot start is not a successful run"
+        "a device whose LED cannot be driven is not a successful run"
     )
 
 
-def test_a_successful_run_says_nothing_about_ws281x(tmp_path):
-    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, ws281x_missing="false")
+def test_a_successful_run_says_nothing_about_config_txt(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, config_txt_failed="false")
 
     assert result.returncode == 0, result.stderr
     assert "INCOMPLETE" not in result.stdout
-    assert "Setup complete." in result.stdout
 
 
 def test_the_data_dir_step_provisions_the_configured_directory(tmp_path):
@@ -1592,7 +1659,7 @@ def test_the_data_dir_step_provisions_the_configured_directory(tmp_path):
     result = _run_final_steps(
         tmp_path,
         _CONFIGURED_ENV + f"VISIO_DATA_DIR={configured}\n",
-        ws281x_missing="false",
+        config_txt_failed="false",
     )
 
     assert result.returncode == 0, result.stderr
@@ -1606,7 +1673,7 @@ def test_the_data_dir_step_provisions_the_configured_directory(tmp_path):
 
 
 def test_the_data_dir_step_falls_back_to_the_default_when_unset(tmp_path):
-    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, ws281x_missing="false")
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, config_txt_failed="false")
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "default-data-dir").is_dir()
@@ -1619,7 +1686,7 @@ def test_a_quoted_data_dir_is_unquoted_the_way_systemd_reads_it(tmp_path):
     result = _run_final_steps(
         tmp_path,
         _CONFIGURED_ENV + f'VISIO_DATA_DIR="{configured}"\n',
-        ws281x_missing="false",
+        config_txt_failed="false",
     )
 
     assert result.returncode == 0, result.stderr
@@ -1749,3 +1816,337 @@ def test_an_indented_data_dir_is_provisioned_rather_than_missed(tmp_path):
     assert result.returncode == 0, result.stderr
     assert configured.is_dir(), "systemd would have given the daemon this path"
     assert not (tmp_path / "default-data-dir").exists()
+
+
+# --------------------------------------------------------------------------
+# Step 3's /boot/firmware/config.txt edits. The SPI LED needs SPI0 on and the
+# core clock held fixed (spi-bcm2835 caches the core clock at probe, so a
+# scaling clock skews the WS2812B bit timing), and the INMP441 needs the
+# adau7002-simple overlay. config.txt is the file a bad edit can stop the Pi
+# booting from, so the edits are pinned against a real stock file: added once
+# in a section that applies to the Zero 2W, a conflicting value replaced in
+# place rather than shadowed, and a second run byte-for-byte identical.
+# --------------------------------------------------------------------------
+
+# Raspberry Pi OS trixie's stock /boot/firmware/config.txt (abridged comments).
+_STOCK_CONFIG_TXT = """\
+# For more options and information see
+# http://rptl.io/configtxt
+# Some settings may impact device functionality. See link above for details
+
+# Uncomment some or all of these to enable the optional hardware interfaces
+#dtparam=i2c_arm=on
+#dtparam=i2s=on
+#dtparam=spi=on
+
+# Enable audio (loads snd_bcm2835)
+dtparam=audio=on
+
+# Automatically load overlays for detected cameras
+camera_auto_detect=1
+
+# Automatically load overlays for detected DSI displays
+display_auto_detect=1
+
+# Automatically load initramfs files, if found
+auto_initramfs=1
+
+# Enable DRM VC4 V3D driver
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+
+# Don't have the firmware create an initial video= setting in cmdline.txt.
+# Use the kernel's default instead.
+disable_fw_kms_setup=1
+
+# Run in 64-bit mode
+arm_64bit=1
+
+# Disable compensation for displays with overscan
+disable_overscan=1
+
+# Run as fast as firmware / board allows
+arm_boost=1
+
+[cm4]
+# Enable host mode on the 2711 built-in XHCI USB controller.
+# This line should be removed if the legacy DWC2 controller is required
+# (e.g. for USB device mode) or if USB support is not required.
+otg_mode=1
+
+[cm5]
+dtoverlay=dwc2,dr_mode=host
+
+[all]
+"""
+
+_CONFIG_TXT_EDITS = """\
+ensure_config_txt_setting "${CONFIG_TXT}" dtparam=spi on
+ensure_config_txt_setting "${CONFIG_TXT}" core_freq_fixed 1
+ensure_config_txt_line "${CONFIG_TXT}" dtoverlay=adau7002-simple
+echo "CHANGED=${config_txt_changed} FAILED=${config_txt_failed}"
+"""
+
+
+def _run_config_txt(tmp_path: Path, config: Path) -> subprocess.CompletedProcess:
+    lib = _shell_lib(
+        tmp_path / "lib",
+        "config_txt_edit",
+        "ensure_config_txt_setting",
+        "ensure_config_txt_line",
+        "config_txt_apply",
+    )
+    return _run(
+        lib,
+        f'CONFIG_TXT="{config}"\nconfig_txt_changed=false\nconfig_txt_failed=false\n'
+        + _CONFIG_TXT_EDITS,
+    )
+
+
+def _effective_all_scope(text: str) -> list[str]:
+    """The active lines a Pi Zero 2W applies: global or under [all]."""
+    lines, applies = [], True
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            applies = line == "[all]"
+        elif applies and line and not line.startswith("#"):
+            lines.append(line)
+    return lines
+
+
+def test_a_stock_config_txt_gains_the_led_and_microphone_settings(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text(_STOCK_CONFIG_TXT)
+
+    result = _run_config_txt(tmp_path, config)
+
+    assert result.returncode == 0, result.stderr
+    assert "CHANGED=true FAILED=false" in result.stdout
+    text = config.read_text()
+    assert text.startswith(_STOCK_CONFIG_TXT), "nothing above is rewritten"
+    effective = _effective_all_scope(text)
+    for line in ("dtparam=spi=on", "core_freq_fixed=1", "dtoverlay=adau7002-simple"):
+        assert effective.count(line) == 1, f"{line} must apply exactly once"
+    assert "#dtparam=spi=on" in text, "the stock comment is left alone"
+
+
+def test_a_second_config_txt_pass_changes_nothing(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text(_STOCK_CONFIG_TXT)
+    assert _run_config_txt(tmp_path / "a", config).returncode == 0
+    after_first = config.read_bytes()
+
+    result = _run_config_txt(tmp_path / "b", config)
+
+    assert result.returncode == 0, result.stderr
+    assert "CHANGED=false FAILED=false" in result.stdout
+    assert config.read_bytes() == after_first
+
+
+def test_spi_turned_off_is_switched_on_in_place_not_shadowed(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text("dtparam=audio=on\ndtparam=spi=off\ncore_freq_fixed=0\n")
+
+    result = _run_config_txt(tmp_path, config)
+
+    assert result.returncode == 0, result.stderr
+    assert config.read_text() == (
+        "dtparam=audio=on\ndtparam=spi=on\ncore_freq_fixed=1\n"
+        "dtoverlay=adau7002-simple\n"
+    )
+
+
+def test_a_setting_under_another_boards_filter_does_not_count(tmp_path):
+    # [pi4] lines never reach a Zero 2W, so they neither satisfy the check nor
+    # get edited - and a file ending in a board filter gets an [all] first.
+    config = tmp_path / "config.txt"
+    config.write_text("arm_64bit=1\n[pi4]\ndtparam=spi=on\ncore_freq_fixed=1\n")
+
+    result = _run_config_txt(tmp_path, config)
+
+    assert result.returncode == 0, result.stderr
+    assert config.read_text() == (
+        "arm_64bit=1\n[pi4]\ndtparam=spi=on\ncore_freq_fixed=1\n"
+        "[all]\ndtparam=spi=on\ncore_freq_fixed=1\ndtoverlay=adau7002-simple\n"
+    )
+
+
+def test_a_config_txt_without_a_final_newline_is_not_glued_together(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text("arm_64bit=1")
+
+    assert _run_config_txt(tmp_path, config).returncode == 0
+
+    assert config.read_text().splitlines()[:2] == ["arm_64bit=1", "dtparam=spi=on"]
+
+
+def test_an_unwritable_config_txt_is_reported_without_aborting(tmp_path):
+    boot = tmp_path / "boot"
+    boot.mkdir()
+    config = boot / "config.txt"
+    config.write_text(_STOCK_CONFIG_TXT)
+    boot.chmod(0o555)
+    try:
+        if os.access(boot, os.W_OK):
+            pytest.skip("running as root: a read-only directory is still writable")
+        result = _run_config_txt(tmp_path, config)
+    finally:
+        boot.chmod(0o755)
+
+    assert result.returncode == 0, result.stderr
+    assert "FAILED=true" in result.stdout
+    assert "ERROR" in result.stdout
+    assert config.read_text() == _STOCK_CONFIG_TXT, "the original is untouched"
+    assert list(boot.iterdir()) == [config], "no temp file left on the boot partition"
+
+
+def test_a_missing_config_txt_is_a_failure_not_a_crash(tmp_path):
+    result = _run_config_txt(tmp_path, tmp_path / "no-such-config.txt")
+
+    assert result.returncode == 0, result.stderr
+    assert "FAILED=true" in result.stdout
+
+
+def test_step_3_makes_the_config_txt_edits_and_asks_for_a_reboot():
+    step = _step_block(3)
+
+    assert 'CONFIG_TXT="/boot/firmware/config.txt"' in _script_text()
+    for call in _CONFIG_TXT_EDITS.splitlines()[:3]:
+        assert call in step, f"step 3 no longer runs: {call}"
+    assert 'if [[ "${config_txt_changed}" == "true" ]]; then' in step
+    assert "reboot_needed=true" in step
+
+
+# --------------------------------------------------------------------------
+# Step 6's ALSA config: firmware/alsa/visio-mic.conf becomes /etc/asound.conf,
+# which is what defines the visio_mic PCM the daemon records from. Installed
+# idempotently, and an operator's own asound.conf is kept, not destroyed.
+# --------------------------------------------------------------------------
+
+
+def _run_alsa_install(tmp_path: Path, etc: Path) -> subprocess.CompletedProcess:
+    lib = _shell_lib(tmp_path / "lib", "install_alsa_config")
+    src = Path(__file__).resolve().parent.parent / "alsa" / "visio-mic.conf"
+    return _run(lib, f'install_alsa_config "{src}" "{etc}/asound.conf"')
+
+
+def test_the_alsa_config_is_installed_once(tmp_path):
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    src = (
+        Path(__file__).resolve().parent.parent / "alsa" / "visio-mic.conf"
+    ).read_bytes()
+
+    first = _run_alsa_install(tmp_path / "a", etc)
+    second = _run_alsa_install(tmp_path / "b", etc)
+
+    assert first.returncode == 0, first.stderr
+    assert (etc / "asound.conf").read_bytes() == src
+    assert second.returncode == 0, second.stderr
+    assert "already installed" in second.stdout
+    assert sorted(p.name for p in etc.iterdir()) == ["asound.conf"]
+
+
+def test_an_operators_own_asound_conf_is_kept_aside(tmp_path):
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "asound.conf").write_text("pcm.!default { type hw card 1 }\n")
+
+    result = _run_alsa_install(tmp_path, etc)
+
+    assert result.returncode == 0, result.stderr
+    assert "pcm.visio_mic" in (etc / "asound.conf").read_text()
+    assert (etc / "asound.conf.pre-visio").read_text() == (
+        "pcm.!default { type hw card 1 }\n"
+    )
+
+
+def test_step_6_installs_the_alsa_config_from_the_provisioned_checkout():
+    step = _step_block(6)
+
+    src = '"${INSTALL_DIR}/firmware/alsa/visio-mic.conf"'
+    assert f'install_alsa_config {src} "${{ALSA_CONF_DST}}"' in step
+    assert 'ALSA_CONF_DST="/etc/asound.conf"' in _script_text()
+
+
+# --------------------------------------------------------------------------
+# Step 7's env file template lists every key the daemon reads, so an operator
+# filling it in sees the video, upload-limit and audio tunables (#86, #87)
+# without reading the source - commented out at their defaults, because
+# VISIO_SEGMENT_DURATION_MS is derived from the others only while it is unset.
+# --------------------------------------------------------------------------
+
+
+def _env_template() -> str:
+    match = re.search(
+        r'cat > "\$\{ENV_FILE\}" <<\'EOF\'\n(.*?)\nEOF\n', _script_text(), re.DOTALL
+    )
+    assert match, "the env file template heredoc was not found"
+    return match.group(1)
+
+
+def _daemon_env_keys() -> set[str]:
+    package = Path(__file__).resolve().parent.parent / "visio_recorder"
+    keys: set[str] = set()
+    for module in ("daemon.py", "preflight.py"):
+        keys |= set(
+            re.findall(
+                r'env(?:iron)?(?:\.get\(|\[)"([A-Z][A-Z0-9_]+)"',
+                (package / module).read_text(),
+            )
+        )
+    return keys
+
+
+def test_the_env_template_lists_every_key_the_daemon_reads():
+    template = _env_template()
+    keys = _daemon_env_keys()
+    assert {"VISIO_VIDEO_BITRATE", "VISIO_AUDIO", "VISIO_MAX_UPLOAD_BYTES"} <= keys, (
+        "the key scan no longer finds the daemon's config reads"
+    )
+
+    for key in sorted(keys):
+        assert re.search(rf"^#? ?{key}=", template, re.MULTILINE), (
+            f"{key} is read by the daemon but missing from the env template"
+        )
+
+
+def test_the_env_template_leaves_derived_and_tunable_keys_at_their_defaults():
+    from visio_recorder.capture import AudioSettings, VideoSettings
+    from visio_recorder.segment_size import DEFAULT_MAX_UPLOAD_BYTES
+
+    template = _env_template()
+    video, audio = VideoSettings(), AudioSettings()
+    for line in (
+        f"# VISIO_VIDEO_WIDTH={video.width}",
+        f"# VISIO_VIDEO_HEIGHT={video.height}",
+        f"# VISIO_FRAMERATE={video.framerate}",
+        f"# VISIO_VIDEO_BITRATE={video.bitrate_bps}",
+        f"# VISIO_MAX_UPLOAD_BYTES={DEFAULT_MAX_UPLOAD_BYTES}",
+        "# VISIO_SEGMENT_DURATION_MS=60000",
+        "# VISIO_AUDIO=on",
+        f"# VISIO_AUDIO_DEVICE={audio.device}",
+        f"# VISIO_AUDIO_BITRATE={audio.bitrate_bps}",
+    ):
+        assert line in template.splitlines(), f"{line!r} missing from the env template"
+
+
+def test_the_env_template_parses_to_a_config_the_daemon_accepts(tmp_path):
+    from visio_recorder.daemon import load_config
+    from visio_recorder.preflight import read_env_file
+
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text(
+        _env_template()
+        .replace("SUPABASE_URL=\n", "SUPABASE_URL=http://x\n")
+        .replace("SUPABASE_ANON_KEY=\n", "SUPABASE_ANON_KEY=k\n")
+    )
+    env = read_env_file(env_file)
+    assert env is not None
+
+    config = load_config(env)
+
+    assert config.segment_duration_ms == 60000
+    assert config.audio is not None and config.audio.device == "visio_mic"
+    assert config.battery_source == "none"
