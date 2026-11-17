@@ -1,37 +1,37 @@
-=== provisioning revision 3cdb337cc3c3469441b3195bf5fd6f025e4f429a
+=== provisioning revision 2b5776f356b4e17af770d8bbd05a8136875357bf
 === run 1: fresh device (stops at the env file template)
 [setup-device] Step 1/10: swap size
 [setup-device] Swap is 208MB - wrote /etc/rpi/swap.conf.d/10-visio.conf pinning a 1024MB swap file, applied on the reboot reported at the end
 [setup-device] Step 2/10: apt packages
 [setup-device] pijuice-base is not in this release's package index - skipping (expected on Raspberry Pi OS trixie, where the Raspberry Pi archive no longer ships it). Keep VISIO_BATTERY_SOURCE=none until a battery driver is installed another way.
 [setup-device] Step 3/10: interfaces
-[setup-device] I2C was disabled - enabled now, reboot required
-[setup-device] No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)
-[setup-device] /boot/firmware/config.txt: set dtparam=spi=on
+[setup-device] SPI was disabled - enabled now via raspi-config, reboot required
+[setup-device] I2C was disabled - enabled now via raspi-config, reboot required
+[setup-device] Camera already enabled
 [setup-device] /boot/firmware/config.txt: set core_freq_fixed=1
 [setup-device] /boot/firmware/config.txt: set dtoverlay=adau7002-simple
-[setup-device] /boot/firmware/config.txt changed - reboot required for SPI, the core clock and the I2S overlay to take effect
+[setup-device] /boot/firmware/config.txt changed - reboot required for the core clock and the I2S overlay to take effect
 [setup-device] Step 4/10: uv
 [setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
 [setup-device] Step 5/10: code
 Cloning into '/opt/visio-recorder'...
 done.
-HEAD is now at 3cdb337 fix(firmware): keep the reboot notice from a run that stops at the env file checkpoint
-[setup-device] Provisioned revision 3cdb337cc3c3469441b3195bf5fd6f025e4f429a (requested '3cdb337cc3c3469441b3195bf5fd6f025e4f429a')
+HEAD is now at 2b5776f feat: enable spi and i2c through raspi-config nonint
+[setup-device] Provisioned revision 2b5776f356b4e17af770d8bbd05a8136875357bf (requested '2b5776f356b4e17af770d8bbd05a8136875357bf')
 Using CPython 3.13.5 interpreter at: /usr/bin/python3
 Creating virtual environment at: /opt/visio-recorder/firmware/.venv
 Activate with: source /opt/visio-recorder/firmware/.venv/bin/activate
-Resolved 42 packages in 1ms
+Resolved 42 packages in 4ms
    Building visio-recorder @ file:///opt/visio-recorder/firmware
 Downloading pydantic-core (2.0MiB)
 Downloading cryptography (4.5MiB)
  Downloaded pydantic-core
- Downloaded cryptography
       Built visio-recorder @ file:///opt/visio-recorder/firmware
-Prepared 31 packages in 2.66s
-Installed 31 packages in 42ms
+ Downloaded cryptography
+Prepared 31 packages in 10.19s
+Installed 31 packages in 31ms
  + annotated-types==0.7.0
- + anyio==4.14.1
+ + anyio==4.16.0
  + certifi==2026.6.17
  + cffi==2.0.0
  + cryptography==49.0.0
@@ -126,18 +126,18 @@ VISIO_DEV_SHELL=1
 [setup-device] Step 2/10: apt packages
 [setup-device] pijuice-base is not in this release's package index - skipping (expected on Raspberry Pi OS trixie, where the Raspberry Pi archive no longer ships it). Keep VISIO_BATTERY_SOURCE=none until a battery driver is installed another way.
 [setup-device] Step 3/10: interfaces
+[setup-device] SPI already enabled
 [setup-device] I2C already enabled
-[setup-device] No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)
-[setup-device] /boot/firmware/config.txt: dtparam=spi=on already set
+[setup-device] Camera already enabled
 [setup-device] /boot/firmware/config.txt: core_freq_fixed=1 already set
 [setup-device] /boot/firmware/config.txt: dtoverlay=adau7002-simple already set
 [setup-device] Step 4/10: uv
 [setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
 [setup-device] Step 5/10: code
-HEAD is now at 3cdb337 fix(firmware): keep the reboot notice from a run that stops at the env file checkpoint
-[setup-device] Provisioned revision 3cdb337cc3c3469441b3195bf5fd6f025e4f429a (requested '3cdb337cc3c3469441b3195bf5fd6f025e4f429a')
-Resolved 42 packages in 1ms
-Checked 31 packages in 0.88ms
+HEAD is now at 2b5776f feat: enable spi and i2c through raspi-config nonint
+[setup-device] Provisioned revision 2b5776f356b4e17af770d8bbd05a8136875357bf (requested '2b5776f356b4e17af770d8bbd05a8136875357bf')
+Resolved 42 packages in 3ms
+Checked 31 packages in 2ms
 [setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
 [setup-device] Step 6/10: systemd and ALSA
 [setup-device] /etc/asound.conf already installed - no change
@@ -149,7 +149,7 @@ Checked 31 packages in 0.88ms
 [setup-device] Managed dev-shell block written to /home/pi/.bashrc (owner pi:pi)
 [setup-device] Step 9/10: data dir
 [setup-device] Step 10/10: summary
-[setup-device] Provisioned revision: 3cdb337cc3c3469441b3195bf5fd6f025e4f429a
+[setup-device] Provisioned revision: 2b5776f356b4e17af770d8bbd05a8136875357bf
 [setup-device] VISIO_BATTERY_SOURCE=none
 [setup-device] Data dir: /var/lib/visio-recorder
 [setup-device] Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now.
@@ -160,13 +160,34 @@ exit=0
 === /boot/firmware/config.txt changes (diff against the stock file)
 --- stock
 +++ provisioned
-@@ -46,3 +46,6 @@
+@@ -3,9 +3,9 @@
+ # Some settings may impact device functionality. See link above for details
+ 
+ # Uncomment some or all of these to enable the optional hardware interfaces
+-#dtparam=i2c_arm=on
++dtparam=i2c_arm=on
+ #dtparam=i2s=on
+-#dtparam=spi=on
++dtparam=spi=on
+ 
+ # Enable audio (loads snd_bcm2835)
+ dtparam=audio=on
+@@ -46,3 +46,5 @@
  dtoverlay=dwc2,dr_mode=host
  
  [all]
-+dtparam=spi=on
 +core_freq_fixed=1
 +dtoverlay=adau7002-simple
+=== raspi-config's other edits: /etc/modules, and its live-kernel calls (stubbed in the container)
+# /etc/modules: kernel modules to load at boot time.
+i2c-dev
+STUB dtparam spi=on
+STUB dtparam i2c_arm=on
+STUB modprobe i2c-dev
+=== raspi-config nonint get_spi / get_i2c / get_camera after run 2 (0 = enabled)
+get_spi=0
+get_i2c=0
+get_camera=0
 === /etc/asound.conf matches firmware/alsa/visio-mic.conf
 identical
 === swap drop-in
@@ -184,18 +205,18 @@ SwapTotal:       1048572 kB
 [setup-device] Step 2/10: apt packages
 [setup-device] pijuice-base is not in this release's package index - skipping (expected on Raspberry Pi OS trixie, where the Raspberry Pi archive no longer ships it). Keep VISIO_BATTERY_SOURCE=none until a battery driver is installed another way.
 [setup-device] Step 3/10: interfaces
+[setup-device] SPI already enabled
 [setup-device] I2C already enabled
-[setup-device] No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)
-[setup-device] /boot/firmware/config.txt: dtparam=spi=on already set
+[setup-device] Camera already enabled
 [setup-device] /boot/firmware/config.txt: core_freq_fixed=1 already set
 [setup-device] /boot/firmware/config.txt: dtoverlay=adau7002-simple already set
 [setup-device] Step 4/10: uv
 [setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
 [setup-device] Step 5/10: code
-HEAD is now at 3cdb337 fix(firmware): keep the reboot notice from a run that stops at the env file checkpoint
-[setup-device] Provisioned revision 3cdb337cc3c3469441b3195bf5fd6f025e4f429a (requested '3cdb337cc3c3469441b3195bf5fd6f025e4f429a')
-Resolved 42 packages in 1ms
-Checked 31 packages in 0.85ms
+HEAD is now at 2b5776f feat: enable spi and i2c through raspi-config nonint
+[setup-device] Provisioned revision 2b5776f356b4e17af770d8bbd05a8136875357bf (requested '2b5776f356b4e17af770d8bbd05a8136875357bf')
+Resolved 42 packages in 2ms
+Checked 31 packages in 0.79ms
 [setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
 [setup-device] Step 6/10: systemd and ALSA
 [setup-device] /etc/asound.conf already installed - no change
@@ -207,7 +228,7 @@ Checked 31 packages in 0.85ms
 [setup-device] Managed dev-shell block written to /home/pi/.bashrc (owner pi:pi)
 [setup-device] Step 9/10: data dir
 [setup-device] Step 10/10: summary
-[setup-device] Provisioned revision: 3cdb337cc3c3469441b3195bf5fd6f025e4f429a
+[setup-device] Provisioned revision: 2b5776f356b4e17af770d8bbd05a8136875357bf
 [setup-device] VISIO_BATTERY_SOURCE=none
 [setup-device] Data dir: /var/lib/visio-recorder
 [setup-device] Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now.
@@ -217,7 +238,8 @@ Checked 31 packages in 0.85ms
 exit=0
 === managed files after run 2 vs run 3
 byte-identical: run 3 changed nothing
-619dd3ef33801464e0344db57f3eb805487055a78f1bd6b2197372c6a2c1fed3  boot/firmware/config.txt
+85801926589b5017a73e6dd46eef3e3ce5c39df31a7aab31f0b80c0158e2354c  boot/firmware/config.txt
+ede2d029ea6cbf705b99a1306f7e8896c9d577f9c9628b78b0c88c44105af786  etc/modules
 5c5f930b4e9c6b655e1e91eff04d2838ed0a442b45ba83c7ee069b8201eef20d  etc/asound.conf
 7f5b61302e0fb13ef2bf85b3a433db657dbd4e881150a48f5435cf19cdb01231  etc/rpi/swap.conf.d/10-visio.conf
 e545dae05108e12f362bb9b5c7c58a23a39d2e8d3e46068d9a9166b8ee1de538  etc/systemd/system/visio-recorder.service
@@ -225,6 +247,13 @@ e545dae05108e12f362bb9b5c7c58a23a39d2e8d3e46068d9a9166b8ee1de538  etc/systemd/sy
 f9e0c93210348b4cd696b7c43d5c7c4ffa928f6c1df612084ccb07596b009639  home/pi/.bashrc
 c165b6fccadb0c0eace646c8b1ad76c1ec2203fb885eba6da32ab761189f3a35  home/pi/.config/nvim/init.lua
 /opt/visio-recorder/firmware/.venv/bin/visio-preflight
+=== run 4: the same device with raspi-config missing (a non-Raspberry-Pi OS image)
+[setup-device] Step 3/10: interfaces
+[setup-device] ERROR: raspi-config is not installed, so SPI and I2C were NOT enabled. This script provisions Raspberry Pi OS, which ships raspi-config; on any other image, install it or flash Raspberry Pi OS Lite and re-run.
+HEAD is now at 2b5776f feat: enable spi and i2c through raspi-config nonint
+[setup-device] INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config (see the step 3 error above) - without SPI the status LED cannot be driven and 'visio-preflight' will report spidev0.0 as a blocking failure.
+[setup-device] Setup incomplete - see the INCOMPLETE lines above. Fix what they name and re-run this script.
+exit=1
 === stubbed apt-get install lines (what a real device would install)
 STUB apt-get install -y neovim ripgrep fd-find tmux htop tree jq less bash-completion
 STUB apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git python3-gpiozero python3-spidev alsa-utils
@@ -252,7 +281,7 @@ ModuleNotFoundError: No module named 'rpi_ws281x'
 [WARN] i2c: I2C not enabled - run setup-device.sh, may need a reboot
 exit=1
 === after the reboot: /dev/spidev0.0 appears root:spi 0660 (simulated node)
--rw-rw---- 1 root spi 0 Nov 17 03:18 /dev/spidev0.0
+-rw-rw---- 1 root spi 0 Nov 17 07:19 /dev/spidev0.0
 === visio-preflight as the operator (pi, in the spi group)
 [INFO] install: /opt/visio-recorder/firmware/visio_recorder
 [BLOCK] rpicam-vid: rpicam-vid not found on PATH - check the apt install step

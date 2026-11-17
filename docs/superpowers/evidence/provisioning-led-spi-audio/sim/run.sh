@@ -34,7 +34,7 @@ dx "git config --system url./mirror.insteadOf https://github.com/vietwillnguyen/
 dx "su pi -c 'git clone -q /mirror ~/vision && git -C ~/vision checkout -q --detach ${sha}'"
 
 snapshot() {
-  dx "cd / && sha256sum boot/firmware/config.txt etc/asound.conf etc/rpi/swap.conf.d/10-visio.conf \
+  dx "cd / && sha256sum boot/firmware/config.txt etc/modules etc/asound.conf etc/rpi/swap.conf.d/10-visio.conf \
       etc/systemd/system/visio-recorder.service etc/visio-recorder.env home/pi/.bashrc \
       home/pi/.config/nvim/init.lua 2>&1; readlink /usr/local/bin/visio-preflight"
 }
@@ -54,6 +54,10 @@ rc=0; provision || rc=$?; echo "exit=${rc}"
 echo "=== /boot/firmware/config.txt changes (diff against the stock file)"
 docker cp "${name}:/boot/firmware/config.txt" "${work}/config.txt.after"
 diff -u "${here}/stock-config.txt" "${work}/config.txt.after" --label stock --label provisioned || true
+echo "=== raspi-config's other edits: /etc/modules, and its live-kernel calls (stubbed in the container)"
+dx "cat /etc/modules; grep -E 'STUB (dtparam|modprobe)' /var/log/visio-sim-stubs.log"
+echo "=== raspi-config nonint get_spi / get_i2c / get_camera after run 2 (0 = enabled)"
+dx "for f in get_spi get_i2c get_camera; do echo \"\$f=\$(raspi-config nonint \$f)\"; done"
 echo "=== /etc/asound.conf matches firmware/alsa/visio-mic.conf"
 dx "cmp /etc/asound.conf /opt/visio-recorder/firmware/alsa/visio-mic.conf && echo identical"
 echo "=== swap drop-in"
@@ -74,6 +78,13 @@ if diff "${work}/after-run-2.sha256" "${work}/after-run-3.sha256"; then
   echo "byte-identical: run 3 changed nothing"
   cat "${work}/after-run-3.sha256"
 fi
+
+echo "=== run 4: the same device with raspi-config missing (a non-Raspberry-Pi OS image)"
+dx "mv /usr/bin/raspi-config /usr/bin/raspi-config.hidden"
+rc=0; out="$(provision)" || rc=$?
+grep -E 'Step 3/10|raspi-config|INCOMPLETE|Setup (in)?complete' <<<"${out}" || true
+echo "exit=${rc}"
+dx "mv /usr/bin/raspi-config.hidden /usr/bin/raspi-config"
 
 echo "=== stubbed apt-get install lines (what a real device would install)"
 dx "grep 'STUB apt-get install' /var/log/visio-sim-stubs.log | sort -u"

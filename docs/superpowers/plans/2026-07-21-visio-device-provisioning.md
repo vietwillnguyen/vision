@@ -1021,7 +1021,9 @@ sudo bash setup-device.sh
 A script fetched by `curl` is not in a git checkout, so step 5/10 prints a loud WARNING that it is falling back to the moving `main` - expected here, and also why this form cannot verify a pre-merge branch.
 To provision an exact revision, clone the repo on the Pi and run `firmware/scripts/setup-device.sh` from that clone (it defaults to the clone's own commit), or set `VISIO_GIT_REF=<branch|tag|sha>` in the root environment the script runs in.
 
-Expected first run (env file doesn't exist yet): script exits 0 after writing `/etc/visio-recorder.env`, printing "fill in SUPABASE_URL and SUPABASE_ANON_KEY, then re-run this script", followed by `REBOOT REQUIRED once the re-run finishes` (it has already edited swap, I2C and `config.txt`).
+Expected first run (env file doesn't exist yet): script exits 0 after writing `/etc/visio-recorder.env`, printing "fill in SUPABASE_URL and SUPABASE_ANON_KEY, then re-run this script", followed by `REBOOT REQUIRED once the re-run finishes` (it has already edited swap and `config.txt`, and enabled SPI and I2C).
+Step 3 logs `SPI was disabled - enabled now via raspi-config` and the same for I2C: both go through `raspi-config nonint do_spi 0` / `do_i2c 0`, checked first and verified afterwards with `get_spi` / `get_i2c`.
+An `ERROR: raspi-config is not installed` line means the image is not Raspberry Pi OS; reflash Raspberry Pi OS Lite rather than working around it.
 The template lists every video, upload-limit and audio tunable commented out at its default; leave them commented.
 
 - [ ] **Step 2: Fill in secrets and re-run**
@@ -1031,8 +1033,9 @@ sudo nano /etc/visio-recorder.env   # fill in SUPABASE_URL, SUPABASE_ANON_KEY; l
 sudo bash setup-device.sh
 ```
 
-Expected: completes through all 10 steps; summary reports the provisioned commit SHA, the data dir and `VISIO_BATTERY_SOURCE=none` with the bring-up reminder, and `REBOOT REQUIRED` (owed from the first run even though step 3 now logs `already set` for `dtparam=spi=on`, `core_freq_fixed=1` and `dtoverlay=adau7002-simple`).
-Check the edits landed once, under the final `[all]`: `grep -nE '^(dtparam=spi|core_freq_fixed|dtoverlay=adau7002)' /boot/firmware/config.txt`, and that `cmp /etc/asound.conf /opt/visio-recorder/firmware/alsa/visio-mic.conf` is silent.
+Expected: completes through all 10 steps; summary reports the provisioned commit SHA, the data dir and `VISIO_BATTERY_SOURCE=none` with the bring-up reminder, and `REBOOT REQUIRED` (owed from the first run even though step 3 now logs `SPI already enabled`, `I2C already enabled`, and `already set` for `core_freq_fixed=1` and `dtoverlay=adau7002-simple`).
+Check that `raspi-config nonint get_spi` and `raspi-config nonint get_i2c` each print `0` (enabled), and that the lines landed once: `grep -nE '^(dtparam=(spi|i2c_arm)|core_freq_fixed|dtoverlay=adau7002)' /boot/firmware/config.txt` shows `dtparam=i2c_arm=on` and `dtparam=spi=on` where `raspi-config` uncommented them near the top of the file, and `core_freq_fixed=1` and `dtoverlay=adau7002-simple` under the final `[all]`.
+Also check that `cmp /etc/asound.conf /opt/visio-recorder/firmware/alsa/visio-mic.conf` is silent.
 The last line is `Setup complete.` and `echo $?` is 0; an `INCOMPLETE` line followed by `Setup incomplete` and exit 1 means the run finished but the device cannot record or start yet - fix what that line names and re-run.
 
 - [ ] **Step 3: Reboot if the summary said to**

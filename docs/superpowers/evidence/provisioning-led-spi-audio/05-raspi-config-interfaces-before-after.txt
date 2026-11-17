@@ -1,0 +1,15 @@
+# tests/test_setup_device.py at this commit, run against the previous setup-device.sh (config.txt edit for SPI, unverified raspi-config for I2C)
+$ uv run --locked --extra dev pytest tests/test_setup_device.py -q
+FAILED tests/test_setup_device.py::test_a_config_txt_that_could_not_be_edited_is_repeated_in_the_summary
+FAILED tests/test_setup_device.py::test_interfaces_raspi_config_could_not_enable_are_repeated_in_the_summary
+FAILED tests/test_setup_device.py::test_step_3_enables_spi_and_i2c_through_raspi_config
+FAILED tests/test_setup_device.py::test_a_second_step_3_changes_nothing_and_asks_for_no_reboot
+FAILED tests/test_setup_device.py::test_a_disabled_camera_is_enabled_through_raspi_config
+FAILED tests/test_setup_device.py::test_without_raspi_config_step_3_fails_loudly_instead_of_falling_back
+FAILED tests/test_setup_device.py::test_a_do_spi_that_changes_nothing_is_caught_by_asking_again
+FAILED tests/test_setup_device.py::test_a_raspi_config_without_the_spi_function_is_a_failure
+FAILED tests/test_setup_device.py::test_a_raspi_config_without_a_camera_toggle_is_skipped_not_failed
+9 failed, 120 passed in 14.95s
+
+# The same file against the new setup-device.sh
+129 passed in 7.00s

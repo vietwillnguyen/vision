@@ -40,7 +40,8 @@ ROLLBACK_DROPIN="${UNIT_DROPIN_DIR}/90-run-as-root.conf"
 SYSTEM_PYTHON="/usr/bin/python3"
 
 # The boot firmware's config file on Raspberry Pi OS bookworm and later. Step 3
-# edits it for the SPI status LED and the I2S microphone.
+# has raspi-config enable SPI and I2C in it, and adds the two settings
+# raspi-config has no option for: the fixed core clock and the I2S overlay.
 CONFIG_TXT="/boot/firmware/config.txt"
 
 # Set while a reboot some run asked for is still owed. /run is a tmpfs, so only
@@ -75,12 +76,24 @@ BASHRC_END="# <<< visio-recorder dev shell (managed by setup-device.sh) <<<"
 reboot_needed=false
 config_txt_changed=false
 config_txt_failed=false
+interfaces_failed=false
 data_dir_failed=false
 service_user_failed=false
 unit_changed=false
 
 log() {
   echo "[setup-device] $*"
+}
+
+# One INCOMPLETE line per step 3 failure, for both places a run can end after
+# step 3 without an error exit: the env-file checkpoint and the summary.
+report_step3_incomplete() {
+  if [[ "${config_txt_failed}" == "true" ]]; then
+    log "INCOMPLETE: ${CONFIG_TXT} could not be edited (see the step 3 error above), so core_freq_fixed=1 or the microphone overlay may be missing - the status LED colours can be corrupted and the daemon may record video only."
+  fi
+  if [[ "${interfaces_failed}" == "true" ]]; then
+    log "INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config (see the step 3 error above) - without SPI the status LED cannot be driven and '${PREFLIGHT_BIN}' will report spidev0.0 as a blocking failure."
+  fi
 }
 
 # Resolved before the re-exec below so it survives it: "$0" is passed through
@@ -263,26 +276,67 @@ else
 fi
 
 log "Step 3/10: interfaces"
-current_i2c="$(raspi-config nonint get_i2c || echo 1)"
-if [[ "${current_i2c}" != "0" ]]; then
-  raspi-config nonint do_i2c 0
-  reboot_needed=true
-  log "I2C was disabled - enabled now, reboot required"
+# SPI (the status LED), I2C (the PiJuice or a replacement fuel gauge) and the
+# camera go through Raspberry Pi OS's own `raspi-config nonint`, so they are set
+# exactly the way the OS sets them. As of RPi-Distro/raspi-config's trixie
+# branch (see the provisioning spec, "Interfaces through raspi-config"):
+#   get_spi / get_i2c / get_camera print 0 when the interface is enabled and 1
+#     when not, and always exit 0. get_spi and get_i2c grep config.txt for an
+#     active dtparam=spi / dtparam=i2c_arm line; get_camera reads
+#     camera_auto_detect, and reports 0 when the line is absent.
+#   do_spi 0 / do_i2c 0 / do_camera 0 enable, rewriting every matching line of
+#     /boot/firmware/config.txt (commented or not) in place, or appending one.
+#     do_spi and do_i2c also apply the parameter to the live device tree
+#     (dtparam), and do_i2c adds i2c-dev to /etc/modules and loads it.
+#   Their exit status is that of a final `if` and is 0 even when the
+#     config.txt write failed, so success is judged by asking get_* again.
+#     An unknown function name exits 127.
+# A change still asks for a reboot even though the live dtparam may already
+# have brought the bus up: spi-bcm2835 would probe against a core clock that
+# core_freq_fixed=1 (below) only pins from the next boot.
+if command -v raspi-config >/dev/null 2>&1; then
+  have_raspi_config=true
 else
-  log "I2C already enabled"
+  have_raspi_config=false
+  interfaces_failed=true
+  log "ERROR: raspi-config is not installed, so SPI and I2C were NOT enabled. This script provisions Raspberry Pi OS, which ships raspi-config; on any other image, install it or flash Raspberry Pi OS Lite and re-run."
 fi
 
-if raspi-config nonint get_camera >/dev/null 2>&1; then
-  current_camera="$(raspi-config nonint get_camera || echo 1)"
-  if [[ "${current_camera}" != "0" ]]; then
-    raspi-config nonint do_camera 0
-    reboot_needed=true
-    log "Camera was disabled - enabled now, reboot required"
-  else
-    log "Camera already enabled"
+# Make the raspi-config interface ${1} (spi, i2c, camera) enabled, logging it
+# as ${2}. With ${3} set to "optional", an OS whose raspi-config has no such
+# function is skipped rather than failed. Records a change in
+# ${reboot_needed} and a failure in ${interfaces_failed}, and never aborts the
+# run: the summary is where the operator learns about either.
+ensure_raspi_interface() {
+  local name="$1" label="$2" optional="${3:-}" state
+  if ! state="$(raspi-config nonint "get_${name}")"; then
+    if [[ "${optional}" == "optional" ]]; then
+      log "This raspi-config has no get_${name} - skipping the ${label} toggle"
+      return 0
+    fi
+    interfaces_failed=true
+    log "ERROR: 'raspi-config nonint get_${name}' failed, so ${label} was NOT checked or enabled."
+    return 0
   fi
-else
-  log "No raspi-config camera toggle on this OS image - assuming auto-detected (Bookworm default)"
+  if [[ "${state}" == "0" ]]; then
+    log "${label} already enabled"
+    return 0
+  fi
+  raspi-config nonint "do_${name}" 0 || true
+  state="$(raspi-config nonint "get_${name}" || true)"
+  if [[ "${state}" != "0" ]]; then
+    interfaces_failed=true
+    log "ERROR: 'raspi-config nonint do_${name} 0' left ${label} disabled. Check that ${CONFIG_TXT} is on a mounted, writable boot partition with free space."
+    return 0
+  fi
+  reboot_needed=true
+  log "${label} was disabled - enabled now via raspi-config, reboot required"
+}
+
+if [[ "${have_raspi_config}" == "true" ]]; then
+  ensure_raspi_interface spi SPI
+  ensure_raspi_interface i2c I2C
+  ensure_raspi_interface camera Camera optional
 fi
 
 # Print ${1} with ${3} guaranteed to apply to every board, or exit 10 with ${1}
@@ -357,7 +411,7 @@ config_txt_apply() {
 
 # The status LED is a WS2812B on SPI0 MOSI (GPIO 10) and the microphone an
 # INMP441 on the I2S pins (GPIO 18-20); see the pendant spec's GPIO Pin Map.
-#   dtparam=spi=on            - /dev/spidev0.0 for the LED driver.
+# raspi-config above enabled SPI itself; it has no option for these two:
 #   core_freq_fixed=1         - spi-bcm2835 caches the core clock at probe, so a
 #                               core clock scaling between 250 and 400 MHz would
 #                               skew the WS2812B bit timing by up to 1.6x. Holds
@@ -365,14 +419,11 @@ config_txt_apply() {
 #   dtoverlay=adau7002-simple - registers the capture-only I2S card the
 #                               visio_mic PCM reads. A pendant with no microphone
 #                               wired just records video only.
-# raspi-config's do_spi writes the same dtparam line; editing the file directly
-# keeps all three edits on one idempotent, testable path.
-ensure_config_txt_setting "${CONFIG_TXT}" dtparam=spi on
 ensure_config_txt_setting "${CONFIG_TXT}" core_freq_fixed 1
 ensure_config_txt_line "${CONFIG_TXT}" dtoverlay=adau7002-simple
 if [[ "${config_txt_changed}" == "true" ]]; then
   reboot_needed=true
-  log "${CONFIG_TXT} changed - reboot required for SPI, the core clock and the I2S overlay to take effect"
+  log "${CONFIG_TXT} changed - reboot required for the core clock and the I2S overlay to take effect"
 fi
 
 log "Step 4/10: uv"
@@ -738,6 +789,11 @@ EOF
   log "Wrote template ${ENV_FILE} - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script"
   if [[ "${reboot_needed}" == "true" ]]; then
     log "REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or ${CONFIG_TXT}. The re-run reports it again."
+  fi
+  report_step3_incomplete
+  if [[ "${config_txt_failed}" == "true" || "${interfaces_failed}" == "true" ]]; then
+    log "Setup incomplete - see the INCOMPLETE lines above. Fix what they name, fill in ${ENV_FILE} and re-run this script."
+    exit 1
   fi
   exit 0
 else
@@ -1165,9 +1221,7 @@ fi
 if [[ "${service_user_failed}" == "true" ]]; then
   log "INCOMPLETE: the ${SERVICE_USER} user or its groups could not be set up (see the step 6 error above), so systemd cannot start the daemon."
 fi
-if [[ "${config_txt_failed}" == "true" ]]; then
-  log "INCOMPLETE: ${CONFIG_TXT} could not be edited (see the step 3 error above), so SPI may be off - the status LED cannot be driven and '${PREFLIGHT_BIN}' will report spidev0.0 as a blocking failure."
-fi
+report_step3_incomplete
 log "Run '${PREFLIGHT_BIN}' from any directory to check the runtime environment."
 if [[ "${reboot_needed}" == "true" ]]; then
   log "REBOOT REQUIRED: swap, interface or ${CONFIG_TXT} changes need a reboot to take effect before the daemon will work."
@@ -1175,11 +1229,12 @@ else
   log "No reboot required."
 fi
 # Two different outcomes, deliberately not conflated. The env-file step above
-# exits 0 because it is a re-run checkpoint - nothing is wrong, the operator
-# just has keys to fill in. Reaching here with an INCOMPLETE line means the
-# run finished and the device is not usable, which neither the last line an
-# operator reads nor an exit status a caller tests may report as success.
-if [[ "${data_dir_failed}" == "true" || "${config_txt_failed}" == "true" || "${service_user_failed}" == "true" ]]; then
+# exits 0 because it is a re-run checkpoint - the operator just has keys to
+# fill in - unless step 3 already failed, which it reports there the same way.
+# Reaching here with an INCOMPLETE line means the run finished and the device
+# is not usable, which neither the last line an operator reads nor an exit
+# status a caller tests may report as success.
+if [[ "${data_dir_failed}" == "true" || "${config_txt_failed}" == "true" || "${interfaces_failed}" == "true" || "${service_user_failed}" == "true" ]]; then
   log "Setup incomplete - see the INCOMPLETE lines above. Fix what they name and re-run this script."
   exit 1
 fi
