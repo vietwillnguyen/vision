@@ -87,6 +87,16 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "eslint-config-expo"
         update-types: ["version-update:semver-major"]
+      # Majors gated by the Expo toolchain rather than pinned by the SDK.
+      # eslint: eslint-config-expo pulls in eslint-plugin-react, whose eslint
+      # peer range stops at ^9.7; under eslint 10 it crashes loading
+      # `react/display-name`. Lift this once eslint-config-expo supports 10.
+      # @types/jest: jest-expo runs jest 29, so jest 30 types describe an API
+      # the test runner does not have. It moves with jest-expo's jest major.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/jest"
+        update-types: ["version-update:semver-major"]
 
   # Scans .github/workflows/. Keeps actions/checkout, setup-node, setup-uv,
   # astral-sh, and supabase/setup-cli current. Note this bumps the action *ref*
