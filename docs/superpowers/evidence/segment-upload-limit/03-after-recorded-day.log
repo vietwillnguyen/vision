@@ -1,0 +1,110 @@
+daemon defaults: video=VideoSettings(width=1280, height=720, framerate=30, bitrate_bps=4000000) segment_duration_ms=60000 max_upload_bytes=52428800
+session from 08:30:00: 16 segments
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o $SCRATCH/day-full/device/20261116_083000.h264
+session from 12:15:00: 16 segments
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o $SCRATCH/day-full/device/20261116_121500.h264
+session from 18:40:00: 16 segments
+  $ rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o $SCRATCH/day-full/device/20261116_184000.h264
+  $ rpicam-vid -t 30000 --width 1280 --height 720 --framerate 30 --bitrate 20000000 --codec h264 -n -o $SCRATCH/day-full/device/20261116_200000.h264
+WARNING visio_recorder.upload_limit split 20261116_200000.mp4 (74990118 bytes, over the 52428800-byte upload limit) into 20261116_200000.mp4, 20261116_200015.mp4
+  $ rpicam-vid -t 30000 --width 1280 --height 720 --framerate 30 --bitrate 20000000 --codec h264 -n -o $SCRATCH/day-full/device/20261116_200500.h264
+WARNING visio_recorder.upload_limit storage rejected 20261116_200500.mp4 (75033165 bytes) as too large: segments/e73dc55f-395a-47c9-b69a-65b45941f983/20261116_200500.mp4 (75033165 bytes) is over the storage size limit: The object exceeded the maximum allowed size; splitting it under 37516582 bytes
+WARNING visio_recorder.upload_limit split 20261116_200500.mp4 (75033165 bytes, over the 37516582-byte upload limit) into 20261116_200500.mp4, 20261116_200511.mp4, 20261116_200521.mp4
+ERROR visio_recorder.upload_limit segment 20261116_210000.mp4 can never be uploaded (20261116_210000.mp4: CalledProcessError(1, ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', '$SCRATCH/day-full/device/queue/20261116_210000.mp4'])); moved to $SCRATCH/day-full/device/rejected and will not be retried
+{
+  "flag_presses": {
+    "mid_segment": "08:30:30",
+    "last_second_of_segment": "08:32:00",
+    "restart_gap": "08:32:01",
+    "first_second_of_segment": "08:32:02"
+  },
+  "oversize_guard": {
+    "local_split": {
+      "capture_bytes": 74977960,
+      "max_upload_bytes": 52428800,
+      "uploaded_files": 2,
+      "upload_ok": true
+    },
+    "storage_413_resplit": {
+      "capture_bytes": 75020999,
+      "max_upload_bytes": 104857600,
+      "uploaded_files": 3,
+      "upload_ok": true
+    },
+    "unsplittable": {
+      "flush_uploaded_first_boot": 4,
+      "flush_uploaded_second_boot": 0,
+      "rejected_dir": [
+        "20261116_210000.mp4"
+      ]
+    }
+  },
+  "left_in_queue": [],
+  "device_status": [
+    {
+      "segments_pending": 0,
+      "segments_uploaded_today": 0,
+      "segments_rejected": 1
+    }
+  ],
+  "storage": {
+    "objects": 57,
+    "segments": 53,
+    "markers": 4,
+    "captured_by_loop": 48,
+    "every_loop_capture_uploaded": true,
+    "largest_segment_bytes": 40062989,
+    "smallest_full_segment_bytes": 29972250,
+    "limit_bytes": 52428800,
+    "guard_parts": [
+      "20261116_200000.mp4 40062989",
+      "20261116_200015.mp4 34922320",
+      "20261116_200500.mp4 30198562",
+      "20261116_200511.mp4 24787612",
+      "20261116_200521.mp4 20043001"
+    ]
+  },
+  "sample_segment": {
+    "name": "20261116_083000.mp4",
+    "bytes": 29983194,
+    "duration_sec": 59.9994,
+    "bit_rate": 3997799,
+    "video": "h264\n1280\n720\n30/1"
+  },
+  "pipeline": {
+    "devices_processed": 1,
+    "devices_failed": 0,
+    "vision_calls": 53,
+    "transcriber_calls": 0
+  },
+  "segments_rows": {
+    "count": 53,
+    "durations": [
+      8,
+      10,
+      12,
+      14,
+      16,
+      60
+    ],
+    "flagged": [
+      "20261116_083000.mp4",
+      "20261116_083101.mp4",
+      "20261116_083202.mp4"
+    ]
+  },
+  "dlq_rows": [],
+  "reel_row": {
+    "s3_key": "e73dc55f-395a-47c9-b69a-65b45941f983/20261116.mp4",
+    "duration_sec": 115
+  },
+  "reel_file": {
+    "bytes": 47742846,
+    "duration_sec": 115.0,
+    "video": "h264\n1280\n720"
+  }
+}
+
+real	7m33.844s
+user	38m42.445s
+sys	4m17.029s

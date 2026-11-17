@@ -5,7 +5,7 @@ insert into auth.users (id, email) values
 insert into public.devices (device_id, user_id, name) values
   ('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000a1', 'owner-device');
 
-select plan(8);
+select plan(10);
 
 select is(
   (select public from storage.buckets where id = 'segments'),
@@ -16,6 +16,19 @@ select is(
   (select public from storage.buckets where id = 'reels'),
   false,
   'reels bucket should be private'
+);
+-- The hosted free plan rejects any object over 50 MiB and cannot be raised.
+-- The local stack's [storage] file_size_limit is not enforced by the CLI's
+-- storage container, so the buckets carry the cap themselves.
+select is(
+  (select file_size_limit from storage.buckets where id = 'segments'),
+  52428800::bigint,
+  'segments bucket should cap objects at the hosted 50 MiB upload limit'
+);
+select is(
+  (select file_size_limit from storage.buckets where id = 'reels'),
+  52428800::bigint,
+  'reels bucket should cap objects at the hosted 50 MiB upload limit'
 );
 
 set local role authenticated;

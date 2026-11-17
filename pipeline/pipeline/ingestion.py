@@ -13,6 +13,12 @@ from datetime import datetime, timedelta
 
 from pipeline.models import DEFAULT_LOCATION, Segment
 
+# rpicam-vid runs once per segment, so consecutive captures are separated by a
+# restart gap of ~1-2 s that no segment covers. A press in that gap is about the
+# footage that just ended, so a marker up to this long after a segment's end
+# flags it. Further into a gap (recording was stopped) still matches nothing.
+RESTART_GAP_TOLERANCE_SEC = 3
+
 
 class UnreadableSegmentError(Exception):
     """The segment file has no measurable video duration."""
@@ -31,6 +37,31 @@ def stored_duration_sec(duration_sec: float) -> int:
 def segment_window_end(recorded_at: datetime, duration_sec: float) -> datetime:
     """End (exclusive) of the stretch of the day a segment covers."""
     return recorded_at + timedelta(seconds=duration_sec)
+
+
+def match_marker(
+    windows: list[tuple[datetime, float]], flag_at: datetime
+) -> int | None:
+    """Index of the window a marker flags, or None.
+
+    ``windows`` are ``(recorded_at, duration_sec)`` pairs. A window containing
+    the marker wins; otherwise the window that ended most recently, at most
+    ``RESTART_GAP_TOLERANCE_SEC`` before the marker, takes it.
+    """
+    gap_match: int | None = None
+    gap_end: datetime | None = None
+    for index, (recorded_at, duration_sec) in enumerate(windows):
+        window_end = segment_window_end(recorded_at, duration_sec)
+        if recorded_at <= flag_at < window_end:
+            return index
+        in_gap = (
+            window_end
+            <= flag_at
+            < window_end + timedelta(seconds=RESTART_GAP_TOLERANCE_SEC)
+        )
+        if in_gap and (gap_end is None or window_end > gap_end):
+            gap_match, gap_end = index, window_end
+    return gap_match
 
 
 def parse_segment_filename(filename: str) -> datetime:
@@ -94,7 +125,7 @@ def build_segments_from_object_keys(
 def apply_flag_markers(
     segments: list[Segment], flag_marker_keys: list[str], device_id: str
 ) -> tuple[list[Segment], list[str], list[str]]:
-    """Flag segments whose window contains a marker's timestamp.
+    """Flag the segment each marker belongs to (see ``match_marker``).
 
     Marker filenames (FLAG_YYYYMMDD_HHMMSS.marker) carry their full date, so a
     stale or cross-day-retried marker can never flag another day's segment: a
@@ -116,11 +147,11 @@ def apply_flag_markers(
         except ValueError:
             rejected_keys.append(key)
             continue
-        for segment in segments:
-            window_end = segment_window_end(segment.recorded_at, segment.duration_sec)
-            if segment.recorded_at <= flag_at < window_end:
-                segment.manually_flagged = True
-                break
-        else:
+        index = match_marker(
+            [(s.recorded_at, s.duration_sec) for s in segments], flag_at
+        )
+        if index is None:
             unmatched_keys.append(key)
+        else:
+            segments[index].manually_flagged = True
     return segments, rejected_keys, unmatched_keys

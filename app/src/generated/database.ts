@@ -21,6 +21,7 @@ export type Database = {
           device_id: string
           recording_active: boolean
           segments_pending: number
+          segments_rejected: number
           segments_uploaded_today: number
           storage_free_gb: number
           storage_used_gb: number
@@ -31,6 +32,7 @@ export type Database = {
           device_id: string
           recording_active?: boolean
           segments_pending?: number
+          segments_rejected?: number
           segments_uploaded_today?: number
           storage_free_gb?: number
           storage_used_gb?: number
@@ -41,6 +43,7 @@ export type Database = {
           device_id?: string
           recording_active?: boolean
           segments_pending?: number
+          segments_rejected?: number
           segments_uploaded_today?: number
           storage_free_gb?: number
           storage_used_gb?: number

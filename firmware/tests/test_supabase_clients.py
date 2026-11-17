@@ -5,6 +5,7 @@ import pytest
 from storage3.exceptions import StorageApiError
 
 from visio_recorder.supabase_clients import SupabaseStorage, build_supabase_clients
+from visio_recorder.uploader import ObjectTooLargeError
 
 
 class FakeUser:
@@ -35,6 +36,7 @@ class FakeStorageBucket:
         self._uploads = uploads
         self._objects = objects
         self.info_has_size = True
+        self.max_size: int | None = None
 
     def upload(self, path: str, file, file_options=None) -> None:
         # Record what supabase-py's storage3 would turn into the request: the
@@ -50,6 +52,14 @@ class FakeStorageBucket:
                 "file_options": file_options,
             }
         )
+        if self.max_size is not None and len(data) > self.max_size:
+            # What storage-api answers over a file size limit; storage3
+            # surfaces the body's numeric statusCode as the error's status.
+            raise StorageApiError(
+                "The object exceeded the maximum allowed size",
+                "Payload too large",
+                413,
+            )
         key = (self._bucket, path)
         if key in self._objects:
             raise StorageApiError("The resource already exists", "Duplicate", "409")
@@ -91,10 +101,12 @@ class FakeStorage:
         self._uploads = uploads
         self.objects: dict = {}
         self.info_has_size = True
+        self.max_size: int | None = None
 
     def from_(self, bucket: str) -> FakeStorageBucket:
         api = FakeStorageBucket(bucket, self._uploads, self.objects)
         api.info_has_size = self.info_has_size
+        api.max_size = self.max_size
         return api
 
 
@@ -162,6 +174,24 @@ def test_storage_adapter_uploads_to_bucket_and_path(tmp_path):
     assert upload["bucket"] == "segments"
     assert upload["path"] == "device-abc/20260709_080000.mp4"
     assert upload["data"] == b"vid"
+
+
+def test_storage_adapter_reports_an_object_over_the_size_limit_distinctly(tmp_path):
+    # A 413 must not look like a network failure: the caller splits the file
+    # instead of leaving it queued to be rejected again on every boot.
+    fake = FakeSupabase()
+    fake.storage.max_size = 2
+    clients = build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"vid")
+
+    with pytest.raises(ObjectTooLargeError, match="20260709_080000.mp4"):
+        clients.storage.upload("segments", "device-abc/20260709_080000.mp4", local)
 
 
 def _upload_one(tmp_path: Path, filename: str) -> dict:

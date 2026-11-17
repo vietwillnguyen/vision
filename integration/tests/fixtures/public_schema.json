@@ -190,6 +190,11 @@
                 "has_default": true,
                 "is_nullable": false
             },
+            "segments_rejected": {
+                "data_type": "integer",
+                "has_default": true,
+                "is_nullable": false
+            },
             "segments_uploaded_today": {
                 "data_type": "integer",
                 "has_default": true,

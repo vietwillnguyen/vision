@@ -15,7 +15,9 @@ from tests.fakes import (
     FakeStatusClient,
     FakeStorageClient,
     FakeStorageClientFailingOn,
+    unlimited_upload_limit,
 )
+from visio_recorder.capture import VideoSettings
 from visio_recorder.daemon import LoopDeps, run_recording_loop
 from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
@@ -26,6 +28,7 @@ from visio_recorder.recording_loop import (
     on_segment_complete,
     recover_orphaned_segments,
 )
+from visio_recorder.upload_limit import UploadLimit
 from visio_recorder.upload_queue import list_pending
 
 
@@ -71,6 +74,7 @@ def test_on_segment_complete_happy_path(tmp_path):
         framerate=30,
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
         data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
     )
 
     assert result.segments_uploaded_today == 42
@@ -94,6 +98,7 @@ def test_on_segment_complete_happy_path(tmp_path):
         "segments_pending": 0,
         "segments_uploaded_today": 42,
         "recording_active": True,
+        "segments_rejected": 0,
     }
 
 
@@ -117,6 +122,7 @@ def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
         framerate=30,
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
         data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
     )
 
     assert led.calls == [
@@ -148,6 +154,7 @@ def test_on_segment_complete_reports_real_disk_stats(tmp_path, monkeypatch):
         framerate=30,
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=3.5, free_gb=25.1)),
         data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
     )
 
     assert len(status_client.upserts) == 1
@@ -162,6 +169,7 @@ def test_on_segment_complete_reports_real_disk_stats(tmp_path, monkeypatch):
         "segments_pending": 0,
         "segments_uploaded_today": 42,
         "recording_active": True,
+        "segments_rejected": 0,
     }
 
 
@@ -194,6 +202,7 @@ def test_failed_upload_restores_led_keeps_queued_file_and_reports_failure(tmp_pa
         framerate=30,
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
         data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
     )
 
     assert result.upload_ok is False
@@ -212,6 +221,7 @@ def test_failed_upload_restores_led_keeps_queued_file_and_reports_failure(tmp_pa
         "segments_pending": 1,
         "segments_uploaded_today": 0,
         "recording_active": True,
+        "segments_rejected": 0,
     }
 
 
@@ -238,6 +248,7 @@ def test_successful_upload_returns_ok_result(tmp_path):
         framerate=30,
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
         data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
     )
 
     assert result.upload_ok is True
@@ -249,7 +260,7 @@ def test_flush_pending_uploads_and_clears_all_queued_files(tmp_path):
     (tmp_path / "FLAG_20260708_235700.marker").touch()
     client = FakeStorageClient()
 
-    uploaded = flush_pending(tmp_path, client, "device-abc")
+    uploaded = flush_pending(tmp_path, client, "device-abc", unlimited_upload_limit())
 
     assert uploaded == 2
     assert list(tmp_path.iterdir()) == []
@@ -260,7 +271,7 @@ def test_flush_pending_leaves_failing_files_queued_and_continues(tmp_path):
     (tmp_path / "20260708_235000.mp4").touch()
     client = FakeStorageClientFailingOn("20260708_235000.mp4")
 
-    uploaded = flush_pending(tmp_path, client, "device-abc")
+    uploaded = flush_pending(tmp_path, client, "device-abc", unlimited_upload_limit())
 
     assert uploaded == 1
     assert [p.name for p in tmp_path.iterdir()] == ["20260708_235000.mp4"]
@@ -432,7 +443,8 @@ def test_capture_killed_mid_segment_is_uploaded_on_the_next_boot(tmp_path):
         queue_dir=queue_dir,
         device_id="device-abc",
         segment_duration_ms=1000,
-        framerate=30,
+        video=VideoSettings(),
+        upload_limit=unlimited_upload_limit(),
     )
     with pytest.raises(subprocess.CalledProcessError):
         run_recording_loop(
@@ -441,7 +453,7 @@ def test_capture_killed_mid_segment_is_uploaded_on_the_next_boot(tmp_path):
     assert (data_dir / "20260803_120001.h264").exists()
 
     recover_orphaned_segments(data_dir, queue_dir, FakeCommandRunner(), framerate=30)
-    flushed = flush_pending(queue_dir, storage, "device-abc")
+    flushed = flush_pending(queue_dir, storage, "device-abc", unlimited_upload_limit())
 
     assert flushed == 1
     assert storage.uploaded == [
@@ -449,4 +461,128 @@ def test_capture_killed_mid_segment_is_uploaded_on_the_next_boot(tmp_path):
         "device-abc/20260803_120001.mp4",
     ]
     assert sorted(p.name for p in data_dir.iterdir()) == ["queue"]
+    assert list_pending(queue_dir) == []
+
+
+class _MuxThenSplitRunner(FakeCommandRunner):
+    """Muxes like FakeCommandRunner; answers the split with two equal parts."""
+
+    def __init__(self, fail_split: bool = False) -> None:
+        super().__init__()
+        self.fail_split = fail_split
+
+    def run(self, args: list[str]) -> None:
+        if "segment" not in args:
+            super().run(args)
+            return
+        with self._lock:
+            self.calls.append(args)
+        if self.fail_split:
+            raise subprocess.CalledProcessError(1, args)
+        source = Path(args[args.index("-i") + 1])
+        half = source.stat().st_size // 2
+        pattern = Path(args[-1])
+        csv_path = Path(args[args.index("-segment_list") + 1])
+        for index in range(2):
+            (pattern.parent / (pattern.name % index)).write_bytes(b"x" * half)
+        csv_path.write_text("part_000.mp4,0.0,30.0\npart_001.mp4,30.0,60.0\n")
+
+
+class _Probe:
+    def duration_sec(self, path: Path) -> float:
+        return 60.0
+
+
+def _oversized_segment(tmp_path: Path) -> Path:
+    h264_path = tmp_path / "raw" / "20261116_090000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"x" * 1500)
+    return h264_path
+
+
+def test_on_segment_complete_splits_an_oversized_segment_and_uploads_both_parts(
+    tmp_path,
+):
+    runner = _MuxThenSplitRunner()
+    storage = FakeStorageClient()
+    status_client = FakeStatusClient()
+
+    result = on_segment_complete(
+        h264_path=_oversized_segment(tmp_path),
+        queue_dir=tmp_path / "queue",
+        command_runner=runner,
+        storage_client=storage,
+        status_client=status_client,
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=UploadLimit(max_bytes=1000, runner=runner, probe=_Probe()),
+    )
+
+    assert result.upload_ok is True
+    assert result.segments_uploaded_today == 2
+    assert storage.uploaded == [
+        "device-abc/20261116_090000.mp4",
+        "device-abc/20261116_090030.mp4",
+    ]
+    assert status_client.upserts[-1]["segments_pending"] == 0
+    assert status_client.upserts[-1]["segments_rejected"] == 0
+
+
+def test_an_unsplittable_oversized_segment_is_reported_and_not_retried(tmp_path):
+    runner = _MuxThenSplitRunner(fail_split=True)
+    storage = FakeStorageClient()
+    status_client = FakeStatusClient()
+    queue_dir = tmp_path / "queue"
+    limit = UploadLimit(max_bytes=1000, runner=runner, probe=_Probe())
+
+    result = on_segment_complete(
+        h264_path=_oversized_segment(tmp_path),
+        queue_dir=queue_dir,
+        command_runner=runner,
+        storage_client=storage,
+        status_client=status_client,
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=limit,
+    )
+
+    assert result.upload_ok is False
+    assert storage.uploaded == []
+    assert status_client.upserts[-1]["segments_pending"] == 0
+    assert status_client.upserts[-1]["segments_rejected"] == 1
+    # The next boot's flush has nothing to retry.
+    assert flush_pending(queue_dir, storage, "device-abc", limit) == 0
+    assert storage.uploaded == []
+
+
+def test_flush_pending_splits_an_oversized_queued_segment(tmp_path):
+    # A segment queued by firmware that recorded five-minute segments.
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "20261116_090000.mp4").write_bytes(b"x" * 1500)
+    runner = _MuxThenSplitRunner()
+    storage = FakeStorageClient()
+
+    uploaded = flush_pending(
+        queue_dir,
+        storage,
+        "device-abc",
+        UploadLimit(max_bytes=1000, runner=runner, probe=_Probe()),
+    )
+
+    assert uploaded == 2
+    assert storage.uploaded == [
+        "device-abc/20261116_090000.mp4",
+        "device-abc/20261116_090030.mp4",
+    ]
     assert list_pending(queue_dir) == []

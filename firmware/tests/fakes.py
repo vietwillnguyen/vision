@@ -10,6 +10,7 @@ from visio_recorder.battery import BatteryReader
 from visio_recorder.led import LedDriver, LedPattern
 from visio_recorder.muxer import CommandRunner
 from visio_recorder.recording_loop import DiskStats
+from visio_recorder.upload_limit import UploadLimit
 from visio_recorder.uploader import StorageClient
 
 
@@ -259,3 +260,13 @@ class FakeClock:
         value = self._next
         self._next = self._next + self._step
         return value
+
+
+class UnusedProbe:
+    def duration_sec(self, path: Path) -> float:
+        raise AssertionError(f"nothing should be probed: {path}")
+
+
+def unlimited_upload_limit() -> UploadLimit:
+    """An upload limit no test segment reaches, so nothing is ever split."""
+    return UploadLimit(max_bytes=2**62, runner=FakeCommandRunner(), probe=UnusedProbe())

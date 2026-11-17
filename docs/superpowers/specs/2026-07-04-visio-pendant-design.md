@@ -38,7 +38,7 @@ The device records passively all day, uploads footage to the cloud over home WiF
 ```
 [Pendant Hardware]
   RPi Zero 2W + Camera Module 3 Wide + PiJuice pHAT + 3000mAh LiPo
-  Records H.264 720p/30fps in 5-minute rolling segments to SD card.
+  Records H.264 720p/30fps at 4 Mbps in rolling segments sized to fit the 50 MiB upload limit (1 minute by default).
   LED indicates recording / uploading state.
 
       | home WiFi, continuous background upload
@@ -155,12 +155,39 @@ A single Python systemd service manages the full device lifecycle.
 
 **Recording loop (as-built):**
 
-- `rpicam-vid` is invoked once per 5-minute segment (not one long-running `--segment` process), named `YYYYMMDD_HHMMSS.h264` - this keeps filename/timing control at capture start and lets each segment fail independently, at the cost of a ~1-2s gap between segments.
+- `rpicam-vid` is invoked once per segment (not one long-running `--segment` process), named `YYYYMMDD_HHMMSS.h264` - this keeps filename/timing control at capture start and lets each segment fail independently, at the cost of a ~1-2s gap between segments.
+  Resolution, framerate and H.264 bitrate are passed explicitly, and the segment length is derived from the bitrate; see Segment Size Contract below.
 - On segment completion the daemon wraps it into MP4 (`ffmpeg -c copy`), moves it to the upload queue, and hands it to a single background worker thread.
 - The worker thread is the sole owner of upload state (segment count, consecutive-failure count) and every upload-related LED transition; the main thread only records and enqueues.
 - The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop - a failed upload's file stays queued and the *next process startup's* flush (step 5 above) is the retry mechanism.
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
 - On successful upload, local file is deleted to free SD space.
+
+### Segment Size Contract
+
+The hosted Supabase project rejects any object over 50 MiB (free plan, a global limit that cannot be raised), so every segment file must fit under it or it can never be uploaded.
+
+**As-built finding (oversized segments):** the firmware passed no `--width`, `--height` or `--bitrate`, so segment size was left to rpicam-apps and encoder defaults: 640x480 (`OptsInternal::ParseVideo` in rpicam-apps v1.15.0) at the bcm2835-codec V4L2 encoder's default 10 Mbps (`V4L2_CID_MPEG_VIDEO_BITRATE`, raspberrypi/linux `rpi-6.12.y`).
+A 5-minute segment at 10 Mbps is about 375 MB, seven times the limit; the "~170 MB" figure in earlier code comments was an estimate, not a measurement.
+Locally this went unnoticed because `supabase/config.toml`'s `[storage] file_size_limit = "50MiB"` is not what the CLI's storage container enforces (it also sets `UPLOAD_FILE_SIZE_LIMIT` to 50 GB): a 375 MB upload succeeded locally and would have failed in production, after which the file stayed queued and was retried on every boot forever.
+
+What each side guarantees:
+
+- **Storage** caps the `segments` and `reels` buckets at 50 MiB with a bucket-level `file_size_limit` (migration `20261116120000_cap_bucket_file_size.sql`), which storage-api enforces on every stack, so local runs fail exactly where production does.
+- **Firmware** passes every size-deciding setting to `rpicam-vid` explicitly: `--width`, `--height`, `--framerate`, `--bitrate` (`VISIO_VIDEO_WIDTH` 1280, `VISIO_VIDEO_HEIGHT` 720, `VISIO_FRAMERATE` 30, `VISIO_VIDEO_BITRATE` 4000000).
+  4 Mbps is ample for hardware H.264 at 720p30, about 0.15 bits per pixel per frame.
+- **Firmware** derives the default segment length from the bitrate: predicted size is `(video_bps + 128 kbps reserved for audio) / 8 x seconds x 1.02` (MP4 overhead), and the default is the longest whole number of 10 s steps whose prediction uses at most two thirds of `VISIO_MAX_UPLOAD_BYTES` (default 52428800), capped at 300 s.
+  At the defaults that is 60 s, about 31.6 MB predicted, leaving a 1.66x margin for the encoder overshooting its target on high-motion stretches (the Pi's encoder rate-controls towards the target, VBR by default, and is not strictly constant bitrate).
+  `VISIO_SEGMENT_DURATION_MS` still overrides it; a value predicted to overflow is honoured with a warning.
+  After a plan upgrade, raise `VISIO_MAX_UPLOAD_BYTES` and the bucket limits together.
+- **Firmware** never retries an oversized file forever (`firmware/visio_recorder/upload_limit.py`).
+  Before upload, a segment over `VISIO_MAX_UPLOAD_BYTES` is split losslessly with `ffmpeg -c copy -f segment` into parts targeting 80 % of the limit, each named after its own start time so the pipeline sees ordinary consecutive segments.
+  A part storage still answers 413 for (a server limit below the configured one) is split again under half its size.
+  A segment that cannot be split under the limit (ffprobe cannot read its duration, ffmpeg fails with at least twice its size free, fewer than two parts, a part still too large, or parts that would share a name) is moved to `rejected/` beside the queue, logged as an error, counted in `device_status.segments_rejected`, and never retried; it is kept on the SD card for manual recovery.
+  A split that fails for a passing reason (any `OSError` such as a full SD card, or ffmpeg failing while the queue's filesystem has less than twice the file's size free, measured after the failure with the partial parts still on disk) leaves the segment queued and counts it as failed, so the next boot's flush retries it.
+  Splitting is crash-safe: parts are built in a hidden scratch directory in the queue and the original is replaced last, so a power cut leaves it to be split again.
+
+To measure the real size on a Pi, record one default segment and list it: `rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o /tmp/size-test.h264 && ls -l /tmp/size-test.h264` (the MP4 mux adds well under 1 %).
 
 **Manual flag button:**
 
@@ -221,8 +248,11 @@ After each segment is processed, whether the upload succeeds or fails, the daemo
 
 ```
 battery_pct, storage_used_gb, storage_free_gb,
-segments_pending, segments_uploaded_today, recording_active, updated_at
+segments_pending, segments_uploaded_today, recording_active,
+segments_rejected, updated_at
 ```
+
+`segments_rejected` is the number of segments the firmware gave up uploading because they are over the storage size limit and could not be split (see Segment Size Contract).
 
 The mobile app subscribes to this row via Supabase Realtime for live status without polling.
 
@@ -246,7 +276,7 @@ The pending-segment-count threshold trigger is not implemented.
 ### Segment Duration Contract
 
 A segment's length is a property of its file, never of the recording configuration.
-The firmware's 5-minute segment length (`VISIO_SEGMENT_DURATION_MS`) is only an upper bound: a stop press, a crash or a dead battery ends a segment early, and a segment that ends early is still a valid segment.
+The firmware's nominal segment length (`VISIO_SEGMENT_DURATION_MS`, one minute by default) is only an upper bound: a stop press, a crash or a dead battery ends a segment early, and a segment that ends early is still a valid segment.
 This contract is a prerequisite for start/stop recording, which will produce short segments routinely.
 
 What each side guarantees:
@@ -262,7 +292,7 @@ Where the measured length is used:
 
 | Consumer | Rule |
 |---|---|
-| Flag-marker window | A segment covers `[recorded_at, recorded_at + duration)`; a marker in the gap after a short segment matches nothing and is DLQ'd as `unmatched`. |
+| Flag-marker window | A segment covers `[recorded_at, recorded_at + duration)`. A marker in no window but at most 3 s after a segment's end (the restart gap `rpicam-vid` leaves between captures, which one-minute segments make five times as frequent) flags the segment that just ended. A marker further into a gap (after a stop press) matches nothing and is DLQ'd as `unmatched`. |
 | Clip extraction | The clip is `min(15 s, duration)` long, centred: offset `(duration - clip) / 2`, so it always starts inside the file. |
 | Vision frames | The 3 frames are spread over the real duration (`fps=3/<duration>`), so a short segment is not scored with no frames. |
 | `segments.duration_sec` | Whole seconds, rounded up (after rounding to the millisecond, so probe noise cannot add a second), so a window rebuilt from the row still covers every one-second marker the file covers. A re-run rewrites it on existing rows. |
@@ -334,14 +364,14 @@ Push notification sent to mobile app via Expo Push Notifications: "Your [Date] h
 
 ### Cost Estimate
 
-Per day of full 8-hour recording (~16GB raw footage, ~96 segments):
+Per day of full 8-hour recording (~14.4GB raw footage at 4 Mbps, ~480 one-minute segments):
 
 | Service | Est. Cost |
 |---|---|
 | Whisper transcription (~8 hrs audio) | ~$0.20 |
-| Claude Haiku vision (motion-gated, ~30% of segments) | ~$0.05-0.10 |
+| Claude Haiku vision (motion-gated, ~30% of segments) | ~$0.25-0.50 (five times the calls of 5-minute segments) |
 | Supabase Storage egress | ~$0.01 |
-| **Total** | **<$0.30/day** |
+| **Total** | **<$0.75/day** |
 
 ---
 

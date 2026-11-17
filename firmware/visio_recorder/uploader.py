@@ -10,3 +10,7 @@ def upload_segment(client: StorageClient, device_id: str, local_path: Path) -> s
     object_path = f"{device_id}/{local_path.name}"
     client.upload("segments", object_path, local_path)
     return object_path
+
+
+class ObjectTooLargeError(Exception):
+    """Storage refused the object because it is over its size limit (413)."""
