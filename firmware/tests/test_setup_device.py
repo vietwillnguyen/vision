@@ -1595,11 +1595,15 @@ def test_a_failed_dev_package_install_does_not_abort_the_run(tmp_path):
 
 
 def _run_final_steps(
-    tmp_path: Path, env_text: str, config_txt_failed: str = "false"
+    tmp_path: Path,
+    env_text: str,
+    config_txt_failed: str = "false",
+    reboot_needed: str = "false",
 ) -> subprocess.CompletedProcess:
-    """Run steps 9 and 10 for real, with only DATA_DIR redirected."""
+    """Run steps 9 and 10 for real, with DATA_DIR and REBOOT_MARKER redirected."""
     env_file = tmp_path / "visio-recorder.env"
     env_file.write_text(env_text)
+    (tmp_path / "run").mkdir()
     block = (
         'log "Step 9/10: data dir"'
         + _script_text().split('log "Step 9/10: data dir"')[1]
@@ -1608,11 +1612,13 @@ def _run_final_steps(
         [
             _extract_function("log"),
             _extract_function("env_file_value"),
+            _extract_function("record_pending_reboot"),
             _extract_assignment("PREFLIGHT_BIN"),
             'CONFIG_TXT="/boot/firmware/config.txt"',
             f'DATA_DIR="{tmp_path}/default-data-dir"',
+            f'REBOOT_MARKER="{tmp_path}/run/visio-setup-reboot-required"',
             'target_sha="deadbee"',
-            "reboot_needed=false",
+            f"reboot_needed={reboot_needed}",
             "data_dir_failed=false",
             f"config_txt_failed={config_txt_failed}",
             block,
@@ -1773,6 +1779,70 @@ def test_a_healthy_run_still_reports_success_in_both_channels(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "Setup complete." in result.stdout
     assert "Setup incomplete" not in result.stdout
+
+
+# --------------------------------------------------------------------------
+# A reboot owed by one run must survive into the next. On a fresh device run 1
+# changes config.txt, swap and I2C and then stops at the env-file checkpoint,
+# before the summary that prints REBOOT REQUIRED; run 2 then finds every edit
+# "already set" and, without this, reported "No reboot required" on a device
+# whose SPI bus did not exist yet (found by the end-to-end simulation under
+# docs/superpowers/evidence/provisioning-led-spi-audio/). The marker lives in
+# /run, a tmpfs, so only an actual reboot clears it.
+# --------------------------------------------------------------------------
+
+
+def test_a_reboot_this_run_needs_is_remembered_in_run(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, reboot_needed="true")
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT REQUIRED" in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def test_a_run_needing_no_reboot_leaves_no_marker(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, reboot_needed="false")
+
+    assert "No reboot required." in result.stdout
+    assert not (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def _run_load_pending_reboot(tmp_path: Path) -> subprocess.CompletedProcess:
+    lib = _shell_lib(tmp_path / "lib", "load_pending_reboot")
+    return _run(
+        lib,
+        f'REBOOT_MARKER="{tmp_path}/visio-setup-reboot-required"\n'
+        "reboot_needed=false\nload_pending_reboot\n"
+        'echo "REBOOT_NEEDED=${reboot_needed}"',
+    )
+
+
+def test_a_reboot_an_earlier_run_asked_for_is_still_owed(tmp_path):
+    (tmp_path / "visio-setup-reboot-required").touch()
+
+    result = _run_load_pending_reboot(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT_NEEDED=true" in result.stdout
+    assert "has not rebooted since" in result.stdout
+
+
+def test_no_marker_means_no_owed_reboot(tmp_path):
+    result = _run_load_pending_reboot(tmp_path)
+
+    assert "REBOOT_NEEDED=false" in result.stdout
+
+
+def test_the_owed_reboot_is_loaded_before_step_1_and_saved_at_both_exits():
+    text = _script_text()
+    template_branch = _step_block(7).split("chmod 600")[1].split("else")[0]
+
+    assert 'REBOOT_MARKER="/run/visio-setup-reboot-required"' in text
+    assert text.index("\nload_pending_reboot\n") < text.index('log "Step 1/10: ')
+    assert "record_pending_reboot" in template_branch, (
+        "the checkpoint exit has to keep run 1's reboot for run 2"
+    )
+    assert "REBOOT REQUIRED" in template_branch
 
 
 def test_the_env_template_checkpoint_still_exits_zero():

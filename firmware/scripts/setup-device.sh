@@ -24,6 +24,12 @@ SYSTEM_PYTHON="/usr/bin/python3"
 # edits it for the SPI status LED and the I2S microphone.
 CONFIG_TXT="/boot/firmware/config.txt"
 
+# Set while a reboot some run asked for is still owed. /run is a tmpfs, so only
+# an actual reboot clears it - which is the point: run 1 on a fresh device makes
+# its reboot-needing changes and then stops at the env-file checkpoint, and run
+# 2 finds them all already made, so without this it would report no reboot.
+REBOOT_MARKER="/run/visio-setup-reboot-required"
+
 # Where ALSA reads the system-wide config that defines the visio_mic capture
 # PCM (firmware/alsa/visio-mic.conf, installed in step 6).
 ALSA_CONF_DST="/etc/asound.conf"
@@ -91,6 +97,24 @@ resolve_requested_ref() {
   fi
   printf '%s\n' "${DEFAULT_GIT_REF}"
 }
+
+# Adopt a reboot an earlier run asked for and the device has not had yet.
+load_pending_reboot() {
+  if [[ -e "${REBOOT_MARKER}" ]]; then
+    reboot_needed=true
+    log "An earlier run made changes that need a reboot, and the device has not rebooted since - the reboot is still required"
+  fi
+}
+
+# Remember an owed reboot for the next run, at either way this script ends.
+# Best effort: a /run that cannot be written only costs that reminder.
+record_pending_reboot() {
+  if [[ "${reboot_needed}" == "true" ]]; then
+    touch "${REBOOT_MARKER}" 2>/dev/null || true
+  fi
+}
+
+load_pending_reboot
 
 log "Step 1/10: swap size"
 SWAP_CONF="/etc/dphys-swapfile"
@@ -599,6 +623,10 @@ VISIO_DEV_SHELL=1
 EOF
   chmod 600 "${ENV_FILE}"
   log "Wrote template ${ENV_FILE} - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script"
+  record_pending_reboot
+  if [[ "${reboot_needed}" == "true" ]]; then
+    log "REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or ${CONFIG_TXT}. The re-run reports it again."
+  fi
   exit 0
 else
   missing=()
@@ -961,6 +989,7 @@ if [[ "${config_txt_failed}" == "true" ]]; then
   log "INCOMPLETE: ${CONFIG_TXT} could not be edited (see the step 3 error above), so SPI may be off - the status LED cannot be driven and '${PREFLIGHT_BIN}' will report spidev0.0 as a blocking failure."
 fi
 log "Run '${PREFLIGHT_BIN}' from any directory to check the runtime environment."
+record_pending_reboot
 if [[ "${reboot_needed}" == "true" ]]; then
   log "REBOOT REQUIRED: swap, interface or ${CONFIG_TXT} changes need a reboot to take effect before the daemon will work."
 else
