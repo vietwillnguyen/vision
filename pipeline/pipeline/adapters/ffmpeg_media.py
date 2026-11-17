@@ -2,8 +2,8 @@
 
 Motion analysis avoids a numpy/PIL dependency by having ffmpeg emit small
 grayscale rawvideo frames (one byte per pixel) and computing mean absolute
-frame-to-frame differences in pure Python; at 1 fps and 160x90 a 5-minute
-segment is ~300 frames of 14.4 KB each.
+frame-to-frame differences in pure Python; at 1 fps and 160x90 a one-minute
+segment is 60 frames of 14.4 KB each.
 
 ``probe_duration_sec`` is the source of every segment length the pipeline
 uses; see ``pipeline.ingestion``.
@@ -150,9 +150,10 @@ class FfmpegMediaProbe:
         return duration
 
     def extract_audio(self, video_path: Path, workdir: Path) -> Path | None:
-        # The pendant records video only (capture.py runs rpicam-vid with no
-        # ALSA source), and ffmpeg refuses to write a WAV from a file with no
-        # audio stream, so check first and report silence as None.
+        # A pendant with no working microphone records video only (capture.py
+        # falls back to rpicam-vid with no ALSA source), and ffmpeg refuses to
+        # write a WAV from a file with no audio stream, so check first and
+        # report silence as None.
         streams = run_captured(build_audio_stream_probe_command(video_path))
         if not streams.stdout.strip():
             return None

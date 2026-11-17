@@ -154,6 +154,14 @@ class FakeVision:
         return f'{{"score": 8, "location": "{self.location}", "people": true}}'
 
 
+class AlternatingVision(FakeVision):
+    """Alternates indoor/outdoor so the diversity rule keeps every segment."""
+
+    def score_frames(self, frame_paths, prompt):
+        self.location = "outdoor" if self.calls % 2 else "indoor"
+        return super().score_frames(frame_paths, prompt)
+
+
 class FakePush:
     def __init__(self, error=None):
         self.sent: list[tuple[str, str, str]] = []
@@ -414,7 +422,7 @@ class TestRealSegmentDurations:
 
 class TestEdgeCases:
     def test_silent_segment_is_scored_without_transcription(self, tmp_path):
-        # The pendant records no audio (capture.py has no ALSA source), so the
+        # A pendant with no working microphone records video only, so the
         # media probe finds no audio stream; that is silence, not a failure.
         store = FakeStore(
             devices=[DEVICE], segment_keys={"dev-1": [segment_key("090000")]}
@@ -430,6 +438,78 @@ class TestEdgeCases:
         assert transcriber.calls == 0
         assert len(store.persisted_segments) == 1
         assert len(store.inserted_reels) == 1
+
+    def test_audio_counts_only_for_segments_that_carry_an_audio_stream(self, tmp_path):
+        # A day where the microphone dropped out after 09:00: the 09:00
+        # segment has speech, the 09:05 one is video only. Same video, so the
+        # only difference is the audio term at the default 0.3 weight.
+        class MicDroppedOut(FakeMedia):
+            def extract_audio(self, video_path, workdir):
+                if video_path.stem.endswith("090500"):
+                    return None
+                return super().extract_audio(video_path, workdir)
+
+        store = FakeStore(
+            devices=[DEVICE],
+            segment_keys={"dev-1": [segment_key("090000"), segment_key("090500")]},
+        )
+        transcriber = FakeTranscriber()
+        deps = make_deps(
+            store, tmp_path, media=MicDroppedOut(), transcriber=transcriber
+        )
+
+        run_nightly(deps, DAY)
+
+        assert transcriber.calls == 1
+        scores = {
+            row["s3_key"]: row["composite_score"] for row in store.persisted_segments
+        }
+        audio_activity = 0.6 * 0.8 + 0.4 * (1 - 0.1)
+        assert scores[segment_key("090000")] - scores[
+            segment_key("090500")
+        ] == pytest.approx(0.3 * audio_activity)
+
+    def test_reel_clips_all_carry_audio_when_any_selected_segment_has_it(
+        self, tmp_path
+    ):
+        class MicDroppedOut(FakeMedia):
+            def extract_audio(self, video_path, workdir):
+                if video_path.stem.endswith("090500"):
+                    return None
+                return super().extract_audio(video_path, workdir)
+
+        store = FakeStore(
+            devices=[DEVICE],
+            segment_keys={"dev-1": [segment_key("090000"), segment_key("090500")]},
+        )
+        runner = FakeRunner()
+        deps = make_deps(
+            store,
+            tmp_path,
+            media=MicDroppedOut(),
+            runner=runner,
+            vision=AlternatingVision(),
+        )
+
+        run_nightly(deps, DAY)
+
+        trims = {
+            Path(c[c.index("-i") + 1]).stem: c for c in runner.commands if "-ss" in c
+        }
+        assert trims["20260714_090000"][10:12] == ["-map", "0:a:0"]
+        assert "anullsrc=r=48000:cl=mono" in trims["20260714_090500"]
+
+    def test_a_video_only_day_assembles_video_only_clips(self, tmp_path):
+        store = FakeStore(
+            devices=[DEVICE], segment_keys={"dev-1": [segment_key("090000")]}
+        )
+        runner = FakeRunner()
+        deps = make_deps(store, tmp_path, media=FakeMedia(silent=True), runner=runner)
+
+        run_nightly(deps, DAY)
+
+        [trim] = [c for c in runner.commands if "-ss" in c]
+        assert "-map" not in trim and "anullsrc=r=48000:cl=mono" not in trim
 
     def test_no_segments_means_no_reel_and_no_notification(self, tmp_path):
         store = FakeStore(devices=[DEVICE])
@@ -630,6 +710,35 @@ class TestDlqPolicy:
         assert store.recorded_dlq == []
         assert store.escalated_dlq == []
         assert push.sent == []
+
+    def test_retried_restart_gap_marker_flags_the_persisted_segment_before_it(
+        self, tmp_path
+    ):
+        marker = "dev-1/FLAG_20260713_090100.marker"
+        store = FakeStore(
+            devices=[DEVICE],
+            pending_dlq={"dev-1": [DlqEntry(key=marker, kind="unmatched", attempts=1)]},
+            segment_rows={
+                "dev-1": [
+                    {
+                        "s3_key": "dev-1/20260713_090000.mp4",
+                        "recorded_at": "2026-07-13T09:00:00",
+                        "duration_sec": 60,
+                    },
+                    {
+                        "s3_key": "dev-1/20260713_090102.mp4",
+                        "recorded_at": "2026-07-13T09:01:02",
+                        "duration_sec": 60,
+                    },
+                ]
+            },
+        )
+        deps = make_deps(store, tmp_path)
+
+        run_nightly(deps, DAY)
+
+        assert store.flagged_segments == ["dev-1/20260713_090000.mp4"]
+        assert ("dev-1", marker) in store.resolved_dlq
 
     def test_escalation_is_not_marked_when_push_delivery_fails(self, tmp_path):
         marker = "dev-1/FLAG_20260713_090100.marker"

@@ -8,8 +8,9 @@ from typing import Protocol
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, mux_segment
-from visio_recorder.upload_queue import enqueue, list_pending, mark_uploaded
-from visio_recorder.uploader import StorageClient, upload_segment
+from visio_recorder.upload_limit import UploadLimit, rejected_dir, upload_queued
+from visio_recorder.upload_queue import enqueue, list_pending
+from visio_recorder.uploader import StorageClient
 
 _BYTES_PER_GB = 1024**3
 
@@ -46,6 +47,8 @@ class DeviceStatus:
     segments_pending: int
     segments_uploaded_today: int
     recording_active: bool
+    segments_rejected: int
+    audio_active: bool
     updated_at: str
 
 
@@ -76,6 +79,7 @@ def build_device_status(
     queue_dir: Path,
     segments_uploaded_today: int,
     recording_active: bool,
+    audio_active: bool,
 ) -> DeviceStatus:
     stats = disk_stats_reader.usage(data_dir)
     return DeviceStatus(
@@ -86,8 +90,17 @@ def build_device_status(
         segments_pending=len(list_pending(queue_dir)),
         segments_uploaded_today=segments_uploaded_today,
         recording_active=recording_active,
+        segments_rejected=_count_rejected(queue_dir),
+        audio_active=audio_active,
         updated_at=datetime.now(UTC).isoformat(),
     )
+
+
+def _count_rejected(queue_dir: Path) -> int:
+    directory = rejected_dir(queue_dir)
+    if not directory.exists():
+        return 0
+    return sum(1 for p in directory.iterdir() if p.is_file())
 
 
 def recover_orphaned_segments(
@@ -101,7 +114,8 @@ def recover_orphaned_segments(
     forever: never muxed, never uploaded, never deleted. Three leftovers are
     possible, from the stages of ``on_segment_complete``:
 
-    - a ``.h264`` alone (capture or mux never started): mux it and queue it;
+    - a ``.h264`` (or, when recording audio, a ``.ts``) alone (capture or mux
+      never started): mux it and queue it;
     - a ``.h264`` plus a ``.mp4`` (mux interrupted): the ``.mp4`` may be
       truncated, so rebuild it from the ``.h264`` (ffmpeg ``-y`` overwrites);
     - a ``.mp4`` alone (crash between unlinking the ``.h264`` and enqueueing):
@@ -115,7 +129,8 @@ def recover_orphaned_segments(
     Returns the queued paths, oldest first.
     """
     recovered: list[Path] = []
-    for h264_path in sorted(data_dir.glob("*.h264")):
+    captures = [*data_dir.glob("*.h264"), *data_dir.glob("*.ts")]
+    for h264_path in sorted(captures):
         mp4_path = h264_path.with_suffix(".mp4")
         try:
             mp4_path = mux_segment(command_runner, h264_path, framerate)
@@ -142,17 +157,25 @@ def recover_orphaned_segments(
 
 
 def flush_pending(
-    queue_dir: Path, storage_client: StorageClient, device_id: str
+    queue_dir: Path,
+    storage_client: StorageClient,
+    device_id: str,
+    upload_limit: UploadLimit,
 ) -> int:
+    """Upload everything queued; returns how many files reached storage.
+
+    A queued segment over the upload limit (for example one recorded by an
+    older firmware with five-minute segments) is split first, so the count is
+    of uploaded files, not of queue entries.
+    """
     uploaded = 0
     for path in list_pending(queue_dir):
         try:
-            upload_segment(storage_client, device_id, path)
+            outcome = upload_queued(path, storage_client, device_id, upload_limit)
         except Exception:
             _logger.exception("flush_pending failed to upload queued segment %s", path)
             continue
-        mark_uploaded(path)
-        uploaded += 1
+        uploaded += outcome.uploaded
     return uploaded
 
 
@@ -169,6 +192,7 @@ def on_segment_complete(
     framerate: int,
     disk_stats_reader: DiskStatsReader,
     data_dir: Path,
+    upload_limit: UploadLimit,
 ) -> SegmentResult:
     mp4_path = mux_segment(command_runner, h264_path, framerate)
     h264_path.unlink()
@@ -179,13 +203,11 @@ def on_segment_complete(
         led_driver, next_led_state(battery_status.is_low, is_uploading=True)
     )
 
-    upload_ok = True
-    try:
-        upload_segment(storage_client, device_id, queued_path)
-        mark_uploaded(queued_path)
-        segments_uploaded_today += 1
-    except Exception:
-        upload_ok = False
+    outcome = upload_queued(queued_path, storage_client, device_id, upload_limit)
+    segments_uploaded_today += outcome.uploaded
+    # A rejected (unsplittable, oversized) segment is lost footage, so it
+    # counts towards the Critical LED like a failed upload does.
+    upload_ok = outcome.failed == 0 and outcome.rejected == 0
 
     if upload_ok:
         # This segment's upload succeeding *is* the connectivity signal, so it
@@ -200,7 +222,9 @@ def on_segment_complete(
         # flush_pending logs and swallows per-file failures, so a backlog that
         # is still unreachable must not turn this segment's success into the
         # failure that drives the CRITICAL LED.
-        segments_uploaded_today += flush_pending(queue_dir, storage_client, device_id)
+        segments_uploaded_today += flush_pending(
+            queue_dir, storage_client, device_id, upload_limit
+        )
 
     apply_led_state(
         led_driver, next_led_state(battery_status.is_low, is_uploading=False)
@@ -214,6 +238,8 @@ def on_segment_complete(
         queue_dir=queue_dir,
         segments_uploaded_today=segments_uploaded_today,
         recording_active=True,
+        # Per segment: a .ts capture carries the microphone track.
+        audio_active=h264_path.suffix == ".ts",
     )
     status_client.upsert_device_status(asdict(status))
 

@@ -1,5 +1,7 @@
 module.exports = {
   preset: 'jest-expo',
+  // Appended after the preset's own setupFiles; see the file for why.
+  setupFiles: ['<rootDir>/jest.preload.js'],
   // node-fetch 3 and its three runtime deps ship ESM only; jest-expo runs
   // CommonJS, so they must go through babel like the react-native packages.
   // node-fetch is only the live Supabase test's real-fetch escape hatch (see

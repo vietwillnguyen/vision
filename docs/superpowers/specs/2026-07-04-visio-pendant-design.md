@@ -38,7 +38,8 @@ The device records passively all day, uploads footage to the cloud over home WiF
 ```
 [Pendant Hardware]
   RPi Zero 2W + Camera Module 3 Wide + PiJuice pHAT + 3000mAh LiPo
-  Records H.264 720p/30fps in 5-minute rolling segments to SD card.
+  Records H.264 720p/30fps at 4 Mbps, plus an I2S MEMS microphone track when one is fitted,
+  in rolling segments sized to fit the 50 MiB upload limit (1 minute by default).
   LED indicates recording / uploading state.
 
       | home WiFi, continuous background upload
@@ -74,12 +75,13 @@ The device records passively all day, uploads footage to the cloud over home WiF
 | Power management | PiJuice Zero pHAT | $18 |
 | Battery | 3000mAh LiPo (PiJuice compatible) | $12 |
 | Storage | 128GB microSD (Class 10) | $12 |
-| Status indicator | WS2812B single NeoPixel | $1 |
+| Status indicator | WS2812B single NeoPixel (data on GPIO 10, SPI0 MOSI) | $1 |
+| Microphone | INMP441 I2S MEMS microphone breakout | $3 |
 | User input | 6mm tactile SMD button | $0.50 |
 | Enclosure | 3D printed pendant shell + lanyard loop | ~$3 filament |
 | Misc | Ribbon cable, headers, JST connectors | $5 |
-| **Total (standard camera)** | | **~$91.50** |
-| **Total (vintage camera)** | | **~$74.50** |
+| **Total (standard camera)** | | **~$94.50** |
+| **Total (vintage camera)** | | **~$77.50** |
 
 > **Status note (2026-07-21):** the PiJuice Zero pHAT is currently blocked on availability. Bring-up is proceeding on a generic USB power bank instead; see [`2026-07-21-visio-device-provisioning-design.md`](2026-07-21-visio-device-provisioning-design.md) for the firmware-side handling and researched replacement candidates (PiSugar 2/3, generic I2C-fuel-gauge UPS HATs, or a hand-built TP4056/IP5306 + MAX17048 combo).
 
@@ -96,6 +98,26 @@ The device records passively all day, uploads footage to the cloud over home WiF
 - Camera Module 3 Wide: ~0.3W.
 - Total continuous draw: ~1.5W.
 - 3000mAh @ 3.7V = 11.1Wh → ~7.4 hours real-world.
+
+### GPIO Pin Map
+
+BCM numbering on the Pi Zero 2W's 40-pin header.
+
+| GPIO | Header pin | Function | Notes |
+|---|---|---|---|
+| 2, 3 | 3, 5 | I2C1 SDA/SCL | PiJuice (or a replacement fuel gauge) |
+| 7, 8 | 26, 24 | SPI0 CE1/CE0 | Claimed by `dtparam=spi=on`, nothing connected; `dtoverlay=spi0-1cs` or `spi0-0cs` frees them if ever needed |
+| 9, 11 | 21, 23 | SPI0 MISO/SCLK | Claimed by `dtparam=spi=on`, nothing connected |
+| **10** | **19** | **SPI0 MOSI - WS2812B data** | The status LED, driven over SPI (see "LED driver" below) |
+| 17 | 11 | Flag button | To ground, internal pull-up |
+| **18, 19, 20** | **12, 35, 38** | **I2S microphone** | PCM_CLK (BCLK), PCM_FS (LRCLK), PCM_DIN; INMP441 wiring under "Audio" below |
+| 21 | 40 | Reserved: PCM_DOUT | Claimed by the I2S pin group even though a microphone only needs DIN |
+
+Do not enable SPI1: its chip selects are GPIO 18 (CE0) and GPIO 17 (CE1), which would collide with the I2S clock and the flag button.
+
+**As-built deviation (LED SPI rewire, 2026-11):** the LED data line moved from GPIO 18 (PWM0, `rpi_ws281x`) to GPIO 10 (SPI0 MOSI).
+PWM0 on GPIO 18 collided with the I2S bit clock, and `rpi_ws281x` needed `/dev/mem` for its PWM/DMA engine, which was the only thing forcing the daemon to run as root.
+Pin facts are from Raspberry Pi's documentation: SPI0 MOSI is GPIO 10 on header pin 19 and SPI0 is enabled with `dtparam=spi=on` ([SPI](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#spi-overview)); GPIO 18/19/20/21 carry PCM clock, frame sync, data in and data out, and GPIO 18 and 17 double as SPI1 CE0/CE1 ([GPIO](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#gpio)); the Zero 2W device tree's `i2s_pins` group is `<18 19 20 21>` (`bcm2710-rpi-zero-2-w.dts`).
 
 ### Vintage Camera Note
 
@@ -137,7 +159,8 @@ A single Python systemd service manages the full device lifecycle.
 
 **Recording loop (as-built):**
 
-- `rpicam-vid` is invoked once per 5-minute segment (not one long-running `--segment` process), named `YYYYMMDD_HHMMSS.h264` - this keeps filename/timing control at capture start and lets each segment fail independently, at the cost of a ~1-2s gap between segments.
+- `rpicam-vid` is invoked once per segment (not one long-running `--segment` process), named `YYYYMMDD_HHMMSS.h264` - this keeps filename/timing control at capture start and lets each segment fail independently, at the cost of a ~1-2s gap between segments.
+  Resolution, framerate and H.264 bitrate are passed explicitly, and the segment length is derived from the bitrate; see Segment Size Contract below.
 - On segment completion the daemon wraps it into MP4 (`ffmpeg -c copy`), moves it to the upload queue, and hands it to a single background worker thread.
 - The worker thread is the sole owner of upload state (segment count, consecutive-failure count) and every upload-related LED transition; the main thread only records and enqueues.
 - The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop, and no connectivity watcher or polling.
@@ -147,6 +170,89 @@ A single Python systemd service manages the full device lifecycle.
   Both matter because a file is only unlinked *after* its upload returns: a power cut in that window leaves the object stored and the file still queued, and the segment drain and the flag-upload worker walk the same queue directory concurrently, so either can vacate a file the other is mid-way through.
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
 - On successful upload, local file is deleted to free SD space.
+
+### Audio Capture (as-built)
+
+**Decision (2026-11-16):** option A of the audio-capture design handoff, an INMP441 I2S MEMS microphone on the Pi's PCM pins, chosen over Bluetooth (shared 2.4 GHz radio with the continuous WiFi upload, HSP/HFP narrowband, reconnection failure modes) and USB (the Zero 2W's only data port).
+
+**Capture.** When a microphone is available, each segment is one `rpicam-vid` invocation that records audio and video together through rpicam-apps' libav backend, so the tracks share one clock and need no sync correction:
+
+```
+rpicam-vid -t <ms> --width 1280 --height 720 --framerate 30 --bitrate 4000000 \
+  --codec libav --libav-format mpegts --libav-audio --audio-source alsa \
+  --audio-device visio_mic --audio-channels 1 --audio-samplerate 48000 \
+  --audio-codec aac --audio-bitrate 64000 -n -o YYYYMMDD_HHMMSS.ts
+```
+
+The flags and their defaults were checked against rpicam-apps v1.15.0 (`core/video_options.hpp`, `encoder/libav_encoder.cpp`): `--audio-source` defaults to `pulse`, which Raspberry Pi OS Lite does not run, so `alsa` is explicit; the libav video codec defaults to `h264_v4l2m2m`, the same hardware encoder, and `--bitrate` still applies to it.
+MPEG-TS rather than MP4 because a transport stream is still readable when the capture is killed mid-segment (MP4 writes its index last), so orphan recovery remuxes a leftover `.ts` exactly like a leftover `.h264`.
+The daemon remuxes it to MP4 with `ffmpeg -i X.ts -map 0 -c copy X.mp4`.
+64 kbps mono AAC at 48 kHz is ample for speech; the segment-size budget reserves 128 kbps (`VISIO_AUDIO_BITRATE` up to that changes nothing).
+
+**Fallback.** At startup the daemon opens `VISIO_AUDIO_DEVICE` (default `visio_mic`) the way rpicam-vid will, with a 0.2 s `ffmpeg -f alsa` capture.
+If it does not open (microphone not wired, overlay or ALSA config missing), the daemon logs a warning and records video only, exactly as before; the pendant always records.
+If an audio capture fails mid-run, the loop records video only for the rest of the run.
+The failed capture's partial `.ts` is queued for upload like any other segment when it holds data, so its footage reaches the same day's reel; a zero-byte one is deleted.
+`device_status.audio_active` reports which way it went: on the loop's start and stop upserts, and per segment for the segment just uploaded.
+`VISIO_AUDIO=off` disables audio and the probe.
+
+**Device setup** (not yet in `firmware/scripts/setup-device.sh`, which is in draft PR #26; listed there as a follow-up):
+
+1. Wire the INMP441 (sources: Raspberry Pi's [GPIO pin functions table](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html) for the PCM pins; the `adau7002-simple` overlay in raspberrypi/linux `rpi-6.12.y`):
+
+   | INMP441 pin | Pi GPIO | Header pin | Function |
+   |---|---|---|---|
+   | SCK | GPIO 18 | 12 | PCM clock (BCLK) |
+   | WS | GPIO 19 | 35 | PCM frame sync (LRCLK) |
+   | SD | GPIO 20 | 38 | PCM data in (DIN) |
+   | L/R | GND | 39 | selects the left slot |
+   | VDD | 3V3 | 1 or 17 | power |
+   | GND | GND | 6, 9, 14, 20, 25, 30, 34 or 39 | ground |
+
+2. Add `dtoverlay=adau7002-simple` to `/boot/firmware/config.txt` and reboot.
+   The overlay makes the Pi the I2S clock producer and registers a capture-only card named `adau7002` (2 channels, S16_LE to S32_LE, 8-96 kHz); the INMP441 needs no driver because it only shifts samples out on the Pi's clocks.
+   `googlevoicehat-soundcard` also works with I2S MEMS microphones but drives GPIO 16 as an amplifier enable, so it is not used.
+3. Install `firmware/alsa/visio-mic.conf` as `/etc/asound.conf`.
+   It defines `visio_mic`: the card's native stereo S32_LE at 48 kHz, keeping only the left slot (the INMP441 leaves the right one empty), rather than averaging speech with silence.
+4. Check with `arecord -D visio_mic -f S16_LE -r 48000 -c 1 -d 5 test.wav`, then restart `visio-recorder` and confirm `audio_active` is true.
+
+**GPIO 18 was the status LED's pin before the SPI LED rewire (PR #85).** The LED now runs on SPI0 MOSI (GPIO 10, header pin 19), so GPIO 18 is free for BCLK.
+A pendant still wired with the LED on GPIO 18 must move that wire to header pin 19 before the microphone goes on.
+
+**Bench measurements needed before buying or soldering** (handoff section 4, question 2, plus what follows from it), on a Pi Zero 2W with the Camera Module 3 and an INMP441:
+
+- CPU and memory of `rpicam-vid --codec libav` with audio at 1280x720, 30 fps, 4 Mbps over at least 10 minutes: `top`/`pidstat -u -r -p <pid> 5` for per-core CPU and RSS, against the 512 MB budget, and whether any frames are dropped (`--framerate 30` holds; frame count in the MP4 equals 30 x duration).
+- The same with the uploader and the flag-button worker running, since the upload worker remuxes and sends the previous segment while the next records.
+- A/V sync over a full segment (clap test at start and end), and whether `--av-sync` needs a non-zero offset.
+- Real segment size with audio (expect about 30.5 MB per 60 s) and the encoder's overshoot on a high-motion walk.
+- Microphone level through `visio_mic`: the INMP441's 24-bit samples in a 32-bit slot are quiet; decide whether a `softvol` gain stage is needed for Whisper on speech from the wearer, muffled by clothing.
+- Startup latency added by the libav backend, which widens the restart gap between segments (the pipeline tolerates up to 3 s).
+
+### Segment Size Contract
+
+The hosted Supabase project rejects any object over 50 MiB (free plan, a global limit that cannot be raised), so every segment file must fit under it or it can never be uploaded.
+
+**As-built finding (oversized segments):** the firmware passed no `--width`, `--height` or `--bitrate`, so segment size was left to rpicam-apps and encoder defaults: 640x480 (`OptsInternal::ParseVideo` in rpicam-apps v1.15.0) at the bcm2835-codec V4L2 encoder's default 10 Mbps (`V4L2_CID_MPEG_VIDEO_BITRATE`, raspberrypi/linux `rpi-6.12.y`).
+A 5-minute segment at 10 Mbps is about 375 MB, seven times the limit; the "~170 MB" figure in earlier code comments was an estimate, not a measurement.
+Locally this went unnoticed because `supabase/config.toml`'s `[storage] file_size_limit = "50MiB"` is not what the CLI's storage container enforces (it also sets `UPLOAD_FILE_SIZE_LIMIT` to 50 GB): a 375 MB upload succeeded locally and would have failed in production, after which the file stayed queued and was retried on every boot forever.
+
+What each side guarantees:
+
+- **Storage** caps the `segments` and `reels` buckets at 50 MiB with a bucket-level `file_size_limit` (migration `20261116120000_cap_bucket_file_size.sql`), which storage-api enforces on every stack, so local runs fail exactly where production does.
+- **Firmware** passes every size-deciding setting to `rpicam-vid` explicitly: `--width`, `--height`, `--framerate`, `--bitrate` (`VISIO_VIDEO_WIDTH` 1280, `VISIO_VIDEO_HEIGHT` 720, `VISIO_FRAMERATE` 30, `VISIO_VIDEO_BITRATE` 4000000).
+  4 Mbps is ample for hardware H.264 at 720p30, about 0.15 bits per pixel per frame.
+- **Firmware** derives the default segment length from the bitrate: predicted size is `(video_bps + 128 kbps reserved for audio) / 8 x seconds x 1.02` (MP4 overhead), and the default is the longest whole number of 10 s steps whose prediction uses at most two thirds of `VISIO_MAX_UPLOAD_BYTES` (default 52428800), capped at 300 s.
+  At the defaults that is 60 s, about 31.6 MB predicted, leaving a 1.66x margin for the encoder overshooting its target on high-motion stretches (the Pi's encoder rate-controls towards the target, VBR by default, and is not strictly constant bitrate).
+  `VISIO_SEGMENT_DURATION_MS` still overrides it; a value predicted to overflow is honoured with a warning.
+  After a plan upgrade, raise `VISIO_MAX_UPLOAD_BYTES` and the bucket limits together.
+- **Firmware** never retries an oversized file forever (`firmware/visio_recorder/upload_limit.py`).
+  Before upload, a segment over `VISIO_MAX_UPLOAD_BYTES` is split losslessly with `ffmpeg -c copy -f segment` into parts targeting 80 % of the limit, each named after its own start time so the pipeline sees ordinary consecutive segments.
+  A part storage still answers 413 for (a server limit below the configured one) is split again under half its size.
+  A segment that cannot be split under the limit (ffprobe cannot read its duration, ffmpeg fails with at least twice its size free, fewer than two parts, a part still too large, or parts that would share a name) is moved to `rejected/` beside the queue, logged as an error, counted in `device_status.segments_rejected`, and never retried; it is kept on the SD card for manual recovery.
+  A split that fails for a passing reason (any `OSError` such as a full SD card, or ffmpeg failing while the queue's filesystem has less than twice the file's size free, measured after the failure with the partial parts still on disk) leaves the segment queued and counts it as failed, so the next boot's flush retries it.
+  Splitting is crash-safe: parts are built in a hidden scratch directory in the queue and the original is replaced last, so a power cut leaves it to be split again.
+
+To measure the real size on a Pi, record one default segment and list it: `rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o /tmp/size-test.h264 && ls -l /tmp/size-test.h264` (the MP4 mux adds well under 1 %).
 
 **Manual flag button:**
 
@@ -168,6 +274,25 @@ If the immediate upload fails, the marker stays in the upload queue and the same
 | Low battery (<20%) | Pulsing yellow |
 | Critical battery / error | Red flash |
 
+**LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour.
+`Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).
+Each WS2812B bit becomes one SPI byte at a 6.4 MHz request: `0xC0` (2 high, 6 low) for a 0 and `0xF0` (4 high, 4 low) for a 1, sent green, red, blue, most significant bit first, between two 240-byte all-zero resets (300 us latch).
+The BCM2835 SPI block runs at core clock / an even divider that the kernel rounds up, so both of the Zero 2W's core clocks (400 MHz / 64 and 250 MHz / 40) produce 6.25 MHz: 320 ns / 960 ns for a 0 and 640 ns / 640 ns for a 1 (312/938 ns and 625/625 ns at the requested 6.4 MHz).
+Every value is at least 40 ns inside the windows of the [Worldsemi WS2812B-V5/W datasheet](https://www.world-semi.com/) (T0H 220-380 ns, T0L, T1H and T1L each 580-1000 ns, latch above 280 us), the revision sold today, and also inside the SK6812 windows.
+Legacy pre-V5 WS2812B parts (T0H 400, T1H 800, T0L 850, T1L 450, each +/-150 ns) see T1H 10 ns short and T1L 40 ns long at 6.25 MHz.
+No byte-aligned encoding at any even BCM2835 divider fits both the legacy and the V5 windows, because their T1L windows only overlap at 580-600 ns, so the encoding targets V5 and a legacy part is a bench check.
+The 504-byte frame is well over `spi-bcm2835`'s 96-byte DMA threshold (`BCM2835_SPI_DMA_MIN_LENGTH`), so DMA keeps the TX FIFO fed and there are no idle clocks between bytes.
+Every byte ends low, so a gap, if one ever occurred, could only lengthen a low phase and never turn a 0 into a 1.
+With `0xC0` the V5 T0L headroom is only 40 ns, though, so a gap would put T0L outside the datasheet window while staying far below the 280 us reset.
+The full derivation lives in `firmware/visio_recorder/ws2812_spi.py`.
+
+The device needs three things for this driver:
+- `dtparam=spi=on` in `/boot/firmware/config.txt` (SPI0 is off by default).
+- `core_freq_fixed=1` in the same file. The Zero 2W's core clock otherwise scales between 250 and 400 MHz ([`core_freq_min`](https://www.raspberrypi.com/documentation/computers/config_txt.html#overclocking-options)), while `spi-bcm2835` caches the core clock rate once at probe time, so a scaled clock would shift the real SPI rate by up to 1.6x and turn 0 bits into 1s. Raspberry Pi documents this flag as the way to keep peripherals that use the core clock at a consistent speed; it holds the higher 400 MHz rate, so it does not throttle the H.264 encode the way the older `core_freq=250` workaround would.
+- The service user in the `spi` group, which owns `/dev/spidev*` through Raspberry Pi OS's udev rules.
+
+The provisioning script and systemd unit are being changed in PR #26, which has not merged; the changes it needs for this driver are listed in [`2026-07-21-visio-device-provisioning-design.md`](2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26).
+
 ### WiFi Onboarding
 
 On first boot, the device runs a short Python script that activates the Pi camera and decodes a QR code displayed by the mobile app.
@@ -188,8 +313,12 @@ After each segment is processed, whether the upload succeeds or fails, the daemo
 
 ```
 battery_pct, storage_used_gb, storage_free_gb,
-segments_pending, segments_uploaded_today, recording_active, updated_at
+segments_pending, segments_uploaded_today, recording_active,
+segments_rejected, audio_active, updated_at
 ```
+
+`audio_active` says whether the pendant is recording its microphone (see Audio Capture).
+`segments_rejected` is the number of segments the firmware gave up uploading because they are over the storage size limit and could not be split (see Segment Size Contract).
 
 The mobile app subscribes to this row via Supabase Realtime for live status without polling.
 
@@ -213,7 +342,7 @@ The pending-segment-count threshold trigger is not implemented.
 ### Segment Duration Contract
 
 A segment's length is a property of its file, never of the recording configuration.
-The firmware's 5-minute segment length (`VISIO_SEGMENT_DURATION_MS`) is only an upper bound: a stop press, a crash or a dead battery ends a segment early, and a segment that ends early is still a valid segment.
+The firmware's nominal segment length (`VISIO_SEGMENT_DURATION_MS`, one minute by default) is only an upper bound: a stop press, a crash or a dead battery ends a segment early, and a segment that ends early is still a valid segment.
 This contract is a prerequisite for start/stop recording, which will produce short segments routinely.
 
 What each side guarantees:
@@ -229,7 +358,7 @@ Where the measured length is used:
 
 | Consumer | Rule |
 |---|---|
-| Flag-marker window | A segment covers `[recorded_at, recorded_at + duration)`; a marker in the gap after a short segment matches nothing and is DLQ'd as `unmatched`. |
+| Flag-marker window | A segment covers `[recorded_at, recorded_at + duration)`. A marker in no window but at most 3 s after a segment's end (the restart gap `rpicam-vid` leaves between captures, which one-minute segments make five times as frequent) flags the segment that just ended. A marker further into a gap (after a stop press) matches nothing and is DLQ'd as `unmatched`. |
 | Clip extraction | The clip is `min(15 s, duration)` long, centred: offset `(duration - clip) / 2`, so it always starts inside the file. |
 | Vision frames | The 3 frames are spread over the real duration (`fps=3/<duration>`), so a short segment is not scored with no frames. |
 | `segments.duration_sec` | Whole seconds, rounded up (after rounding to the millisecond, so probe noise cannot add a second), so a window rebuilt from the row still covers every one-second marker the file covers. A re-run rewrites it on existing rows. |
@@ -237,8 +366,8 @@ Where the measured length is used:
 
 Flag markers have one-second resolution (`FLAG_YYYYMMDD_HHMMSS`), so the in-memory window uses the exact measured float and the stored integer rounds up rather than to nearest.
 
-**As-built finding (silent segments):** the firmware records video only, and `ffmpeg` refuses to extract audio from a file with no audio stream, so before this was handled every real device day failed in Stage 1.
-A segment with no audio stream now scores as silence without a Whisper call.
+**As-built finding (silent segments):** the firmware recorded video only, and `ffmpeg` refuses to extract audio from a file with no audio stream, so before this was handled every real device day failed in Stage 1.
+A segment with no audio stream scores as silence without a Whisper call; with a microphone fitted that is only a pendant whose microphone is missing or failed (see Audio Capture).
 
 ### Pipeline Stages
 
@@ -246,6 +375,10 @@ A segment with no audio stream now scores as silence without a Whisper call.
 
 Each segment is transcribed via OpenAI Whisper.
 Scores extracted: speech presence ratio, laughter/exclamation detection, silence ratio.
+
+**As-built:** the `audio_weight` default was 0 while the pendant recorded no audio, and is 0.3 again now that it does (migration `20261117120000_restore_audio_weight_default.sql`, `ScoreWeights` in `pipeline/models.py`).
+A segment without an audio stream scores audio activity 0, so the term only counts for segments with a real microphone track.
+A reel that mixes both (a day the microphone dropped out) gives every clip an audio track, silence for video-only clips, because the concat demuxer otherwise takes its stream layout from the first clip: a video-only first clip dropped the whole reel's audio, and a video-only clip later left a gap that players close up, playing later clips' sound over earlier pictures.
 
 **Stage 2 - Motion Analysis (FFmpeg, no API cost)**
 
@@ -301,14 +434,14 @@ Push notification sent to mobile app via Expo Push Notifications: "Your [Date] h
 
 ### Cost Estimate
 
-Per day of full 8-hour recording (~16GB raw footage, ~96 segments):
+Per day of full 8-hour recording (~14.4GB raw footage at 4 Mbps, ~480 one-minute segments):
 
 | Service | Est. Cost |
 |---|---|
 | Whisper transcription (~8 hrs audio) | ~$0.20 |
-| Claude Haiku vision (motion-gated, ~30% of segments) | ~$0.05-0.10 |
+| Claude Haiku vision (motion-gated, ~30% of segments) | ~$0.25-0.50 (five times the calls of 5-minute segments) |
 | Supabase Storage egress | ~$0.01 |
-| **Total** | **<$0.30/day** |
+| **Total** | **<$0.75/day** |
 
 ---
 

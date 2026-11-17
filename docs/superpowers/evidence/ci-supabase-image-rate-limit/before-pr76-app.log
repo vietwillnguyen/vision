@@ -1,0 +1,31 @@
+# PR #76 (fix/app-jest-container-flake), run 43929330704 attempt 1, job app 133517226149
+# https://github.com/vietwillnguyen/vision/actions/runs/43929330704/attempts/1
+## supabase start
+2026-11-16T18:30:26.8879319Z v1.30.2: Pulling from supabase/mailpit
+2026-11-16T18:30:26.9751823Z failed to display json stream: toomanyrequests: Rate exceeded
+2026-11-16T18:30:26.9752325Z Retrying after 4s: public.ecr.aws/supabase/mailpit:v1.30.2
+2026-11-16T18:30:31.7485361Z v1.30.2: Pulling from supabase/mailpit
+## Verify generated database types are current
+2026-11-16T18:31:53.9335293Z Run `npm audit` for details.
+2026-11-16T18:31:54.0463476Z ##[group]Run scripts/gen-db-types.sh
+2026-11-16T18:31:54.0464478Z scripts/gen-db-types.sh
+2026-11-16T18:31:54.0464915Z git diff --exit-code -- app/src/generated/database.ts integration/tests/fixtures/public_schema.json
+2026-11-16T18:31:54.0497173Z shell: /usr/bin/bash -e {0}
+2026-11-16T18:31:54.0497426Z env:
+2026-11-16T18:31:54.0497632Z   SUPABASE_CLI_VERSION: 2.109.0
+2026-11-16T18:31:54.0497904Z   SUPABASE_URL: http://127.0.0.1:54321
+2026-11-16T18:31:54.0499644Z   SUPABASE_ANON_KEY: ***
+2026-11-16T18:31:54.0501268Z   SUPABASE_SERVICE_ROLE_KEY: ***
+2026-11-16T18:31:54.0501596Z ##[endgroup]
+2026-11-16T18:31:54.9483239Z gen-db-types: reusing running local Supabase, applying pending migrations
+2026-11-16T18:31:55.3793596Z Connecting to local database...
+2026-11-16T18:31:55.4019586Z Local database is up to date.
+2026-11-16T18:31:56.3148050Z Connecting to db 5432
+2026-11-16T18:31:56.3331469Z Unable to find image 'public.ecr.aws/supabase/postgres-meta:v0.96.1' locally
+2026-11-16T18:31:56.9548170Z v0.96.1: Pulling from supabase/postgres-meta
+2026-11-16T18:31:57.0781509Z docker: toomanyrequests: Rate exceeded
+2026-11-16T18:31:57.0781791Z 
+2026-11-16T18:31:57.0781959Z Run 'docker run --help' for more information
+2026-11-16T18:31:57.4729872Z error running container: exit 125
+2026-11-16T18:31:57.4730351Z Try rerunning the command with --debug to troubleshoot the error.
+2026-11-16T18:31:57.4888936Z ##[error]Process completed with exit code 1.

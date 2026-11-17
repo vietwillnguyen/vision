@@ -2,15 +2,23 @@ import logging
 import os
 import queue
 import signal
+import subprocess
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from visio_recorder import preflight
 from visio_recorder.battery import BatteryReader, read_battery_status
-from visio_recorder.capture import record_segment
+from visio_recorder.capture import (
+    AudioSettings,
+    VideoSettings,
+    probe_audio_device,
+    record_segment,
+    segment_path,
+)
 from visio_recorder.device_identity import load_or_create_device_id, register_device
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
@@ -38,11 +46,17 @@ from visio_recorder.recording_loop import (
     on_segment_complete,
     recover_orphaned_segments,
 )
+from visio_recorder.segment_size import (
+    AUDIO_BITRATE_RESERVE_BPS,
+    DEFAULT_MAX_UPLOAD_BYTES,
+    SIZE_BUDGET_FRACTION,
+    default_segment_duration_ms,
+    predicted_segment_bytes,
+)
 from visio_recorder.supabase_clients import build_supabase_clients
+from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
 from visio_recorder.uploader import StorageClient
 
-_DEFAULT_SEGMENT_DURATION_MS = "300000"
-_DEFAULT_FRAMERATE = "30"
 _ONBOARDING_MAX_ATTEMPTS = 60
 _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
 _NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
@@ -73,24 +87,105 @@ class DaemonConfig:
     supabase_anon_key: str
     data_dir: Path
     segment_duration_ms: int
-    framerate: int
+    video: VideoSettings
+    max_upload_bytes: int
+    # None when VISIO_AUDIO=off; otherwise the microphone to try at startup.
+    audio: AudioSettings | None
     battery_source: str
 
 
 def load_config(env: Mapping[str, str]) -> DaemonConfig:
+    """Read the daemon's settings from its EnvironmentFile.
+
+    ``VISIO_SEGMENT_DURATION_MS`` defaults to the longest segment whose
+    predicted size at ``VISIO_VIDEO_BITRATE`` fits the size budget under
+    ``VISIO_MAX_UPLOAD_BYTES`` (one minute at the 4 Mbps default; see
+    ``visio_recorder.segment_size``). An explicit duration is honoured even
+    when it is predicted to overflow, with a warning: oversized files are
+    split before upload, so it costs splits, not footage.
+
+    Audio is on unless ``VISIO_AUDIO=off``; whether a microphone actually
+    exists is decided at startup by ``resolve_audio``, not here.
+    """
     for key in ("SUPABASE_URL", "SUPABASE_ANON_KEY"):
         if key not in env:
             raise ValueError(f"missing required environment variable: {key}")
+    defaults = VideoSettings()
+    video = VideoSettings(
+        width=int(env.get("VISIO_VIDEO_WIDTH", defaults.width)),
+        height=int(env.get("VISIO_VIDEO_HEIGHT", defaults.height)),
+        framerate=int(env.get("VISIO_FRAMERATE", defaults.framerate)),
+        bitrate_bps=int(env.get("VISIO_VIDEO_BITRATE", defaults.bitrate_bps)),
+    )
+    max_upload_bytes = int(env.get("VISIO_MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES))
+    audio_mode = env.get("VISIO_AUDIO", "on").strip().lower()
+    if audio_mode not in ("on", "off"):
+        raise ValueError(f"VISIO_AUDIO must be 'on' or 'off', got {audio_mode!r}")
+    audio_defaults = AudioSettings()
+    audio = (
+        None
+        if audio_mode == "off"
+        else AudioSettings(
+            device=env.get("VISIO_AUDIO_DEVICE", audio_defaults.device),
+            bitrate_bps=int(env.get("VISIO_AUDIO_BITRATE", audio_defaults.bitrate_bps)),
+            samplerate=audio_defaults.samplerate,
+        )
+    )
+    # Reserve at least the configured audio bitrate, so the default segment
+    # length is the same whether or not a microphone turns up at startup.
+    audio_bps = max(AUDIO_BITRATE_RESERVE_BPS, audio.bitrate_bps if audio else 0)
+    if "VISIO_SEGMENT_DURATION_MS" in env:
+        segment_duration_ms = int(env["VISIO_SEGMENT_DURATION_MS"])
+        predicted = predicted_segment_bytes(
+            segment_duration_ms, video.bitrate_bps, audio_bps
+        )
+        if predicted > max_upload_bytes * SIZE_BUDGET_FRACTION:
+            _logger.warning(
+                "VISIO_SEGMENT_DURATION_MS=%d at %d bps predicts %d-byte segments, "
+                "over the size budget for the %d-byte upload limit; oversized "
+                "segments will be split before upload",
+                segment_duration_ms,
+                video.bitrate_bps,
+                predicted,
+                max_upload_bytes,
+            )
+    else:
+        segment_duration_ms = default_segment_duration_ms(
+            max_upload_bytes, video.bitrate_bps, audio_bps
+        )
     return DaemonConfig(
         supabase_url=env["SUPABASE_URL"],
         supabase_anon_key=env["SUPABASE_ANON_KEY"],
         data_dir=preflight.resolve_data_dir(env),
-        segment_duration_ms=int(
-            env.get("VISIO_SEGMENT_DURATION_MS", _DEFAULT_SEGMENT_DURATION_MS)
-        ),
-        framerate=int(env.get("VISIO_FRAMERATE", _DEFAULT_FRAMERATE)),
+        segment_duration_ms=segment_duration_ms,
+        video=video,
+        max_upload_bytes=max_upload_bytes,
+        audio=audio,
         battery_source=env.get("VISIO_BATTERY_SOURCE", "pijuice"),
     )
+
+
+def resolve_audio(
+    runner: CommandRunner, audio: AudioSettings | None
+) -> AudioSettings | None:
+    """The microphone to record from, or None to record video only.
+
+    A pendant without a working microphone (not wired yet, overlay missing,
+    device renamed) must still record: the probe failing is a warning, not a
+    startup failure. ``device_status.audio_active`` tells the app which way
+    each segment went.
+    """
+    if audio is None:
+        return None
+    if probe_audio_device(runner, audio):
+        return audio
+    _logger.warning(
+        "ALSA capture device %r did not open; recording video only. Check the "
+        "I2S microphone wiring and the dtoverlay/asound.conf setup (README, "
+        "firmware section), or set VISIO_AUDIO=off to silence this warning",
+        audio.device,
+    )
+    return None
 
 
 @dataclass
@@ -125,7 +220,10 @@ class LoopDeps:
     queue_dir: Path
     device_id: str
     segment_duration_ms: int
-    framerate: int
+    video: VideoSettings
+    upload_limit: UploadLimit
+    # The microphone resolve_audio found at startup, or None for video only.
+    audio: AudioSettings | None = None
     # Seeded from the boot drain so both drain paths feed the same counter. The
     # app renders it as "Segments uploaded today" from the segments_uploaded_today
     # column, so the semantic is uploaded, not recorded: a backlog segment that
@@ -136,7 +234,10 @@ class LoopDeps:
 
 
 def _push_recording_status(
-    deps: LoopDeps, segments_uploaded_today: int, recording_active: bool
+    deps: LoopDeps,
+    segments_uploaded_today: int,
+    recording_active: bool,
+    audio_active: bool,
 ) -> None:
     """Tell the app whether the device is recording, without ever raising.
 
@@ -155,6 +256,7 @@ def _push_recording_status(
             queue_dir=deps.queue_dir,
             segments_uploaded_today=segments_uploaded_today,
             recording_active=recording_active,
+            audio_active=audio_active,
         )
         deps.status_client.upsert_device_status(asdict(status))
     except Exception:
@@ -167,6 +269,7 @@ def run_recording_loop(
     deps: LoopDeps,
     stop: threading.Event,
     clock: Callable[[], datetime] = datetime.now,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Record segments on the main thread; upload them on one background worker.
 
@@ -181,6 +284,16 @@ def run_recording_loop(
     and False once the loop has exited for any reason (stop, halt, or a
     capture failure escaping), after the drain so the final row carries the
     final counts. Per-segment upserts in between report True.
+
+    With ``deps.audio`` set, each segment records the microphone too. If such
+    a capture fails while the loop is not stopping (the microphone vanished,
+    or libav could not keep up), the loop records video only from then on
+    rather than failing every segment; the failed capture's partial ``.ts``
+    is queued for the worker like any capture when it holds data (a
+    zero-byte one is deleted), and per-segment upserts report
+    ``audio_active`` false from the next segment on. The next capture waits
+    for the following whole second if needed, so its second-resolution
+    filename never collides with the failed capture's.
     """
     work: queue.Queue[Path | None] = queue.Queue()
     # Written only by the worker; read by the main thread only after join().
@@ -204,9 +317,10 @@ def run_recording_loop(
                     battery_reader=deps.battery_reader,
                     device_id=deps.device_id,
                     segments_uploaded_today=segments_uploaded_today,
-                    framerate=deps.framerate,
+                    framerate=deps.video.framerate,
                     disk_stats_reader=deps.disk_stats_reader,
                     data_dir=deps.data_dir,
+                    upload_limit=deps.upload_limit,
                 )
             except Exception:
                 _logger.exception(
@@ -226,14 +340,17 @@ def run_recording_loop(
                 if consecutive_failures >= UPLOAD_FAILURES_TO_CRITICAL:
                     apply_led_state(deps.led_driver, LedState.CRITICAL)
 
+    audio = deps.audio
     _push_recording_status(
         deps,
         segments_uploaded_today=deps.segments_uploaded_at_start,
         recording_active=True,
+        audio_active=audio is not None,
     )
     worker_thread = threading.Thread(target=worker)
     worker_thread.start()
     halted = False
+    not_before: datetime | None = None
     try:
         while True:
             battery_status = read_battery_status(deps.battery_reader)
@@ -242,19 +359,47 @@ def run_recording_loop(
                 break
             if stop.is_set():
                 break
-            h264_path = record_segment(
-                deps.command_runner,
-                deps.data_dir,
-                clock(),
-                deps.segment_duration_ms,
-                deps.framerate,
-            )
+            started_at = clock()
+            if not_before is not None:
+                wait = (not_before - started_at).total_seconds()
+                if 0 < wait <= 1:
+                    sleep(wait)
+                    started_at = not_before
+                not_before = None
+            try:
+                h264_path = record_segment(
+                    deps.command_runner,
+                    deps.data_dir,
+                    started_at,
+                    deps.segment_duration_ms,
+                    deps.video,
+                    audio,
+                )
+            except subprocess.CalledProcessError:
+                if audio is None or stop.is_set():
+                    raise
+                _logger.exception(
+                    "audio+video capture failed; recording video only for the "
+                    "rest of this run"
+                )
+                partial = segment_path(deps.data_dir, started_at, audio)
+                audio = None
+                not_before = started_at.replace(microsecond=0) + timedelta(seconds=1)
+                if partial.exists():
+                    if partial.stat().st_size > 0:
+                        work.put(partial)
+                    else:
+                        partial.unlink()
+                continue
             work.put(h264_path)
     finally:
         work.put(None)
         worker_thread.join()
         _push_recording_status(
-            deps, segments_uploaded_today=uploaded_today[0], recording_active=False
+            deps,
+            segments_uploaded_today=uploaded_today[0],
+            recording_active=False,
+            audio_active=audio is not None,
         )
     if halted:
         apply_led_state(deps.led_driver, LedState.CRITICAL)
@@ -322,15 +467,32 @@ def main() -> int:
         registered_marker_path.touch()
 
     command_runner = SubprocessCommandRunner()
+    audio = resolve_audio(command_runner, config.audio)
+    upload_limit = UploadLimit(
+        max_bytes=config.max_upload_bytes,
+        runner=command_runner,
+        probe=FfprobeDurationProbe(),
+    )
+    _logger.info(
+        "recording %dx%d@%d fps at %d bps in %d ms segments (upload limit %d bytes)",
+        config.video.width,
+        config.video.height,
+        config.video.framerate,
+        config.video.bitrate_bps,
+        config.segment_duration_ms,
+        config.max_upload_bytes,
+    )
     # Boot drain: flush what the queue already holds, recover captures an
     # unclean stop left in data_dir, then flush again so the recovered ones go
     # up before recording starts. Both drains seed the same uploaded counter.
-    segments_uploaded_at_start = flush_pending(queue_dir, clients.storage, device_id)
+    segments_uploaded_at_start = flush_pending(
+        queue_dir, clients.storage, device_id, upload_limit
+    )
     if recover_orphaned_segments(
-        config.data_dir, queue_dir, command_runner, config.framerate
+        config.data_dir, queue_dir, command_runner, config.video.framerate
     ):
         segments_uploaded_at_start += flush_pending(
-            queue_dir, clients.storage, device_id
+            queue_dir, clients.storage, device_id, upload_limit
         )
 
     stop = threading.Event()
@@ -363,7 +525,9 @@ def main() -> int:
         queue_dir=queue_dir,
         device_id=device_id,
         segment_duration_ms=config.segment_duration_ms,
-        framerate=config.framerate,
+        video=config.video,
+        upload_limit=upload_limit,
+        audio=audio,
         segments_uploaded_at_start=segments_uploaded_at_start,
     )
     try:

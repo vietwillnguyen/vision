@@ -47,7 +47,10 @@ backs `useDeviceStatus`, and `device_status` is in the `supabase_realtime`
 publication via migration. Do not disable those.
 
 The CLI version is pinned in `tests.yml` (`SUPABASE_CLI_VERSION`). Dependabot
-bumps action refs but not action inputs, so that one is a manual bump.
+bumps action refs but not action inputs, so that one is a manual bump. Bump
+`.github/supabase-images.txt` with it: CI loads those images from a cache (or
+seeds them from `ghcr.io/supabase`), then blocks `public.ecr.aws`, whose
+anonymous rate limits shared runners kept hitting, so a stale list fails CI.
 
 ## Sharp edges
 

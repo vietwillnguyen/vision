@@ -170,6 +170,11 @@
                 "has_default": true,
                 "is_nullable": false
             },
+            "audio_active": {
+                "data_type": "boolean",
+                "has_default": true,
+                "is_nullable": false
+            },
             "storage_free_gb": {
                 "data_type": "numeric",
                 "has_default": true,
@@ -186,6 +191,11 @@
                 "is_nullable": false
             },
             "segments_pending": {
+                "data_type": "integer",
+                "has_default": true,
+                "is_nullable": false
+            },
+            "segments_rejected": {
                 "data_type": "integer",
                 "has_default": true,
                 "is_nullable": false

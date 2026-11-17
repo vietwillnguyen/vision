@@ -17,30 +17,36 @@ export type Database = {
     Tables: {
       device_status: {
         Row: {
+          audio_active: boolean
           battery_pct: number
           device_id: string
           recording_active: boolean
           segments_pending: number
+          segments_rejected: number
           segments_uploaded_today: number
           storage_free_gb: number
           storage_used_gb: number
           updated_at: string
         }
         Insert: {
+          audio_active?: boolean
           battery_pct?: number
           device_id: string
           recording_active?: boolean
           segments_pending?: number
+          segments_rejected?: number
           segments_uploaded_today?: number
           storage_free_gb?: number
           storage_used_gb?: number
           updated_at?: string
         }
         Update: {
+          audio_active?: boolean
           battery_pct?: number
           device_id?: string
           recording_active?: boolean
           segments_pending?: number
+          segments_rejected?: number
           segments_uploaded_today?: number
           storage_free_gb?: number
           storage_used_gb?: number

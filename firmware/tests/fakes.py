@@ -1,6 +1,7 @@
 """Shared test fakes for the visio_recorder firmware suite."""
 
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,6 +10,7 @@ from visio_recorder.battery import BatteryReader
 from visio_recorder.led import LedDriver, LedPattern
 from visio_recorder.muxer import CommandRunner
 from visio_recorder.recording_loop import DiskStats
+from visio_recorder.upload_limit import UploadLimit
 from visio_recorder.uploader import StorageClient
 
 
@@ -48,6 +50,70 @@ class FakeLedDriver(LedDriver):
     def set(self, color, pattern):
         with self._lock:
             self.calls.append((color, pattern))
+
+
+class SimulatedSpiDevice:
+    """Stands in for py-spidev's ``SpiDev`` bound to ``/dev/spidev0.0``.
+
+    Enforces what the real device enforces: ``mode`` and ``max_speed_hz`` can
+    only be set on an open device, and one write may not exceed the kernel's
+    default ``spidev.bufsiz`` of 4096 bytes. Records every write together with
+    the clock it was sent at, and detects two threads inside ``writebytes2``
+    at once (on hardware that would interleave two frames on one wire).
+    """
+
+    BUFSIZ = 4096
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._in_write = False
+        self.opened: tuple[int, int] | None = None
+        self._mode = 0
+        self._max_speed_hz = 0
+        self.writes: list[bytes] = []
+        self.overlapping_writes = 0
+
+    def open(self, bus: int, device: int) -> None:
+        self.opened = (bus, device)
+
+    def _require_open(self) -> None:
+        if self.opened is None:
+            raise OSError(9, "Bad file descriptor")
+
+    @property
+    def mode(self) -> int:
+        return self._mode
+
+    @mode.setter
+    def mode(self, value: int) -> None:
+        self._require_open()
+        self._mode = value
+
+    @property
+    def max_speed_hz(self) -> int:
+        return self._max_speed_hz
+
+    @max_speed_hz.setter
+    def max_speed_hz(self, value: int) -> None:
+        self._require_open()
+        self._max_speed_hz = value
+
+    def writebytes2(self, values: bytes) -> None:
+        self._require_open()
+        if len(values) > self.BUFSIZ:
+            raise OSError(90, "Message too long")
+        with self._lock:
+            if self._in_write:
+                self.overlapping_writes += 1
+            self._in_write = True
+        try:
+            # Widen the window a racing writer would have to hit.
+            time.sleep(0.0005)
+            with self._lock:
+                self.writes.append(bytes(values))
+        finally:
+            with self._lock:
+                self._in_write = False
 
 
 class FakeCommandRunner(CommandRunner):
@@ -217,3 +283,13 @@ class FakeClock:
         value = self._next
         self._next = self._next + self._step
         return value
+
+
+class UnusedProbe:
+    def duration_sec(self, path: Path) -> float:
+        raise AssertionError(f"nothing should be probed: {path}")
+
+
+def unlimited_upload_limit() -> UploadLimit:
+    """An upload limit no test segment reaches, so nothing is ever split."""
+    return UploadLimit(max_bytes=2**62, runner=FakeCommandRunner(), probe=UnusedProbe())

@@ -1,3 +1,4 @@
+import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -14,16 +15,25 @@ from tests.fakes import (
     FakeStorageClient,
     ScriptedStatusClient,
     ScriptedStorageClient,
+    SimulatedSpiDevice,
     TriggerableBatteryReader,
+    unlimited_upload_limit,
 )
+from tests.ws2812_waveform import decode_frame
+from visio_recorder.capture import AudioSettings, VideoSettings
 from visio_recorder.daemon import (
     LoopDeps,
     load_config,
+    resolve_audio,
     resolve_battery_reader_factory,
     run_recording_loop,
     run_startup_sequence,
 )
-from visio_recorder.drivers import PiJuiceBatteryReader, UnmeteredPowerReader
+from visio_recorder.drivers import (
+    PiJuiceBatteryReader,
+    UnmeteredPowerReader,
+    Ws2812LedDriver,
+)
 from visio_recorder.led import LedPattern
 from visio_recorder.recording_loop import DiskStats
 
@@ -38,8 +48,12 @@ def test_load_config_reads_all_values_from_env():
         "SUPABASE_URL": "https://example.supabase.co",
         "SUPABASE_ANON_KEY": "anon-key-123",
         "VISIO_DATA_DIR": "/data/visio",
-        "VISIO_SEGMENT_DURATION_MS": "60000",
+        "VISIO_SEGMENT_DURATION_MS": "30000",
+        "VISIO_VIDEO_WIDTH": "1920",
+        "VISIO_VIDEO_HEIGHT": "1080",
         "VISIO_FRAMERATE": "24",
+        "VISIO_VIDEO_BITRATE": "6000000",
+        "VISIO_MAX_UPLOAD_BYTES": "524288000",
     }
 
     config = load_config(env)
@@ -47,8 +61,11 @@ def test_load_config_reads_all_values_from_env():
     assert config.supabase_url == "https://example.supabase.co"
     assert config.supabase_anon_key == "anon-key-123"
     assert config.data_dir == Path("/data/visio")
-    assert config.segment_duration_ms == 60000
-    assert config.framerate == 24
+    assert config.segment_duration_ms == 30000
+    assert config.video == VideoSettings(
+        width=1920, height=1080, framerate=24, bitrate_bps=6_000_000
+    )
+    assert config.max_upload_bytes == 524_288_000
 
 
 def test_load_config_applies_defaults_when_optional_keys_absent():
@@ -60,8 +77,45 @@ def test_load_config_applies_defaults_when_optional_keys_absent():
     config = load_config(env)
 
     assert config.data_dir == Path("/var/lib/visio-recorder")
-    assert config.segment_duration_ms == 300000
-    assert config.framerate == 30
+    # 720p30 at 4 Mbps in one-minute segments under the hosted 50 MiB limit.
+    assert config.video == VideoSettings(
+        width=1280, height=720, framerate=30, bitrate_bps=4_000_000
+    )
+    assert config.max_upload_bytes == 52_428_800
+    assert config.segment_duration_ms == 60_000
+
+
+def test_load_config_derives_the_segment_length_from_the_configured_bitrate():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_VIDEO_BITRATE": "2000000",
+    }
+
+    assert load_config(env).segment_duration_ms == 120_000
+
+
+def test_load_config_derives_a_longer_segment_under_a_raised_upload_limit():
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_MAX_UPLOAD_BYTES": str(100 * 1024 * 1024),
+    }
+
+    assert load_config(env).segment_duration_ms == 130_000
+
+
+def test_load_config_warns_about_an_explicit_duration_predicted_to_overflow(caplog):
+    env = {
+        "SUPABASE_URL": "https://example.supabase.co",
+        "SUPABASE_ANON_KEY": "anon-key-123",
+        "VISIO_SEGMENT_DURATION_MS": "300000",
+    }
+
+    config = load_config(env)
+
+    assert config.segment_duration_ms == 300_000
+    assert "will be split before upload" in caplog.text
 
 
 def test_load_config_missing_supabase_url_raises_value_error_naming_it():
@@ -123,6 +177,7 @@ def _make_deps(
     storage_client=None,
     status_client=None,
     segments_uploaded_at_start=0,
+    audio=None,
 ) -> LoopDeps:
     return LoopDeps(
         command_runner=command_runner,
@@ -135,7 +190,9 @@ def _make_deps(
         queue_dir=tmp_path / "queue",
         device_id="device-abc",
         segment_duration_ms=1000,
-        framerate=30,
+        video=VideoSettings(),
+        upload_limit=unlimited_upload_limit(),
+        audio=audio,
         segments_uploaded_at_start=segments_uploaded_at_start,
     )
 
@@ -602,3 +659,337 @@ def test_status_push_failures_at_start_and_exit_never_stop_the_daemon(tmp_path):
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
     assert storage.uploaded == ["device-abc/20260704_120000.mp4"]
+
+
+_ENV = {"SUPABASE_URL": "https://example.supabase.co", "SUPABASE_ANON_KEY": "anon"}
+
+
+def test_load_config_turns_audio_on_by_default_with_the_visio_mic_device():
+    assert load_config(_ENV).audio == AudioSettings(
+        device="visio_mic", bitrate_bps=64_000, samplerate=48_000
+    )
+
+
+def test_load_config_reads_the_audio_device_and_bitrate():
+    config = load_config(
+        {**_ENV, "VISIO_AUDIO_DEVICE": "plughw:CARD=adau7002,DEV=0",
+         "VISIO_AUDIO_BITRATE": "96000"}
+    )  # fmt: skip
+    assert config.audio == AudioSettings(
+        device="plughw:CARD=adau7002,DEV=0", bitrate_bps=96_000
+    )
+
+
+def test_load_config_can_turn_audio_off():
+    assert load_config({**_ENV, "VISIO_AUDIO": "off"}).audio is None
+
+
+def test_load_config_rejects_an_unknown_audio_mode():
+    with pytest.raises(ValueError, match="VISIO_AUDIO"):
+        load_config({**_ENV, "VISIO_AUDIO": "maybe"})
+
+
+def test_default_segment_length_does_not_depend_on_whether_audio_is_on():
+    on = load_config(_ENV).segment_duration_ms
+    off = load_config({**_ENV, "VISIO_AUDIO": "off"}).segment_duration_ms
+    assert on == off == 60_000
+
+
+def test_a_high_audio_bitrate_shortens_the_default_segment():
+    config = load_config({**_ENV, "VISIO_AUDIO_BITRATE": "2000000"})
+    assert config.segment_duration_ms == 40_000
+
+
+class _ProbeRunner:
+    def __init__(self, device_opens: bool) -> None:
+        self.device_opens = device_opens
+        self.calls: list[list[str]] = []
+
+    def run(self, args: list[str]) -> None:
+        self.calls.append(args)
+        if not self.device_opens:
+            raise subprocess.CalledProcessError(251, args)
+
+
+def test_resolve_audio_keeps_a_microphone_that_opens():
+    audio = AudioSettings()
+    assert resolve_audio(_ProbeRunner(device_opens=True), audio) == audio
+
+
+def test_resolve_audio_falls_back_to_video_only_with_a_warning(caplog):
+    assert resolve_audio(_ProbeRunner(device_opens=False), AudioSettings()) is None
+    assert "recording video only" in caplog.text
+
+
+def test_resolve_audio_does_not_probe_when_audio_is_off():
+    runner = _ProbeRunner(device_opens=True)
+    assert resolve_audio(runner, None) is None
+    assert runner.calls == []
+
+
+def test_loop_records_audio_segments_and_reports_audio_active(tmp_path):
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    status = FakeStatusClient()
+    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 2 else None)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        status_client=status,
+        audio=AudioSettings(),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 16, 9, 0, 0)))
+
+    captures = [c for c in runner.calls if c[0] == "rpicam-vid"]
+    assert all(c[c.index("-o") + 1].endswith(".ts") for c in captures)
+    assert storage.uploaded == [
+        "device-abc/20261116_090000.mp4",
+        "device-abc/20261116_090001.mp4",
+    ]
+    assert [u["audio_active"] for u in status.upserts] == [True, True, True, True]
+
+
+def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
+    tmp_path,
+):
+    # The microphone disappears mid-run: rpicam-vid's libav capture exits
+    # non-zero. Recording must carry on video only instead of stopping.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    status = FakeStatusClient()
+
+    class MicGoneOnSecondCapture(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            mic_gone = "--libav-audio" in args and self.record_count == 1
+            if args[0] == "rpicam-vid" and mic_gone:
+                with self._lock:
+                    self.calls.append(args)
+                raise subprocess.CalledProcessError(1, args)
+            super().run(args)
+
+    runner = MicGoneOnSecondCapture(on_record=lambda n: stop.set() if n >= 3 else None)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        status_client=status,
+        audio=AudioSettings(),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 16, 9, 0, 0)))
+
+    outputs = [
+        Path(c[c.index("-o") + 1]).name for c in runner.calls if c[0] == "rpicam-vid"
+    ]
+    assert outputs == [
+        "20261116_090000.ts",
+        "20261116_090001.ts",
+        "20261116_090002.h264",
+        "20261116_090003.h264",
+    ]
+    assert storage.uploaded == [
+        "device-abc/20261116_090000.mp4",
+        "device-abc/20261116_090002.mp4",
+        "device-abc/20261116_090003.mp4",
+    ]
+    per_segment = [u["audio_active"] for u in status.upserts[1:-1]]
+    assert per_segment == [True, False, False]
+    assert status.upserts[-1]["audio_active"] is False
+
+
+@pytest.mark.parametrize(
+    ("partial_bytes", "uploaded_partial"), [(b"ts-data", True), (b"", False)]
+)
+def test_a_failed_audio_capture_uploads_its_partial_ts_the_same_run(
+    tmp_path, partial_bytes, uploaded_partial
+):
+    # The capture dies mid-segment after writing part of its MPEG-TS. That
+    # footage must upload now, not wait for the next boot's orphan recovery.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+
+    class DiesMidSegment(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+                Path(args[args.index("-o") + 1]).write_bytes(partial_bytes)
+                raise subprocess.CalledProcessError(1, args)
+            super().run(args)
+
+    runner = DiesMidSegment(on_record=lambda n: stop.set() if n >= 1 else None)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        audio=AudioSettings(),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 16, 9, 0, 0)))
+
+    partial_upload = ["device-abc/20261116_090000.mp4"] if uploaded_partial else []
+    assert storage.uploaded == [*partial_upload, "device-abc/20261116_090001.mp4"]
+    assert list(deps.data_dir.iterdir()) == []
+
+
+def test_the_capture_after_a_failed_audio_one_waits_for_a_new_second(tmp_path):
+    # The audio capture writes some TS and dies within the second it started.
+    # The video-only retry must not reuse that second's filename, or both
+    # segments would mux and upload to the same object key.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    slept: list[float] = []
+
+    class DiesAtOnce(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+                Path(args[args.index("-o") + 1]).write_bytes(b"ts-data")
+                raise subprocess.CalledProcessError(1, args)
+            super().run(args)
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=DiesAtOnce(on_record=lambda n: stop.set()),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        audio=AudioSettings(),
+    )
+
+    run_recording_loop(
+        deps,
+        stop,
+        clock=lambda: datetime(2026, 11, 16, 9, 0, 0, 250000),
+        sleep=slept.append,
+    )
+
+    assert slept == [0.75]
+    assert storage.uploaded == [
+        "device-abc/20261116_090000.mp4",
+        "device-abc/20261116_090001.mp4",
+    ]
+
+
+def test_a_clock_stepping_back_after_the_fallback_never_stalls_recording(tmp_path):
+    # Only the capture right after the failure may wait, and never for long:
+    # a later wall-clock step back (DST fall-back, an NTP step) must not make
+    # the loop sleep until the failure time comes round again.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    slept: list[float] = []
+    readings = iter(
+        [
+            datetime(2026, 11, 16, 14, 0, 5),
+            datetime(2026, 11, 16, 14, 0, 6),
+            datetime(2026, 11, 16, 1, 0, 0),
+        ]
+    )
+
+    class DiesOnce(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+                Path(args[args.index("-o") + 1]).write_bytes(b"ts-data")
+                raise subprocess.CalledProcessError(1, args)
+            super().run(args)
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=DiesOnce(on_record=lambda n: stop.set() if n >= 2 else None),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        audio=AudioSettings(),
+    )
+
+    run_recording_loop(deps, stop, clock=lambda: next(readings), sleep=slept.append)
+
+    assert slept == []
+    assert storage.uploaded == [
+        "device-abc/20261116_140005.mp4",
+        "device-abc/20261116_140006.mp4",
+        "device-abc/20261116_010000.mp4",
+    ]
+
+
+def test_a_failing_video_only_capture_still_escapes_the_loop(tmp_path):
+    class Killed(FakeCommandRunner):
+        def run(self, args: list[str]) -> None:
+            if args[0] == "rpicam-vid":
+                raise subprocess.CalledProcessError(-15, args)
+            super().run(args)
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=Killed(),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run_recording_loop(
+            deps, threading.Event(), clock=FakeClock(datetime(2026, 11, 16, 9))
+        )
+
+
+def test_startup_and_loop_drive_the_spi_led_through_every_colour(tmp_path):
+    # The real led.py and the real SPI driver, with only /dev/spidev0.0
+    # simulated: the colours a WS2812B on GPIO 10 would latch, decoded from the
+    # wire bytes at the clock the SPI block really produces.
+    spi = SimulatedSpiDevice()
+    led = Ws2812LedDriver(spi=spi)
+    # 15% once triggered: low battery, but above the halt threshold.
+    battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=15)
+
+    class OutageThenLowBattery(ScriptedStorageClient):
+        # Segments 2-4 fail; the battery reads low once segment 5 has gone up.
+        # The worker reads the battery before each upload, so segment 6 is the
+        # first to see it - deterministic, unlike a main-loop trigger. Keyed on
+        # the file rather than the attempt count, because segment 5's success
+        # also drains (and here re-fails) the 2-4 backlog.
+        def upload(self, bucket, object_path, local_path):
+            try:
+                super().upload(bucket, object_path, local_path)
+            finally:
+                if local_path.name == "20260704_120004.mp4":
+                    battery.trigger_halt()
+
+    storage = OutageThenLowBattery(
+        failing_names={
+            "20260704_120001.mp4",
+            "20260704_120002.mp4",
+            "20260704_120003.mp4",
+        }
+    )
+    stop = threading.Event()
+    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 6 else None)
+
+    assert run_startup_sequence(battery, led).proceed
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery_reader=battery,
+        led_driver=led,
+        storage_client=storage,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    green, blue, yellow, red = (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 0)
+    colours = [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+    assert spi.overlapping_writes == 0
+    upload = [blue, green]
+    assert colours == (
+        [green]  # startup, healthy battery
+        + upload  # segment 1 uploads
+        + upload  # 2 fails
+        + upload  # 3 fails
+        + upload
+        + [red]  # 4 fails: third in a row
+        + upload  # 5 uploads, counter resets; battery now reads low
+        + [yellow, yellow]  # 6 uploads on a low battery
+    )

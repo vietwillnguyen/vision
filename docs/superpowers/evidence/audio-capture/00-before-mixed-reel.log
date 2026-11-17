@@ -1,0 +1,8 @@
+clip order: a b c
+  streams (type,duration):
+    video,45.033333
+    audio,45.040000
+  audio packet gap from 15.018667 s to 30.021333 s
+clip order: b a c
+  streams (type,duration):
+    video,45.000000

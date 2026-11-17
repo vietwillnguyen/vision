@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Stand-in for rpicam-vid on a machine with no camera.
+
+Accepts the rpicam-vid options the firmware passes and writes what the real
+binary would, at the size the real encoder would, using ffmpeg:
+
+* ``--codec h264`` (the default) writes a raw Annex B H.264 elementary stream,
+  like the Pi's hardware encoder.
+* Resolution defaults to 640x480 and ``--bitrate`` to 10 Mbps when absent, the
+  defaults of rpicam-apps v1.15.0 (``OptsInternal::ParseVideo``) and of the
+  bcm2835-codec V4L2 encoder it drives (``V4L2_CID_MPEG_VIDEO_BITRATE``
+  default 10000000 in raspberrypi/linux rpi-6.12.y).
+* The encoder is held at the target bitrate (x264 CBR with filler), so every
+  file is the worst case the target allows rather than a lucky low-entropy one.
+
+``SIM_RPICAM_STARTUP_SEC`` (default 0) sleeps before recording, modelling the
+camera start-up that sits between the daemon's clock read and the first frame.
+
+``--codec libav --libav-format mpegts --libav-audio --audio-source alsa`` (the
+firmware's audio+video capture) writes an MPEG-TS with the same CBR H.264 plus
+an AAC track at the requested bitrate, rate and channel count. Like the real
+binary it first opens ``--audio-device`` through ALSA (with ffmpeg's ALSA
+input, the library rpicam-vid's libav backend uses) and exits non-zero when
+that fails. The microphone's sound comes from ``SIM_MIC_WAV`` (looped), or a
+tone without it: this host's ALSA file plugin cannot stream a capture file at
+real time, so the device check is real and the samples are injected.
+``SIM_MIC_GONE_FILE``, when that path exists, makes the device fail to open,
+modelling a microphone that drops out mid-run.
+"""
+
+import os
+import subprocess
+import sys
+import time
+
+
+def main(argv: list[str]) -> int:
+    opts: dict[str, str] = {}
+    flags: set[str] = set()
+    i = 0
+    valued = {
+        "-t",
+        "--timeout",
+        "--framerate",
+        "--codec",
+        "-o",
+        "--output",
+        "--width",
+        "--height",
+        "--bitrate",
+        "-b",
+        "--intra",
+        "-g",
+        "--libav-format",
+        "--audio-codec",
+        "--audio-source",
+        "--audio-device",
+        "--audio-channels",
+        "--audio-bitrate",
+        "--audio-samplerate",
+    }
+    while i < len(argv):
+        arg = argv[i]
+        if arg in valued:
+            opts[arg] = argv[i + 1]
+            i += 2
+        else:
+            flags.add(arg)
+            i += 1
+    duration_ms = int(opts.get("-t", opts.get("--timeout", "5000")))
+    fps = int(float(opts.get("--framerate", "30")))
+    width = int(opts.get("--width", "640"))
+    height = int(opts.get("--height", "480"))
+    bitrate = int(opts.get("--bitrate", opts.get("-b", "10000000")))
+    codec = opts.get("--codec", "h264")
+    out = opts.get("-o", opts.get("--output"))
+    if out is None:
+        print("rpicam-vid (sim): no output given", file=sys.stderr)
+        return 1
+    if codec not in ("h264", "libav"):
+        print(f"rpicam-vid (sim): unsupported codec {codec}", file=sys.stderr)
+        return 1
+    audio = codec == "libav" and "--libav-audio" in flags
+    if audio:
+        if opts.get("--audio-source", "pulse") != "alsa":
+            print("rpicam-vid (sim): only --audio-source alsa", file=sys.stderr)
+            return 1
+        device = opts.get("--audio-device", "default")
+        channels = opts.get("--audio-channels", "0")
+        rate = opts.get("--audio-samplerate", "0")
+        opened = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "alsa",
+             *(["-channels", channels] if channels != "0" else []),
+             *(["-sample_rate", rate] if rate != "0" else []),
+             "-i", device, "-t", "0.1", "-f", "null", "-"],
+        )  # fmt: skip
+        gone = os.environ.get("SIM_MIC_GONE_FILE")
+        if gone and os.path.exists(gone):
+            print(f"rpicam-vid (sim): {device} is gone", file=sys.stderr)
+            opened = subprocess.CompletedProcess(args=[], returncode=1)
+        if opened.returncode != 0:
+            print(
+                f"rpicam-vid (sim): cannot open audio device {device}",
+                file=sys.stderr,
+            )
+            return 1
+    time.sleep(float(os.environ.get("SIM_RPICAM_STARTUP_SEC", "0")))
+    seconds = duration_ms / 1000
+    source = (
+        f"testsrc2=size={width}x{height}:rate={fps},"
+        "eq=brightness='0.25*sin(2*PI*t/3)':eval=frame,noise=alls=10:allf=t+u"
+    )
+    if audio:
+        mic = os.environ.get("SIM_MIC_WAV")
+        audio_input = (
+            ["-stream_loop", "-1", "-i", mic]
+            if mic
+            else ["-f", "lavfi", "-i", "sine=frequency=330"]
+        )
+        audio_args = [
+            "-map", "0:v", "-map", "1:a",
+            "-c:a", opts.get("--audio-codec", "aac"),
+            "-b:a", opts.get("--audio-bitrate", "32000"),
+            "-ac", opts.get("--audio-channels", "1"),
+            "-ar", opts.get("--audio-samplerate", "48000"),
+        ]  # fmt: skip
+        container = opts.get("--libav-format", "mpegts")
+    else:
+        audio_input, audio_args, container = [], [], "h264"
+    cmd = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        source,
+        *audio_input,
+        "-t",
+        f"{seconds:.3f}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        "60",
+        "-b:v",
+        str(bitrate),
+        "-minrate",
+        str(bitrate),
+        "-maxrate",
+        str(bitrate),
+        "-bufsize",
+        str(bitrate),
+        "-x264-params",
+        "nal-hrd=cbr:force-cfr=1",
+        *audio_args,
+        "-f",
+        container,
+        out,
+    ]
+    return subprocess.run(cmd).returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

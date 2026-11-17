@@ -434,11 +434,12 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 # pg-delta is the schema diff engine for db diff / db pull / db remote commit.
 # Set enabled = false to fall back to the legacy migra engine.
 #
-# Deliberately left enabled. Unlike the services trimmed above this starts no
-# container and costs `supabase start` nothing - it is an engine selection that
-# only takes effect when a developer runs `supabase db diff`/`db pull`. Turning
-# it off would not save CI a second; it would just downgrade those commands to
-# the deprecated migra engine.
+# Deliberately left enabled for developers: turning it off downgrades
+# `supabase db diff`/`db pull` to the deprecated migra engine. It is not free,
+# though: with it on, `supabase start` runs a one-off edge-runtime container
+# after migrating to cache a pg-delta catalog for later diffs, pulling the 1.1GB
+# edge-runtime image even though [edge_runtime] is off. CI never diffs, so
+# tests.yml sets SUPABASE_EXPERIMENTAL_PGDELTA_ENABLED=false to skip it.
 [experimental.pgdelta]
 enabled = true
 # Directory under `supabase/` where declarative files are written.

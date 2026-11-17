@@ -4,6 +4,7 @@ import pytest
 
 from pipeline.assembly.ffmpeg_assembler import (
     VINTAGE_FILTER,
+    ClipAudio,
     build_assembly_command,
     build_trim_command,
     compute_clip_duration_sec,
@@ -116,3 +117,40 @@ def test_build_assembly_command_vintage_style_adds_filter():
         VINTAGE_FILTER,
         "/tmp/out.mp4",
     ]
+
+
+def test_build_trim_command_reencodes_a_clips_own_audio_to_one_reel_format():
+    args = build_trim_command(
+        Path("/tmp/segment.mp4"),
+        Path("/tmp/clip.mp4"),
+        offset_sec=22.5,
+        clip_duration_sec=15,
+        audio=ClipAudio.SOURCE,
+    )
+    assert args == [
+        "ffmpeg", "-y", "-ss", "22.5", "-i", "/tmp/segment.mp4", "-t", "15",
+        "-map", "0:v:0", "-map", "0:a:0",
+        "-c:v", "libx264", "-c:a", "aac", "-ar", "48000", "-ac", "1",
+        "/tmp/clip.mp4",
+    ]  # fmt: skip
+
+
+def test_build_trim_command_gives_a_video_only_clip_a_silent_track():
+    # In a reel where other clips carry audio, every clip needs an audio
+    # stream: the concat demuxer takes its stream layout from the first file,
+    # so a video-only first clip drops all audio, and a video-only clip later
+    # leaves a gap that players close up, shifting the rest out of sync.
+    args = build_trim_command(
+        Path("/tmp/segment.mp4"),
+        Path("/tmp/clip.mp4"),
+        offset_sec=22.5,
+        clip_duration_sec=15,
+        audio=ClipAudio.SILENCE,
+    )
+    assert args == [
+        "ffmpeg", "-y", "-ss", "22.5", "-i", "/tmp/segment.mp4",
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "15",
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "libx264", "-c:a", "aac", "-ar", "48000", "-ac", "1",
+        "/tmp/clip.mp4",
+    ]  # fmt: skip

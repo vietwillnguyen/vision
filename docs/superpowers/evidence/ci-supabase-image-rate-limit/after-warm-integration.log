@@ -1,0 +1,37 @@
+# PR #88 tests run 43942898507 attempt 2 (warm image cache), job integration (133568194490)
+# https://github.com/vietwillnguyen/vision/actions/runs/43942898507/attempts/2
+2026-11-16T19:52:42.3033866Z ##[group]Run supabase/setup-cli@v3
+2026-11-16T19:52:50.0369900Z ##[group]Run ./.github/actions/supabase-images
+2026-11-16T19:52:50.0841931Z ##[group]Run actions/cache/restore@v6
+2026-11-16T19:52:53.0824435Z Cache Size: ~774 MB (811804680 B)
+2026-11-16T19:53:02.3026176Z Cache restored from key: supabase-images-Linux-X64-cli2.109.0-e6e884d3cf3806d4fa986fccee572c99c656ccf90a5947987c2ee3f6e765f107
+2026-11-16T19:53:02.3183985Z echo "archive: $(du -h "$archive" | cut -f1)"
+2026-11-16T19:53:02.7651075Z archive: 3.1G
+2026-11-16T19:53:20.0666715Z Loaded image: public.ecr.aws/supabase/pg_prove:3.36
+2026-11-16T19:53:22.8957835Z Loaded image: public.ecr.aws/supabase/kong:2.8.1
+2026-11-16T19:53:23.7016975Z Loaded image: public.ecr.aws/supabase/gotrue:v2.192.0
+2026-11-16T19:53:26.5812214Z Loaded image: public.ecr.aws/supabase/realtime:v2.112.1
+2026-11-16T19:53:26.6834753Z Loaded image: public.ecr.aws/supabase/mailpit:v1.30.2
+2026-11-16T19:53:29.0861261Z Loaded image: public.ecr.aws/supabase/postgres-meta:v0.96.1
+2026-11-16T19:53:35.8182293Z Loaded image: public.ecr.aws/supabase/postgres:17.6.1.140
+2026-11-16T19:53:35.8653445Z Loaded image: public.ecr.aws/supabase/postgrest:v14.14
+2026-11-16T19:53:46.9784611Z Loaded image: public.ecr.aws/supabase/storage-api:v1.61.7
+2026-11-16T19:53:47.1557120Z real	0m44.390s
+2026-11-16T19:53:47.3818809Z ##[group]Run time scripts/ci/supabase-images.sh seed
+2026-11-16T19:53:47.4909731Z supabase-images: seed done: 9 already present, 0 pulled from ghcr.io
+2026-11-16T19:53:47.4910760Z real	0m0.102s
+2026-11-16T19:53:47.4952543Z   echo "probe: $out"
+2026-11-16T19:53:47.4953215Z     *"connection refused"*|*"0.0.0.0"*|*"[::]"*) echo "$registry blocked for this job" ;;
+2026-11-16T19:53:47.5366159Z probe: Error response from daemon: Get "https://public.ecr.aws/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:53:47.5366604Z public.ecr.aws blocked for this job
+2026-11-16T19:53:47.5487295Z probe: Error response from daemon: Get "https://ghcr.io/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:53:47.5487725Z ghcr.io blocked for this job
+2026-11-16T19:53:47.5605051Z probe: Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:53:47.5605772Z docker.io blocked for this job
+2026-11-16T19:53:47.5631690Z ##[group]Run supabase start -x imgproxy
+2026-11-16T19:53:47.9626842Z  realtime Skipped - Image is already present locally 
+2026-11-16T19:54:16.9315406Z Started supabase local development setup.
+2026-11-16T19:54:17.3657039Z ##[group]Run scripts/ci/supabase-images.sh verify
+2026-11-16T19:54:17.3976838Z supabase-images: all 7 running container images are in the manifest
+2026-11-16T19:54:17.4002248Z ##[group]Run supabase test db
+2026-11-16T19:54:26.1128280Z ##[group]Run supabase stop

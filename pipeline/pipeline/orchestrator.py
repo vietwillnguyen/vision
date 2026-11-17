@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Protocol
 
 from pipeline.assembly.ffmpeg_assembler import (
+    ClipAudio,
     build_assembly_command,
     build_trim_command,
     compute_clip_duration_sec,
@@ -50,8 +51,8 @@ from pipeline.delivery.notifier import (
 from pipeline.ingestion import (
     apply_flag_markers,
     build_segments_from_object_keys,
+    match_marker,
     parse_flag_marker_filename,
-    segment_window_end,
     stored_duration_sec,
 )
 from pipeline.models import ScoreWeights, Segment
@@ -218,13 +219,21 @@ def _flag_persisted_segment(
     store: PipelineStore, device_id: str, marker_key: str
 ) -> bool:
     flag_at = parse_flag_marker_filename(marker_key.split("/")[-1])
-    for row in store.list_segment_rows(device_id, flag_at.date()):
-        recorded_at = datetime.fromisoformat(row["recorded_at"]).replace(tzinfo=None)
-        window_end = segment_window_end(recorded_at, row["duration_sec"])
-        if recorded_at <= flag_at < window_end:
-            store.flag_segment(row["s3_key"])
-            return True
-    return False
+    rows = store.list_segment_rows(device_id, flag_at.date())
+    index = match_marker(
+        [
+            (
+                datetime.fromisoformat(row["recorded_at"]).replace(tzinfo=None),
+                row["duration_sec"],
+            )
+            for row in rows
+        ],
+        flag_at,
+    )
+    if index is None:
+        return False
+    store.flag_segment(rows[index]["s3_key"])
+    return True
 
 
 def _process_device_segments(
@@ -348,6 +357,7 @@ def _score_one(
     workdir: Path,
 ) -> Segment:
     audio_path = deps.media.extract_audio(video_path, workdir)
+    segment.has_audio = audio_path is not None
     transcription = (
         SILENT_TRANSCRIPTION
         if audio_path is None
@@ -385,12 +395,24 @@ def _assemble_reel(
     day: date,
 ) -> Path:
     clip_paths: list[Path] = []
+    # A day where the microphone worked only part of the time mixes segments
+    # with and without audio; see ClipAudio for why every clip then needs a
+    # track.
+    reel_has_audio = any(s.has_audio for s in selected)
     for index, segment in enumerate(selected):
         clip = workdir / f"clip_{index:03d}.mp4"
         clip_sec = compute_clip_duration_sec(segment.duration_sec, CLIP_DURATION_SEC)
         offset = compute_clip_offset_sec(segment.duration_sec, clip_sec)
+        if segment.has_audio:
+            audio = ClipAudio.SOURCE
+        elif reel_has_audio:
+            audio = ClipAudio.SILENCE
+        else:
+            audio = ClipAudio.NONE
         deps.runner.run(
-            build_trim_command(local_paths[segment.s3_key], clip, offset, clip_sec)
+            build_trim_command(
+                local_paths[segment.s3_key], clip, offset, clip_sec, audio
+            )
         )
         clip_paths.append(clip)
 
