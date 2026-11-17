@@ -1661,6 +1661,7 @@ def _run_final_steps(
             _extract_function("log"),
             _extract_function("env_file_value"),
             _reboot_prelude(tmp_path / "run" / "visio-setup-reboot-required"),
+            _extract_function("report_step3_incomplete"),
             _extract_assignment("PREFLIGHT_BIN"),
             'CONFIG_TXT="/boot/firmware/config.txt"',
             f'DATA_DIR="{tmp_path}/default-data-dir"',
@@ -1936,14 +1937,21 @@ def test_a_failed_run_that_needed_no_reboot_leaves_no_marker(tmp_path):
     assert not (tmp_path / "run" / "visio-setup-reboot-required").exists()
 
 
-def _run_env_step(tmp_path: Path, reboot_needed: str) -> subprocess.CompletedProcess:
-    """Run the real step 7 on a device with no env file yet."""
+def _run_env_step(
+    tmp_path: Path, reboot_needed: str, before: str = ""
+) -> subprocess.CompletedProcess:
+    """Run the real step 7 on a device with no env file yet, after ``before``."""
     return _run_after_reboot_prelude(
         tmp_path,
         "\n".join(
             [
+                _extract_function("report_step3_incomplete"),
+                _extract_assignment("PREFLIGHT_BIN"),
                 'CONFIG_TXT="/boot/firmware/config.txt"',
+                "config_txt_failed=false",
+                "interfaces_failed=false",
                 f"reboot_needed={reboot_needed}",
+                before,
                 _step_block(7),
                 "echo PAST_THE_CHECKPOINT",
             ]
@@ -1972,6 +1980,62 @@ def test_the_env_template_checkpoint_owes_no_reboot_it_was_not_asked_for(tmp_pat
     assert result.returncode == 0, result.stderr
     assert "REBOOT REQUIRED" not in result.stdout
     assert not (tmp_path / "run" / "visio-setup-reboot-required").exists()
+    assert "INCOMPLETE" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("flag", "incomplete"),
+    [
+        ("config_txt_failed", "could not be edited"),
+        ("interfaces_failed", "could not be enabled through raspi-config"),
+    ],
+)
+def test_the_env_template_checkpoint_reports_a_step_3_failure_and_exits_one(
+    tmp_path, flag, incomplete
+):
+    result = _run_env_step(tmp_path, reboot_needed="true", before=f"{flag}=true")
+
+    assert result.returncode == 1, result.stderr
+    assert "PAST_THE_CHECKPOINT" not in result.stdout
+    lines = result.stdout.splitlines()
+    assert [line for line in lines if "INCOMPLETE:" in line] == [
+        next(line for line in lines if incomplete in line)
+    ]
+    assert "Setup incomplete" in result.stdout
+    assert "REBOOT REQUIRED" in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+    assert (tmp_path / "visio-recorder.env").stat().st_mode & 0o777 == 0o600
+
+
+def test_a_first_run_without_raspi_config_stops_at_the_checkpoint_with_exit_one(
+    tmp_path,
+):
+    # A fresh non-Raspberry-Pi OS device: the real step 3 finds no raspi-config,
+    # then step 7 writes the template. That run must not end on exit 0.
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+
+    result = _run_env_step(
+        tmp_path,
+        reboot_needed="false",
+        before="\n".join(
+            [
+                f'CONFIG_TXT="{config}"',
+                "config_txt_changed=false",
+                _step_block(3),
+            ]
+        ),
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert "ERROR: raspi-config is not installed" in result.stdout
+    assert (
+        "INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config"
+        in result.stdout
+    )
+    assert "REBOOT REQUIRED" in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
 
 
 def test_env_file_value_reads_an_indented_key_the_way_systemd_does(tmp_path):
@@ -2362,6 +2426,7 @@ def test_a_do_spi_that_changes_nothing_is_caught_by_asking_again(tmp_path):
     assert "INTERFACES_FAILED=true" in result.stdout
     assert "'raspi-config nonint do_spi 0' left SPI disabled" in result.stdout
     assert "'raspi-config nonint do_i2c 0' left I2C disabled" in result.stdout
+    assert "enabled now via raspi-config" not in result.stdout
 
 
 def test_a_raspi_config_without_the_spi_function_is_a_failure(tmp_path):

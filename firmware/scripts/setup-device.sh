@@ -64,6 +64,17 @@ log() {
   echo "[setup-device] $*"
 }
 
+# One INCOMPLETE line per step 3 failure, for both places a run can end after
+# step 3 without an error exit: the env-file checkpoint and the summary.
+report_step3_incomplete() {
+  if [[ "${config_txt_failed}" == "true" ]]; then
+    log "INCOMPLETE: ${CONFIG_TXT} could not be edited (see the step 3 error above), so core_freq_fixed=1 or the microphone overlay may be missing - the status LED colours can be corrupted and the daemon may record video only."
+  fi
+  if [[ "${interfaces_failed}" == "true" ]]; then
+    log "INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config (see the step 3 error above) - without SPI the status LED cannot be driven and '${PREFLIGHT_BIN}' will report spidev0.0 as a blocking failure."
+  fi
+}
+
 # Resolved before the re-exec below so it survives it: "$0" is passed through
 # unchanged, but the caller's working directory is not guaranteed to be.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -668,6 +679,11 @@ EOF
   if [[ "${reboot_needed}" == "true" ]]; then
     log "REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or ${CONFIG_TXT}. The re-run reports it again."
   fi
+  report_step3_incomplete
+  if [[ "${config_txt_failed}" == "true" || "${interfaces_failed}" == "true" ]]; then
+    log "Setup incomplete - see the INCOMPLETE lines above. Fix what they name, fill in ${ENV_FILE} and re-run this script."
+    exit 1
+  fi
   exit 0
 else
   missing=()
@@ -1026,12 +1042,7 @@ fi
 if [[ "${data_dir_failed}" == "true" ]]; then
   log "INCOMPLETE: ${data_dir} was NOT created (see the step 9 error above), so the daemon has nowhere to record and '${PREFLIGHT_BIN}' will report data_dir as a blocking failure."
 fi
-if [[ "${config_txt_failed}" == "true" ]]; then
-  log "INCOMPLETE: ${CONFIG_TXT} could not be edited (see the step 3 error above), so core_freq_fixed=1 or the microphone overlay may be missing - the status LED colours can be corrupted and the daemon may record video only."
-fi
-if [[ "${interfaces_failed}" == "true" ]]; then
-  log "INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config (see the step 3 error above) - without SPI the status LED cannot be driven and '${PREFLIGHT_BIN}' will report spidev0.0 as a blocking failure."
-fi
+report_step3_incomplete
 log "Run '${PREFLIGHT_BIN}' from any directory to check the runtime environment."
 if [[ "${reboot_needed}" == "true" ]]; then
   log "REBOOT REQUIRED: swap, interface or ${CONFIG_TXT} changes need a reboot to take effect before the daemon will work."
@@ -1039,10 +1050,11 @@ else
   log "No reboot required."
 fi
 # Two different outcomes, deliberately not conflated. The env-file step above
-# exits 0 because it is a re-run checkpoint - nothing is wrong, the operator
-# just has keys to fill in. Reaching here with an INCOMPLETE line means the
-# run finished and the device is not usable, which neither the last line an
-# operator reads nor an exit status a caller tests may report as success.
+# exits 0 because it is a re-run checkpoint - the operator just has keys to
+# fill in - unless step 3 already failed, which it reports there the same way.
+# Reaching here with an INCOMPLETE line means the run finished and the device
+# is not usable, which neither the last line an operator reads nor an exit
+# status a caller tests may report as success.
 if [[ "${data_dir_failed}" == "true" || "${config_txt_failed}" == "true" || "${interfaces_failed}" == "true" ]]; then
   log "Setup incomplete - see the INCOMPLETE lines above. Fix what they name and re-run this script."
   exit 1
