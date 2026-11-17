@@ -1,0 +1,259 @@
+
+=== system bus, polkitd and NetworkManager (real daemons, systemd is not PID 1)
+STATE                   CONNECTIVITY  WIFI-HW  WIFI     WWAN-HW  WWAN     METERED 
+connected (local only)  limited       missing  enabled  missing  enabled  unknown 
+network-manager	1.52.1-1
+polkitd	126-2
+
+=== root era: provision with a85ef42f44b1a2d571f2e52cdfd364962b7506fe (the daemon runs as root)
+template run exit=0
+[setup-device] Step 7/10: env file
+[setup-device] Wrote template /etc/visio-recorder.env - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script
+[setup-device] REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or /boot/firmware/config.txt. The re-run reports it again.
+[setup-device] Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now.
+[setup-device] Run 'visio-preflight' from any directory to check the runtime environment.
+[setup-device] REBOOT REQUIRED: swap, interface or /boot/firmware/config.txt changes need a reboot to take effect before the daemon will work.
+[setup-device] Setup complete.
+full run exit=0
+
+=== root era: what the root daemon left behind (session, identity, queued segment, keyfile)
+(unit has no User= - runs as root)
+-rw------- 1 0 0 2644 Nov 17 07:44 /etc/visio-recorder.env
+/var/lib/visio-recorder:
+total 12
+-rw-r--r-- 1 0 0   20 Nov 17 07:44 device.json
+-rw-r--r-- 1 0 0    0 Nov 17 07:44 device_registered
+drwxr-xr-x 2 0 0 4096 Nov 17 07:44 queue
+-rw------- 1 0 0   42 Nov 17 07:44 session.json
+
+/var/lib/visio-recorder/queue:
+total 4
+-rw-r--r-- 1 0 0 1024 Nov 17 07:44 20261117T070000.mp4
+visio
+
+=== migration: provision with 1411b4d63b4629699b676fce236e34a913b0332c on the same device
+[setup-device] An earlier run made changes that need a reboot, and the device has not rebooted since - the reboot is still required
+[setup-device] Step 1/10: swap size
+[setup-device] Swap already 1023MB (>= 1024MB) - no change needed
+[setup-device] Step 2/10: apt packages
+[setup-device] pijuice-base is not in this release's package index - skipping (expected on Raspberry Pi OS trixie, where the Raspberry Pi archive no longer ships it). Keep VISIO_BATTERY_SOURCE=none until a battery driver is installed another way.
+[setup-device] Step 3/10: interfaces
+[setup-device] SPI already enabled
+[setup-device] I2C already enabled
+[setup-device] Camera already enabled
+[setup-device] /boot/firmware/config.txt: core_freq_fixed=1 already set
+[setup-device] /boot/firmware/config.txt: dtoverlay=adau7002-simple already set
+[setup-device] Step 4/10: uv
+[setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
+[setup-device] Step 5/10: code
+Previous HEAD position was a85ef42 chore: merge origin/main into worktree-visio-device-provisioning
+HEAD is now at 1411b4d Merge remote-tracking branch 'origin/worktree-visio-device-provisioning' into feat/derooted-recorder
+[setup-device] Provisioned revision 1411b4d63b4629699b676fce236e34a913b0332c (requested '1411b4d63b4629699b676fce236e34a913b0332c')
+Resolved 42 packages in 1ms
+Checked 31 packages in 0.56ms
+[setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
+[setup-device] Step 6/10: service user, systemd, polkit and ALSA
+[setup-device] Created system user visio
+[setup-device] Added visio to video gpio i2c spi audio
+[setup-device] Installed /etc/systemd/system/visio-recorder.service
+[setup-device] Installed /etc/polkit-1/rules.d/50-visio-recorder.rules
+[setup-device] /etc/asound.conf already installed - no change
+[setup-device] Step 7/10: env file
+[setup-device] /etc/visio-recorder.env already configured
+[setup-device] /etc/visio-recorder.env is now group visio, mode 0640
+[setup-device] Step 8/10: developer shell
+[setup-device] Installed: neovim ripgrep fd-find tmux htop tree jq less bash-completion
+[setup-device] /home/pi/.config/nvim already has a config - left untouched
+[setup-device] Managed dev-shell block written to /home/pi/.bashrc (owner pi:pi)
+[setup-device] Step 9/10: data dir
+[setup-device] /var/lib/visio-recorder (and everything in it) now owned by visio
+[setup-device] /var/lib/visio-recorder is now mode 0750
+[setup-device] Step 10/10: summary
+[setup-device] Provisioned revision: 1411b4d63b4629699b676fce236e34a913b0332c
+[setup-device] VISIO_BATTERY_SOURCE=none
+[setup-device] Data dir: /var/lib/visio-recorder
+[setup-device] Daemon user: visio (groups video gpio i2c spi audio)
+[setup-device] Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now.
+[setup-device] Run 'visio-preflight' from any directory to check the runtime environment.
+[setup-device] REBOOT REQUIRED: swap, interface or /boot/firmware/config.txt changes need a reboot to take effect before the daemon will work.
+[setup-device] Setup complete.
+exit=0
+
+=== re-run: a migrated device converges to no change
+exit=0
+HEAD is now at 1411b4d Merge remote-tracking branch 'origin/worktree-visio-device-provisioning' into feat/derooted-recorder
+[setup-device] Provisioned revision 1411b4d63b4629699b676fce236e34a913b0332c (requested '1411b4d63b4629699b676fce236e34a913b0332c')
+[setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
+[setup-device] visio already in video gpio i2c spi audio
+[setup-device] /etc/systemd/system/visio-recorder.service already installed - no change
+[setup-device] /etc/polkit-1/rules.d/50-visio-recorder.rules already installed - no change
+[setup-device] /etc/visio-recorder.env already configured
+[setup-device] Installed: neovim ripgrep fd-find tmux htop tree jq less bash-completion
+[setup-device] Provisioned revision: 1411b4d63b4629699b676fce236e34a913b0332c
+[setup-device] Data dir: /var/lib/visio-recorder
+[setup-device] Daemon user: visio (groups video gpio i2c spi audio)
+[setup-device] Run 'visio-preflight' from any directory to check the runtime environment.
+[setup-device] Setup complete.
+byte-identical: the re-run changed nothing
+
+=== after migration: account, env file, data dir, unit, polkit rule
+uid=995(visio) gid=992(visio) groups=992(visio),29(audio),44(video),995(spi),994(gpio),993(i2c)
+visio:x:995:992:visio-recorder daemon:/var/lib/visio-recorder:/usr/sbin/nologin
+-rw-r----- 1 0 992 2644 Nov 17 07:44 /etc/visio-recorder.env
+/etc/visio-recorder.env root:visio 640
+/var/lib/visio-recorder visio:visio 750
+/var/lib/visio-recorder/device.json visio:visio 644
+/var/lib/visio-recorder/queue visio:visio 755
+/var/lib/visio-recorder/queue/20261117T070000.mp4 visio:visio 644
+/var/lib/visio-recorder/device_registered visio:visio 644
+/var/lib/visio-recorder/session.json visio:visio 600
+User=visio
+Group=visio
+SupplementaryGroups=video gpio i2c spi audio
+RuntimeDirectory=visio-recorder
+Environment=LG_WD=/run/visio-recorder
+StateDirectory=visio-recorder
+NoNewPrivileges=yes
+ProtectSystem=strict
+/etc/polkit-1/rules.d/50-visio-recorder.rules root:root 644
+
+=== systemd-analyze verify on the installed unit (real systemd systemd 257 (257.13-1~deb13u1))
+verify: no complaints
+
+=== fake device nodes, owned the way Raspberry Pi OS's udev rules own them
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/dma_heap/linux,cma
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/dma_heap/system
+-rw-rw---- 1 root gpio  0 Nov 17 07:44 /dev/gpiochip0
+-rw-rw---- 1 root i2c   0 Nov 17 07:44 /dev/i2c-1
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/media0
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/media1
+-rw-rw---- 1 root audio 0 Nov 17 07:44 /dev/snd/controlC0
+-rw-rw---- 1 root audio 0 Nov 17 07:44 /dev/snd/pcmC0D0c
+-rw-rw---- 1 root audio 0 Nov 17 07:44 /dev/snd/timer
+-rw-rw---- 1 root spi   0 Nov 17 07:44 /dev/spidev0.0
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/v4l-subdev0
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/video0
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/video10
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/video11
+-rw-rw---- 1 root video 0 Nov 17 07:44 /dev/video12
+
+=== ExecStartPre as visio with every unit group (video gpio i2c spi audio)
+[INFO] install: /opt/visio-recorder/firmware/visio_recorder
+[OK] daemon_user: visio (uid 995, installed visio-recorder.service), groups: audio gpio i2c spi video visio
+[BLOCK] rpicam-vid: rpicam-vid not found on PATH - check the apt install step
+[BLOCK] rpicam-still: rpicam-still not found on PATH - check the apt install step
+[BLOCK] zbarimg: zbarimg not found on PATH - check the apt install step
+[OK] ffmpeg: found on PATH
+[OK] nmcli: found on PATH
+[OK] spidev: importable
+[OK] gpiozero: importable
+[OK] supabase: importable
+[OK] spidev0.0: /dev/spidev0.0 opens read-write
+[WARN] core_freq_fixed: could not ask vcgencmd (FileNotFoundError) - set core_freq_fixed=1 in /boot/firmware/config.txt (setup-device.sh does) and reboot
+[BLOCK] camera: rpicam-hello unavailable - FileNotFoundError: check apt install step
+[OK] networkmanager: running
+[OK] data_dir: /var/lib/visio-recorder writable
+[WARN] audio: no adau7002 sound card in /proc/asound/cards - dtoverlay=adau7002-simple is missing from /boot/firmware/config.txt (setup-device.sh adds it) or the device has not been rebooted since; the daemon will record video only
+[WARN] pijuice: pijuice not installed - expected when VISIO_BATTERY_SOURCE=none
+[OK] i2c: I2C bus enabled
+[OK] camera_access: visio can open 9 node(s) for rpicam-vid and rpicam-still (libcamera) (/dev/media*, /dev/video*, /dev/v4l-subdev*, /dev/dma_heap/*)
+[OK] spi_access: visio can open 1 node(s) for the status LED (/dev/spidev0.0)
+[OK] gpio_access: visio can open 1 node(s) for the flag button (gpiozero) (/dev/gpiochip*)
+[OK] audio_access: visio can open 3 node(s) for the I2S microphone (video-only recording without it) (/dev/snd/*)
+[OK] i2c_access: visio can open 1 node(s) for the PiJuice battery HAT (/dev/i2c-1)
+exit=1
+
+=== ExecStartPre as visio without gpio: the flag button's group is missing
+[OK] daemon_user: visio (uid 995, installed visio-recorder.service), groups: audio gpio i2c spi video visio
+[BLOCK] gpio_access: visio cannot open /dev/gpiochip0 (root:gpio 0660), needed for the flag button (gpiozero): visio is not in the gpio group (groups per this process: audio i2c spi video visio) - setup-device.sh adds it to the account and the unit grants it via SupplementaryGroups=; restart visio-recorder afterwards
+exit=1
+
+=== ExecStartPre as visio without video and i2c
+[BLOCK] camera_access: visio cannot open /dev/media0 (root:video 0660); /dev/media1 (root:video 0660); /dev/video0 (root:video 0660); /dev/video10 (root:video 0660); /dev/video11 (root:video 0660); /dev/video12 (root:video 0660); /dev/v4l-subdev0 (root:video 0660); /dev/dma_heap/linux,cma (root:video 0660); /dev/dma_heap/system (root:video 0660), needed for rpicam-vid and rpicam-still (libcamera): visio is not in the video group (groups per this process: audio gpio spi visio) - setup-device.sh adds it to the account and the unit grants it via SupplementaryGroups=; restart visio-recorder afterwards
+[WARN] i2c_access: visio cannot open /dev/i2c-1 (root:i2c 0660), needed for the PiJuice battery HAT: visio is not in the i2c group (groups per this process: audio gpio spi visio) - setup-device.sh adds it to the account and the unit grants it via SupplementaryGroups=; restart visio-recorder afterwards
+exit=1
+
+=== a node not owned the way the udev rules make it (/dev/spidev0.0 root:root 0600)
+[OK] daemon_user: visio (uid 995, installed visio-recorder.service), groups: audio gpio i2c spi video visio
+[OK] spidev: importable
+[BLOCK] spidev0.0: /dev/spidev0.0 exists but visio (uid 995) cannot open it read-write - see spi_access
+[BLOCK] spi_access: visio cannot open /dev/spidev0.0 (root:root 0600), needed for the status LED: expected group spi from Raspberry Pi OS's udev rules (raspberrypi-sys-mods' 99-com.rules, systemd's 50-udev-default.rules) - check those rules are installed and reboot
+exit=1
+
+=== operator view: visio-preflight as pi and under sudo answers for visio
+[OK] daemon_user: visio (uid 995, installed visio-recorder.service), groups: audio gpio i2c spi video visio
+[WARN] data_dir: /var/lib/visio-recorder exists but is not writable by uid 1000 - expected for a diagnostic run as a non-daemon user, not a fault; the daemon runs as visio [checked the default: /etc/visio-recorder.env could not be read or parsed, so a configured VISIO_DATA_DIR could not be confirmed - it is mode 0640 root:visio, so re-run under sudo to check the configured path; if that fails too the file itself is unreadable or malformed]
+[OK] camera_access: visio can open 9 node(s) for rpicam-vid and rpicam-still (libcamera) (/dev/media*, /dev/video*, /dev/v4l-subdev*, /dev/dma_heap/*)
+[OK] spi_access: visio can open 1 node(s) for the status LED (/dev/spidev0.0)
+[OK] gpio_access: visio can open 1 node(s) for the flag button (gpiozero) (/dev/gpiochip*)
+[OK] audio_access: visio can open 3 node(s) for the I2S microphone (video-only recording without it) (/dev/snd/*)
+[OK] i2c_access: visio can open 1 node(s) for the PiJuice battery HAT (/dev/i2c-1)
+exit=0
+[OK] daemon_user: visio (uid 995, installed visio-recorder.service), groups: audio gpio i2c spi video visio
+[OK] data_dir: /var/lib/visio-recorder writable
+[OK] camera_access: visio can open 9 node(s) for rpicam-vid and rpicam-still (libcamera) (/dev/media*, /dev/video*, /dev/v4l-subdev*, /dev/dma_heap/*)
+[OK] spi_access: visio can open 1 node(s) for the status LED (/dev/spidev0.0)
+[OK] gpio_access: visio can open 1 node(s) for the flag button (gpiozero) (/dev/gpiochip*)
+[OK] audio_access: visio can open 3 node(s) for the I2S microphone (video-only recording without it) (/dev/snd/*)
+
+=== operator view: visio dropped from gpio in /etc/group - the unit still grants it
+uid=995(visio) gid=992(visio) groups=992(visio),29(audio),44(video),995(spi),993(i2c)
+[OK] gpio_access: visio can open 1 node(s) for the flag button (gpiozero) (/dev/gpiochip*)
+
+=== operator view: and with SupplementaryGroups= dropping gpio too (drop-in)
+[BLOCK] gpio_access: visio cannot open /dev/gpiochip0 (root:gpio 0660), needed for the flag button (gpiozero): visio is not in the gpio group (groups per visio's account and the unit's SupplementaryGroups=: audio i2c spi video visio) - setup-device.sh adds it to the account and the unit grants it via SupplementaryGroups=; restart visio-recorder afterwards
+
+=== the daemon's files as visio: env file, session, queue, a new segment
+env file keys: ['SUPABASE_ANON_KEY', 'SUPABASE_URL', 'VISIO_BATTERY_SOURCE', 'VISIO_DEV_SHELL']
+session.json readable: True
+queued segment readable: 1024 bytes
+new segment written as visio
+total 8
+-rw-r--r-- 1 995 992 1024 Nov 17 07:44 20261117T070000.mp4
+-rw-r--r-- 1 995 992    3 Nov 17 07:44 20261117T070100.mp4
+
+=== wifi onboarding as visio through the real NetworkManager and polkitd
+--- re-onboarding over the root-era keyfile (modify path)
+Error: Connection activation failed: No suitable device found for this connection (device lo not available because profile is not compatible with device (connection type is not "loopback")).
+profile visio exists before onboarding: True
+configure ok
+activate: CalledProcessError 4
+profiles named visio: 1
+total 4
+-rw------- 1 0 0 215 Nov 17 07:44 visio.nmconnection
+ssid=OtherNet
+psk=newsecret99
+--- connection up as visio: authorized, fails only for want of a wifi device
+Error: Connection activation failed: No suitable device found for this connection (device lo not available because profile is not compatible with device (connection type is not "loopback")).
+exit=4
+--- fresh device: no profile yet (add path)
+Error: Connection activation failed: No suitable device found for this connection (device eth0 not available because profile is not compatible with device (mismatching interface name)).
+profile visio exists before onboarding: False
+configure ok
+activate: CalledProcessError 4
+profiles named visio: 1
+total 4
+-rw------- 1 0 0 259 Nov 17 07:44 visio.nmconnection
+ssid=HomeNet
+psk=hunter2secret
+--- what the rule does not grant
+Error: failed to set networking: Not authorized to enable/disable networking
+exit=1
+Error: failed to reload connections: access denied.
+exit=1
+--- without the polkit rule: refused, the error carries no password, the stored profile is unchanged
+configure refused: nmcli connection modify exited 1
+psk=hunter2secret
+
+=== rollback: a drop-in running the daemon as root, which setup leaves alone
+[setup-device] WARNING: /etc/systemd/system/visio-recorder.service.d/90-run-as-root.conf is present, so the daemon runs as root, not visio. Left in place; remove it and restart visio-recorder to run unprivileged.
+[setup-device] Setup complete.
+[Service]
+User=root
+Group=root
+[OK] daemon_user: root (uid 0, installed visio-recorder.service), groups: audio gpio i2c root spi video
+
+=== stubbed apt-get install lines
+STUB apt-get install -y neovim ripgrep fd-find tmux htop tree jq less bash-completion
+STUB apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git python3-gpiozero python3-spidev alsa-utils
+STUB apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git python3-gpiozero python3-spidev alsa-utils polkitd
