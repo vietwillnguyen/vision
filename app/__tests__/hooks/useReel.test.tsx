@@ -28,7 +28,7 @@ function fakeReelClient(rows: Record<string, unknown>[]) {
 describe('useReel', () => {
   it('maps the reel row', async () => {
     const client = fakeReelClient([ROW]);
-    const { result } = renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
+    const { result } = await renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
     await waitFor(() =>
       expect(result.current).toEqual({
         kind: 'ready',
@@ -45,14 +45,14 @@ describe('useReel', () => {
 
   it('resolves none when no reel exists', async () => {
     const client = fakeReelClient([]);
-    const { result } = renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
+    const { result } = await renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
     await waitFor(() => expect(result.current).toEqual({ kind: 'none' }));
   });
 
   it('falls back to the clean style for a style the app cannot render', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const client = fakeReelClient([{ ...ROW, style: 'noir' }]);
-    const { result } = renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
+    const { result } = await renderHook(() => useReel(client, 'dev-1', '2026-07-18'));
 
     await waitFor(() => expect(result.current).toMatchObject({ kind: 'ready' }));
     expect(result.current).toMatchObject({ kind: 'ready', reel: { style: 'clean' } });
@@ -61,9 +61,9 @@ describe('useReel', () => {
     warn.mockRestore();
   });
 
-  it('short-circuits to none for a null date', () => {
+  it('short-circuits to none for a null date', async () => {
     const client = fakeReelClient([ROW]);
-    const { result } = renderHook(() => useReel(client, 'dev-1', null));
+    const { result } = await renderHook(() => useReel(client, 'dev-1', null));
     expect(result.current).toEqual({ kind: 'none' });
   });
 });
@@ -71,7 +71,7 @@ describe('useReel', () => {
 describe('useReelsInRange', () => {
   it('maps all rows in the range', async () => {
     const client = fakeReelClient([ROW]);
-    const { result } = renderHook(() =>
+    const { result } = await renderHook(() =>
       useReelsInRange(client, 'dev-1', '2026-06-19', '2026-07-18'),
     );
     await waitFor(() =>

@@ -4,8 +4,8 @@ import React from 'react';
 import { AuthScreen } from '../../src/screens/AuthScreen';
 
 describe('AuthScreen', () => {
-  it('shows validation errors when present', () => {
-    const { getByTestId, queryByTestId } = render(
+  it('shows validation errors when present', async () => {
+    const { getByTestId, queryByTestId } = await render(
       <AuthScreen
         email="bad-email"
         password=""
@@ -20,9 +20,9 @@ describe('AuthScreen', () => {
     expect(queryByTestId('password-error')).toBeNull();
   });
 
-  it('calls onSubmit when the sign in button is pressed', () => {
+  it('calls onSubmit when the sign in button is pressed', async () => {
     const onSubmit = jest.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = await render(
       <AuthScreen
         email="user@example.com"
         password="longenough"
@@ -33,14 +33,14 @@ describe('AuthScreen', () => {
       />,
     );
 
-    fireEvent.press(getByTestId('submit-button'));
+    await fireEvent.press(getByTestId('submit-button'));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it('calls onEmailChange as the user types', () => {
+  it('calls onEmailChange as the user types', async () => {
     const onEmailChange = jest.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = await render(
       <AuthScreen
         email=""
         password=""
@@ -51,13 +51,13 @@ describe('AuthScreen', () => {
       />,
     );
 
-    fireEvent.changeText(getByTestId('email-input'), 'new@example.com');
+    await fireEvent.changeText(getByTestId('email-input'), 'new@example.com');
 
     expect(onEmailChange).toHaveBeenCalledWith('new@example.com');
   });
 
-  it('renders an auth error when provided', () => {
-    render(
+  it('renders an auth error when provided', async () => {
+    await render(
       <AuthScreen
         email=""
         password=""
@@ -71,8 +71,8 @@ describe('AuthScreen', () => {
     expect(screen.getByTestId('auth-error')).toHaveTextContent('Invalid login credentials');
   });
 
-  it('labels inputs for accessibility', () => {
-    render(
+  it('labels inputs for accessibility', async () => {
+    await render(
       <AuthScreen
         email=""
         password=""

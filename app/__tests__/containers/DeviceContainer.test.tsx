@@ -21,7 +21,7 @@ function fakeNavigation() {
 }
 
 it('wires useDeviceStatus into DeviceScreen', async () => {
-  render(
+  await render(
     <DeviceContainer
       client={fakeClient({
         battery_pct: 55,
@@ -42,7 +42,7 @@ it('wires useDeviceStatus into DeviceScreen', async () => {
 
 it('navigates to Reonboard when the re-onboard button is pressed', async () => {
   const navigation = fakeNavigation();
-  render(
+  await render(
     <DeviceContainer
       client={fakeClient({
         battery_pct: 55,
@@ -58,7 +58,7 @@ it('navigates to Reonboard when the re-onboard button is pressed', async () => {
     />,
   );
   await waitFor(() => expect(screen.getByTestId('reonboard-button')).toBeTruthy());
-  fireEvent.press(screen.getByTestId('reonboard-button'));
+  await fireEvent.press(screen.getByTestId('reonboard-button'));
   expect(navigation.navigate).toHaveBeenCalledWith('Reonboard');
 });
 
@@ -87,7 +87,7 @@ it('keeps showing the last known status when the status row is deleted', async (
     removeChannel: () => {},
   } as unknown as VisionClient;
 
-  render(
+  await render(
     <DeviceContainer
       client={client}
       deviceId="dev-1"
@@ -97,7 +97,7 @@ it('keeps showing the last known status when the status row is deleted', async (
   );
   await waitFor(() => expect(screen.getByText('Battery: 55%')).toBeTruthy());
 
-  act(() => deliver?.({ eventType: 'DELETE', new: {}, old: row }));
+  await act(() => deliver?.({ eventType: 'DELETE', new: {}, old: row }));
 
   expect(screen.getByText('Battery: 55%')).toBeTruthy();
   expect(screen.queryByText('Battery: undefined%')).toBeNull();

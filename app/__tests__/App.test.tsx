@@ -67,12 +67,14 @@ function fakeClient(session: Session | null, devices: Record<string, unknown>[])
 
 describe('AppRoot', () => {
   it('shows the auth screen when signed out', async () => {
-    render(<AppRoot client={fakeClient(null, [])} />);
+    await render(<AppRoot client={fakeClient(null, [])} />);
     await waitFor(() => expect(screen.getByTestId('email-input')).toBeTruthy());
   });
 
   it('shows the four tabs when signed in with a device', async () => {
-    render(<AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />);
+    await render(
+      <AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />,
+    );
     // exact match: the tab label reads "Today's Reel" while the reel content
     // itself (still loading/none for this fixture) uses lowercase phrasing,
     // so exact:false would ambiguously match both.
@@ -83,7 +85,9 @@ describe('AppRoot', () => {
   });
 
   it('gives every tab a real icon instead of the missing-icon glyph', async () => {
-    render(<AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />);
+    await render(
+      <AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />,
+    );
     await waitFor(() => expect(screen.getByText("Today's Reel")).toBeTruthy());
     // Without a tabBarIcon, bottom-tabs falls back to a text glyph (U+23F7)
     // that web system fonts lack, so it renders as an empty box.
@@ -95,7 +99,9 @@ describe('AppRoot', () => {
   });
 
   it('keeps the bottom-tab label from shrinking under the icon', async () => {
-    render(<AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />);
+    await render(
+      <AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />,
+    );
     await waitFor(() => expect(screen.getByText("Today's Reel")).toBeTruthy());
     // On web the default 48px bar leaves 38px for a 28px icon wrapper plus the
     // label, so flex-shrink squeezed the label to 10px and its
@@ -109,7 +115,7 @@ describe('AppRoot', () => {
   });
 
   it('explains when the account has no device', async () => {
-    render(<AppRoot client={fakeClient(SESSION, [])} />);
+    await render(<AppRoot client={fakeClient(SESSION, [])} />);
     await waitFor(() =>
       expect(screen.getByText('No device linked to this account yet.')).toBeTruthy(),
     );

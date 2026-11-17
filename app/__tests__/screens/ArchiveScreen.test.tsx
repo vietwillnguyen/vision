@@ -10,17 +10,17 @@ const cells: HeatmapCell[] = [
 ];
 
 describe('ArchiveScreen', () => {
-  it('calls onDayPress with the date of a pressed cell', () => {
+  it('calls onDayPress with the date of a pressed cell', async () => {
     const onDayPress = jest.fn();
-    const { getByTestId } = render(<ArchiveScreen cells={cells} onDayPress={onDayPress} />);
+    const { getByTestId } = await render(<ArchiveScreen cells={cells} onDayPress={onDayPress} />);
 
-    fireEvent.press(getByTestId('heatmap-cell-2026-07-01'));
+    await fireEvent.press(getByTestId('heatmap-cell-2026-07-01'));
 
     expect(onDayPress).toHaveBeenCalledWith('2026-07-01');
   });
 
-  it('labels each cell for accessibility', () => {
-    render(
+  it('labels each cell for accessibility', async () => {
+    await render(
       <ArchiveScreen
         cells={[
           { date: '2026-07-17', hasReel: false },

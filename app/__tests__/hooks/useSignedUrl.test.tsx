@@ -17,16 +17,22 @@ function fakeStorageClient(signedUrl: string | null) {
 describe('useSignedUrl', () => {
   it('resolves a signed url for the request', async () => {
     const { client, createSignedUrl } = fakeStorageClient('https://signed/url.mp4');
+    // An awaited render flushes already-resolved promises, so the fetch is
+    // held open to observe the state before it lands.
+    const signed = { data: { signedUrl: 'https://signed/url.mp4' }, error: null };
+    let respond!: (value: typeof signed) => void;
+    createSignedUrl.mockReturnValueOnce(new Promise((resolve) => (respond = resolve)));
     const request = { bucket: 'reels' as const, path: 'dev-1/r.mp4', expiresInSec: 3600 };
-    const { result } = renderHook(() => useSignedUrl(client, request));
+    const { result } = await renderHook(() => useSignedUrl(client, request));
     expect(result.current).toBeNull();
+    respond(signed);
     await waitFor(() => expect(result.current).toBe('https://signed/url.mp4'));
     expect(createSignedUrl).toHaveBeenCalledWith('dev-1/r.mp4', 3600);
   });
 
-  it('stays null for a null request', () => {
+  it('stays null for a null request', async () => {
     const { client } = fakeStorageClient('https://signed/url.mp4');
-    const { result } = renderHook(() => useSignedUrl(client, null));
+    const { result } = await renderHook(() => useSignedUrl(client, null));
     expect(result.current).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 import { Alert } from 'react-native';
 
@@ -84,7 +84,7 @@ function fakeClient() {
 describe('RawFootageContainer', () => {
   it('renders the timeline once segments load', async () => {
     const { client } = fakeClient();
-    render(
+    await render(
       <RawFootageContainer
         client={client}
         deviceId="dev-1"
@@ -98,7 +98,7 @@ describe('RawFootageContainer', () => {
   it('long-press offers feedback options that persist user_feedback', async () => {
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     const { client, updateCalls } = fakeClient();
-    render(
+    await render(
       <RawFootageContainer
         client={client}
         deviceId="dev-1"
@@ -106,22 +106,22 @@ describe('RawFootageContainer', () => {
       />,
     );
     await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
-    fireEvent(screen.getByTestId('slot-480'), 'longPress');
+    await fireEvent(screen.getByTestId('slot-480'), 'longPress');
     expect(alertSpy).toHaveBeenCalled();
     const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
     const alwaysInclude = buttons.find((b) => b.text === 'Always include');
     expect(alwaysInclude).toBeDefined();
-    await waitFor(async () => {
-      alwaysInclude?.onPress?.();
-      expect(updateCalls).toEqual([{ values: { user_feedback: 'include' }, id: 's1' }]);
-    });
+    await act(() => alwaysInclude?.onPress?.());
+    await waitFor(() =>
+      expect(updateCalls).toEqual([{ values: { user_feedback: 'include' }, id: 's1' }]),
+    );
     alertSpy.mockRestore();
   });
 
   it('long-press Preview opens the segment preview with playback', async () => {
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     const { client } = fakeClient();
-    render(
+    await render(
       <RawFootageContainer
         client={client}
         deviceId="dev-1"
@@ -129,9 +129,9 @@ describe('RawFootageContainer', () => {
       />,
     );
     await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
-    fireEvent(screen.getByTestId('slot-480'), 'longPress');
+    await fireEvent(screen.getByTestId('slot-480'), 'longPress');
     const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
-    buttons.find((b) => b.text === 'Preview')?.onPress?.();
+    await act(() => buttons.find((b) => b.text === 'Preview')?.onPress?.());
     await waitFor(() => expect(screen.getByTestId('segment-preview')).toBeTruthy());
     alertSpy.mockRestore();
   });
@@ -140,7 +140,7 @@ describe('RawFootageContainer', () => {
     downloadDestinations.length = 0;
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     const { client } = fakeClient();
-    render(
+    await render(
       <RawFootageContainer
         client={client}
         deviceId="dev-1"
@@ -148,15 +148,15 @@ describe('RawFootageContainer', () => {
       />,
     );
     await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
-    fireEvent(screen.getByTestId('slot-480'), 'longPress');
+    await fireEvent(screen.getByTestId('slot-480'), 'longPress');
     const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
-    buttons.find((b) => b.text === 'Preview')?.onPress?.();
+    await act(() => buttons.find((b) => b.text === 'Preview')?.onPress?.());
     await waitFor(() => expect(screen.getByTestId('segment-preview')).toBeTruthy());
     await waitFor(() => expect(screen.getByTestId('video-view')).toBeTruthy());
 
-    fireEvent.press(screen.getByTestId('save-button'));
+    await fireEvent.press(screen.getByTestId('save-button'));
     await waitFor(() => expect(downloadDestinations).toHaveLength(1));
-    fireEvent.press(screen.getByTestId('save-button'));
+    await fireEvent.press(screen.getByTestId('save-button'));
     await waitFor(() => expect(downloadDestinations).toHaveLength(2));
 
     const names = downloadDestinations.map((d) => (d as { name: string }).name);

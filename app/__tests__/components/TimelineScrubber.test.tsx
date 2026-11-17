@@ -21,8 +21,8 @@ const slots: TimelineSlot[] = [
 ];
 
 describe('TimelineScrubber', () => {
-  it('renders a flag marker only for flagged slots', () => {
-    const { getByTestId, queryByTestId } = render(
+  it('renders a flag marker only for flagged slots', async () => {
+    const { getByTestId, queryByTestId } = await render(
       <TimelineScrubber slots={slots} onSlotLongPress={jest.fn()} />,
     );
 
@@ -30,20 +30,20 @@ describe('TimelineScrubber', () => {
     expect(queryByTestId('flag-0')).toBeNull();
   });
 
-  it('calls onSlotLongPress with the slot on long press', () => {
+  it('calls onSlotLongPress with the slot on long press', async () => {
     const onSlotLongPress = jest.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = await render(
       <TimelineScrubber slots={slots} onSlotLongPress={onSlotLongPress} />,
     );
 
-    fireEvent(getByTestId('slot-5'), 'longPress');
+    await fireEvent(getByTestId('slot-5'), 'longPress');
 
     expect(onSlotLongPress).toHaveBeenCalledWith(slots[1]);
   });
 
-  it('renders a thumbnail image for slots that have one', () => {
+  it('renders a thumbnail image for slots that have one', async () => {
     const daySlots = buildTimelineSlots([seg], new Date('2026-07-04T00:00:00Z'));
-    render(
+    await render(
       <TimelineScrubber
         slots={daySlots}
         thumbnails={{ 5: 'file:///thumb.jpg' }}

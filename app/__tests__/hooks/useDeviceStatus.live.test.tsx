@@ -134,7 +134,7 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
       const { error: signInError } = await client.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
 
-      const { result, unmount } = renderHook(() => useDeviceStatus(client, deviceId));
+      const { result, unmount } = await renderHook(() => useDeviceStatus(client, deviceId));
 
       await waitFor(
         () =>
@@ -182,7 +182,7 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
       } while (Date.now() < deadline);
       if (lastAssertionError) throw lastAssertionError;
 
-      unmount();
+      await unmount();
     } finally {
       // The hook's own cleanup only unsubscribes/tears down its channel
       // (RealtimeClient.removeChannel never closes the underlying socket -

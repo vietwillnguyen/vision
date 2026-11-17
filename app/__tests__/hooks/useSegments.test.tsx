@@ -14,7 +14,11 @@ const ROWS = [
   },
 ];
 
-function fakeClient(options: { updateError?: { message: string } } = {}) {
+type SelectResult = { data: typeof ROWS; error: null };
+
+function fakeClient(
+  options: { updateError?: { message: string }; selectResult?: Promise<SelectResult> } = {},
+) {
   const updateCalls: { values: Record<string, unknown>; id: string }[] = [];
   const client = {
     from: () => ({
@@ -22,7 +26,7 @@ function fakeClient(options: { updateError?: { message: string } } = {}) {
         eq: () => ({
           gte: () => ({
             lt: () => ({
-              order: () => Promise.resolve({ data: ROWS, error: null }),
+              order: () => options.selectResult ?? Promise.resolve({ data: ROWS, error: null }),
             }),
           }),
         }),
@@ -40,9 +44,15 @@ function fakeClient(options: { updateError?: { message: string } } = {}) {
 
 describe('useSegments', () => {
   it('fetches and maps segments for the day', async () => {
-    const { client } = fakeClient();
-    const { result } = renderHook(() => useSegments(client, 'dev-1', '2026-07-18T00:00:00.000Z'));
+    // An awaited render flushes already-resolved promises, so the fetch is
+    // held open to observe the state before it lands.
+    let respond!: (value: SelectResult) => void;
+    const { client } = fakeClient({ selectResult: new Promise((resolve) => (respond = resolve)) });
+    const { result } = await renderHook(() =>
+      useSegments(client, 'dev-1', '2026-07-18T00:00:00.000Z'),
+    );
     expect(result.current.state).toEqual({ kind: 'loading' });
+    respond({ data: ROWS, error: null });
     await waitFor(() => expect(result.current.state.kind).toBe('ready'));
     expect(result.current.state).toEqual({
       kind: 'ready',
@@ -61,7 +71,9 @@ describe('useSegments', () => {
 
   it('applies user feedback optimistically and persists it', async () => {
     const { client, updateCalls } = fakeClient();
-    const { result } = renderHook(() => useSegments(client, 'dev-1', '2026-07-18T00:00:00.000Z'));
+    const { result } = await renderHook(() =>
+      useSegments(client, 'dev-1', '2026-07-18T00:00:00.000Z'),
+    );
     await waitFor(() => expect(result.current.state.kind).toBe('ready'));
     await act(() => result.current.setUserFeedback('s1', 'include'));
     expect(updateCalls).toEqual([{ values: { user_feedback: 'include' }, id: 's1' }]);
@@ -72,7 +84,9 @@ describe('useSegments', () => {
 
   it('reverts the optimistic update when the write fails', async () => {
     const { client } = fakeClient({ updateError: { message: 'denied' } });
-    const { result } = renderHook(() => useSegments(client, 'dev-1', '2026-07-18T00:00:00.000Z'));
+    const { result } = await renderHook(() =>
+      useSegments(client, 'dev-1', '2026-07-18T00:00:00.000Z'),
+    );
     await waitFor(() => expect(result.current.state.kind).toBe('ready'));
     await act(() => result.current.setUserFeedback('s1', 'exclude'));
     expect(result.current.state).toMatchObject({

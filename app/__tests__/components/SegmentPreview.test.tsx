@@ -22,8 +22,8 @@ const seg: Segment = {
 };
 
 describe('SegmentPreview', () => {
-  it('renders nothing when no segment is selected', () => {
-    const { queryByTestId } = render(
+  it('renders nothing when no segment is selected', async () => {
+    const { queryByTestId } = await render(
       <SegmentPreview
         segment={null}
         videoUri={null}
@@ -35,9 +35,9 @@ describe('SegmentPreview', () => {
     expect(queryByTestId('segment-preview')).toBeNull();
   });
 
-  it('calls onSave when the save button is pressed', () => {
+  it('calls onSave when the save button is pressed', async () => {
     const onSave = jest.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = await render(
       <SegmentPreview
         segment={seg}
         videoUri={null}
@@ -46,13 +46,13 @@ describe('SegmentPreview', () => {
         onClose={jest.fn()}
       />,
     );
-    fireEvent.press(getByTestId('save-button'));
+    await fireEvent.press(getByTestId('save-button'));
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
-  it('calls onShare when the share button is pressed', () => {
+  it('calls onShare when the share button is pressed', async () => {
     const onShare = jest.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = await render(
       <SegmentPreview
         segment={seg}
         videoUri={null}
@@ -61,12 +61,12 @@ describe('SegmentPreview', () => {
         onClose={jest.fn()}
       />,
     );
-    fireEvent.press(getByTestId('share-button'));
+    await fireEvent.press(getByTestId('share-button'));
     expect(onShare).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the video player when a uri is ready', () => {
-    render(
+  it('renders the video player when a uri is ready', async () => {
+    await render(
       <SegmentPreview
         segment={seg}
         videoUri="https://signed/s1.mp4"
@@ -78,8 +78,8 @@ describe('SegmentPreview', () => {
     expect(screen.getByTestId('video-view')).toBeTruthy();
   });
 
-  it('shows a placeholder while the uri is pending', () => {
-    render(
+  it('shows a placeholder while the uri is pending', async () => {
+    await render(
       <SegmentPreview
         segment={seg}
         videoUri={null}

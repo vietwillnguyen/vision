@@ -17,13 +17,13 @@ const READY = {
 };
 
 describe('DeviceScreen', () => {
-  it('shows a loading state', () => {
-    render(<DeviceScreen state={{ kind: 'loading' }} onReonboardPress={jest.fn()} />);
+  it('shows a loading state', async () => {
+    await render(<DeviceScreen state={{ kind: 'loading' }} onReonboardPress={jest.fn()} />);
     expect(screen.getByText('Loading device status...')).toBeTruthy();
   });
 
-  it('shows an error state', () => {
-    render(
+  it('shows an error state', async () => {
+    await render(
       <DeviceScreen
         state={{ kind: 'error', message: 'network down' }}
         onReonboardPress={jest.fn()}
@@ -32,22 +32,24 @@ describe('DeviceScreen', () => {
     expect(screen.getByTestId('device-error')).toHaveTextContent('network down');
   });
 
-  it('renders status fields when ready and live, without a stale banner', () => {
-    render(<DeviceScreen state={READY} onReonboardPress={jest.fn()} />);
+  it('renders status fields when ready and live, without a stale banner', async () => {
+    await render(<DeviceScreen state={READY} onReonboardPress={jest.fn()} />);
     expect(screen.getByText('Battery: 72%')).toBeTruthy();
     expect(screen.getByText('Recording')).toBeTruthy();
     expect(screen.queryByTestId('stale-banner')).toBeNull();
   });
 
-  it('shows a stale banner when realtime is stale', () => {
-    render(<DeviceScreen state={{ ...READY, realtime: 'stale' }} onReonboardPress={jest.fn()} />);
+  it('shows a stale banner when realtime is stale', async () => {
+    await render(
+      <DeviceScreen state={{ ...READY, realtime: 'stale' }} onReonboardPress={jest.fn()} />,
+    );
     expect(screen.getByTestId('stale-banner')).toHaveTextContent(
       'Live updates disconnected - data may be stale',
     );
   });
 
-  it('labels the re-onboard button for accessibility', () => {
-    render(<DeviceScreen state={READY} onReonboardPress={jest.fn()} />);
+  it('labels the re-onboard button for accessibility', async () => {
+    await render(<DeviceScreen state={READY} onReonboardPress={jest.fn()} />);
     expect(screen.getByLabelText('Re-onboard device WiFi')).toBeTruthy();
   });
 });
