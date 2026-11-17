@@ -15,16 +15,23 @@ import pytest
 from visio_recorder import daemon
 from visio_recorder.daemon import load_config
 from visio_recorder.preflight import (
-    _DAEMON_UID,
+    _DAEMON_GROUPS,
+    _DAEMON_USER,
     _DEFAULT_DATA_DIR,
     BLOCK,
+    CAMERA_NODES,
+    LED_NODES,
+    MIC_NODES,
     WARN,
     CheckResult,
+    DaemonIdentity,
     check_audio_device,
     check_binary_on_path,
     check_camera_detected,
     check_core_freq_fixed,
+    check_daemon_user,
     check_data_dir_writable,
+    check_device_access,
     check_i2c_enabled,
     check_importable,
     check_networkmanager_running,
@@ -36,12 +43,19 @@ from visio_recorder.preflight import (
     read_env_file,
     resolve_audio_device,
     resolve_battery_source,
+    resolve_daemon_identity,
     resolve_data_dir,
     resolve_reported_data_dir,
     run_checks,
 )
 
 _OPERATOR_UID = 1000
+_DAEMON_UID = 999
+# The visio account as setup-device.sh creates it, for checks that compare the
+# caller against the daemon without asking the host's passwd or systemd.
+_DAEMON = DaemonIdentity(
+    user="visio", uid=_DAEMON_UID, groups={_DAEMON_UID: "visio"}, source="test"
+)
 _UNIT = Path(__file__).resolve().parent.parent / "systemd" / "visio-recorder.service"
 
 
@@ -167,7 +181,7 @@ def _uid(value):
 
 def test_check_data_dir_blocks_for_the_daemon_uid_when_missing(tmp_path):
     result = check_data_dir_writable(
-        path=tmp_path / "missing", getuid=lambda: _DAEMON_UID
+        path=tmp_path / "missing", getuid=lambda: _DAEMON_UID, daemon=_DAEMON
     )
 
     assert result.ok is False
@@ -184,7 +198,7 @@ def test_check_data_dir_blocks_a_non_daemon_caller_when_missing(tmp_path):
     device is fine when the daemon's own ExecStartPre will refuse to start.
     """
     result = check_data_dir_writable(
-        path=tmp_path / "missing", getuid=lambda: _OPERATOR_UID
+        path=tmp_path / "missing", getuid=lambda: _OPERATOR_UID, daemon=_DAEMON
     )
 
     assert result.ok is False
@@ -194,7 +208,7 @@ def test_check_data_dir_blocks_a_non_daemon_caller_when_missing(tmp_path):
 
 def test_check_data_dir_blocks_for_the_daemon_uid_when_unwritable(tmp_path):
     result = check_data_dir_writable(
-        path=tmp_path, getuid=lambda: _DAEMON_UID, can_write=_unwritable
+        path=tmp_path, getuid=lambda: _DAEMON_UID, can_write=_unwritable, daemon=_DAEMON
     )
 
     assert result.ok is False
@@ -204,7 +218,10 @@ def test_check_data_dir_blocks_for_the_daemon_uid_when_unwritable(tmp_path):
 
 def test_check_data_dir_only_warns_for_a_non_daemon_caller_when_unwritable(tmp_path):
     result = check_data_dir_writable(
-        path=tmp_path, getuid=lambda: _OPERATOR_UID, can_write=_unwritable
+        path=tmp_path,
+        getuid=lambda: _OPERATOR_UID,
+        can_write=_unwritable,
+        daemon=_DAEMON,
     )
 
     assert result.ok is False
@@ -219,7 +236,9 @@ def test_check_data_dir_only_warns_for_a_non_daemon_caller_when_unwritable(tmp_p
 
 def test_check_data_dir_is_ok_for_either_caller_when_writable(tmp_path):
     for uid in (_DAEMON_UID, _OPERATOR_UID):
-        result = check_data_dir_writable(path=tmp_path, getuid=_uid(uid))
+        result = check_data_dir_writable(
+            path=tmp_path, getuid=_uid(uid), daemon=_DAEMON
+        )
 
         assert result.ok is True
         assert result.severity == BLOCK
@@ -234,7 +253,9 @@ def test_the_default_can_write_seam_tracks_real_permission_bits(tmp_path):
     root_owned = tmp_path / "visio-recorder"
     root_owned.mkdir(mode=0o500)
 
-    result = check_data_dir_writable(path=root_owned, getuid=lambda: _OPERATOR_UID)
+    result = check_data_dir_writable(
+        path=root_owned, getuid=lambda: _OPERATOR_UID, daemon=_DAEMON
+    )
 
     assert result.severity == WARN
     assert "exists but is not writable" in result.detail
@@ -251,7 +272,10 @@ def test_non_daemon_caller_on_a_healthy_device_exits_zero(
     healthy = [
         CheckResult(name="ffmpeg", severity=BLOCK, ok=True, detail="found on PATH"),
         check_data_dir_writable(
-            path=tmp_path, getuid=lambda: _OPERATOR_UID, can_write=_unwritable
+            path=tmp_path,
+            getuid=lambda: _OPERATOR_UID,
+            can_write=_unwritable,
+            daemon=_DAEMON,
         ),
     ]
     monkeypatch.setattr(
@@ -271,7 +295,10 @@ def test_daemon_uid_on_the_same_device_still_blocks_startup(tmp_path, monkeypatc
     # daemon's uid and must still refuse to start.
     blocked = [
         check_data_dir_writable(
-            path=tmp_path, getuid=lambda: _DAEMON_UID, can_write=_unwritable
+            path=tmp_path,
+            getuid=lambda: _DAEMON_UID,
+            can_write=_unwritable,
+            daemon=_DAEMON,
         )
     ]
     monkeypatch.setattr(
@@ -289,7 +316,9 @@ def test_a_missing_data_dir_blocks_startup_for_a_non_daemon_caller_too(
     # The regression this pins: an unprovisioned device must not report exit 0
     # just because the operator ran the diagnostic as themselves.
     unprovisioned = [
-        check_data_dir_writable(path=tmp_path / "missing", getuid=lambda: _OPERATOR_UID)
+        check_data_dir_writable(
+            path=tmp_path / "missing", getuid=lambda: _OPERATOR_UID, daemon=_DAEMON
+        )
     ]
     monkeypatch.setattr(
         "visio_recorder.preflight.run_checks",
@@ -300,27 +329,120 @@ def test_a_missing_data_dir_blocks_startup_for_a_non_daemon_caller_too(
     assert main() == 1
 
 
-def test_daemon_uid_matches_the_systemd_unit():
-    """``_DAEMON_UID`` is only correct while the unit leaves ``User=`` unset.
-
-    Dropping the daemon off root is deliberately deferred to a separate task.
-    When it lands, this fails loudly rather than letting the daemon's own
-    data-dir gate silently degrade from BLOCK to WARN - which would let it
-    start on a device it should have refused, then crash on the first write
-    instead of failing legibly at preflight in journalctl.
-    """
-    user_directives = [
-        line.strip()
+def _unit_directive(key: str) -> list[str]:
+    return [
+        line.strip().split("=", 1)[1]
         for line in _UNIT.read_text().splitlines()
-        if line.strip().startswith("User=")
+        if line.strip().startswith(f"{key}=")
     ]
 
-    assert user_directives == [], (
-        f"{_UNIT.name} now sets {user_directives}; update preflight._DAEMON_UID "
-        "to that account's uid in the same change, or the daemon's data-dir "
-        "gate degrades to WARN"
+
+def test_the_daemon_user_matches_the_systemd_unit():
+    """The packaged defaults are what an unprovisioned or CI run reports.
+
+    Once the unit is installed its own values win, but these must still agree
+    with the unit file, or a fresh device's preflight checks the wrong account.
+    """
+    assert _unit_directive("User") == [_DAEMON_USER]
+    assert _unit_directive("Group") == [_DAEMON_USER]
+
+
+def test_the_daemon_groups_match_the_units_supplementary_groups():
+    assert [g.split() for g in _unit_directive("SupplementaryGroups")] == [
+        list(_DAEMON_GROUPS)
+    ]
+
+
+class _Pw:
+    def __init__(self, name, uid, gid):
+        self.pw_name, self.pw_uid, self.pw_gid = name, uid, gid
+
+
+class _Gr:
+    def __init__(self, name, gid, members=()):
+        self.gr_name, self.gr_gid, self.gr_mem = name, gid, list(members)
+
+
+_HOST_GROUPS = [
+    _Gr("visio", 999),
+    _Gr("video", 44, ["visio", "pi"]),
+    _Gr("gpio", 997, ["pi"]),
+    _Gr("spi", 996, ["pi"]),
+    _Gr("i2c", 995, ["pi"]),
+    _Gr("audio", 29, ["pi"]),
+    _Gr("netdev", 108, ["pi"]),
+]
+
+
+def _getpwnam(accounts):
+    def lookup(name):
+        if name not in accounts:
+            raise KeyError(name)
+        return accounts[name]
+
+    return lookup
+
+
+def test_the_installed_unit_decides_who_the_daemon_is():
+    identity = resolve_daemon_identity(
+        show=lambda: {
+            "LoadState": "loaded",
+            "User": "visio",
+            "SupplementaryGroups": "gpio spi",
+        },
+        getpwnam=_getpwnam({"visio": _Pw("visio", 999, 999)}),
+        getgrall=lambda: _HOST_GROUPS,
     )
-    assert _DAEMON_UID == 0
+
+    assert identity.uid == 999
+    # The account's primary group and its own membership (video), plus what
+    # the unit adds (gpio, spi) - and nothing the unit does not grant.
+    assert sorted(identity.groups.values()) == ["gpio", "spi", "video", "visio"]
+    assert "installed" in identity.source
+
+
+def test_a_rollback_drop_in_to_root_is_reported_as_root():
+    # `systemctl show` prints an empty User= for a unit that runs as root.
+    identity = resolve_daemon_identity(
+        show=lambda: {"LoadState": "loaded", "User": "", "SupplementaryGroups": ""},
+        getpwnam=_getpwnam({"root": _Pw("root", 0, 0)}),
+        getgrall=lambda: [_Gr("root", 0)],
+    )
+
+    assert (identity.user, identity.uid) == ("root", 0)
+
+
+def test_an_uninstalled_unit_falls_back_to_the_packaged_defaults():
+    for show in (lambda: None, lambda: {"LoadState": "not-found", "User": ""}):
+        identity = resolve_daemon_identity(
+            show=show,
+            getpwnam=_getpwnam({"visio": _Pw("visio", 999, 999)}),
+            getgrall=lambda: _HOST_GROUPS,
+        )
+
+        assert identity.user == _DAEMON_USER
+        assert set(identity.groups.values()) == {"visio", *_DAEMON_GROUPS}
+
+
+def test_a_missing_daemon_account_blocks_and_names_the_fix():
+    identity = resolve_daemon_identity(
+        show=lambda: None, getpwnam=_getpwnam({}), getgrall=lambda: _HOST_GROUPS
+    )
+
+    result = check_daemon_user(identity)
+
+    assert identity.uid is None
+    assert result.ok is False and result.severity == BLOCK
+    assert "'visio'" in result.detail and "setup-device.sh" in result.detail
+
+
+def test_an_existing_daemon_account_lists_its_groups():
+    result = check_daemon_user(
+        DaemonIdentity("visio", 999, {999: "visio", 44: "video"}, "test")
+    )
+
+    assert result.ok is True
+    assert "uid 999" in result.detail and "video visio" in result.detail
 
 
 def test_check_i2c_enabled_ok_when_device_exists(tmp_path):
@@ -683,6 +805,7 @@ def test_the_caveat_reaches_the_report_without_changing_any_severity(tmp_path):
         getuid=lambda: _OPERATOR_UID,
         can_write=_unwritable,
         caveat=caveat,
+        daemon=_DAEMON,
     )
 
     for result in (writable, missing, unwritable):
@@ -851,6 +974,7 @@ def test_a_missing_spi_device_blocks_every_caller_and_names_the_fix(tmp_path):
             path=tmp_path / "spidev0.0",
             getuid=_uid(uid),
             open_device=_open_raising(FileNotFoundError(2, "No such file")),
+            daemon=_DAEMON,
         )
 
         assert result.ok is False
@@ -864,6 +988,7 @@ def test_an_spi_device_the_daemon_cannot_open_blocks(tmp_path):
         path=tmp_path / "spidev0.0",
         getuid=lambda: _DAEMON_UID,
         open_device=_open_raising(PermissionError(13, "Permission denied")),
+        daemon=_DAEMON,
     )
 
     assert result.ok is False
@@ -875,6 +1000,7 @@ def test_an_operator_outside_the_spi_group_only_gets_a_warning(tmp_path):
         path=tmp_path / "spidev0.0",
         getuid=lambda: _OPERATOR_UID,
         open_device=_open_raising(PermissionError(13, "Permission denied")),
+        daemon=_DAEMON,
     )
 
     assert result.ok is False
@@ -1067,3 +1193,164 @@ def test_the_real_probe_keeps_ffmpegs_stderr_out_of_the_report(capfd):
     captured = capfd.readouterr()
     assert captured.err == ""
     assert captured.out == ""
+
+
+# --------------------------------------------------------------------------
+# Device access for the daemon's user. These answer "can visio open it" for
+# every caller, so an operator over SSH - or root under sudo, who can open
+# anything - still learns what the daemon will hit, by node and by group.
+# --------------------------------------------------------------------------
+
+_GIDS = {0: "root", 44: "video", 29: "audio", 996: "spi", 997: "gpio", 999: "visio"}
+
+
+def _node(mode: int, uid: int = 0, gid: int = 44, kind: int = 0o020000):
+    return os.stat_result((kind | mode, 1, 1, 1, uid, gid, 0, 0, 0, 0))
+
+
+def _access_check(requirement, nodes, daemon, getuid=lambda: _OPERATOR_UID, **seams):
+    return check_device_access(
+        requirement,
+        daemon,
+        getuid=getuid,
+        glob=lambda pattern: [p for p in nodes if Path(p).match(pattern)],
+        stat_node=lambda path: nodes[path],
+        group_name=lambda gid: _GIDS.get(gid, str(gid)),
+        owner_name=lambda uid: "root" if uid == 0 else str(uid),
+        **seams,
+    )
+
+
+_CAMERA = {
+    "/dev/media0": _node(0o660),
+    "/dev/video0": _node(0o660),
+    "/dev/v4l-subdev0": _node(0o660),
+    "/dev/dma_heap/linux,cma": _node(0o660),
+    "/dev/dma_heap/system": _node(0o660),
+}
+_VISIO_IN_VIDEO = DaemonIdentity("visio", 999, {999: "visio", 44: "video"}, "test")
+_VISIO_ALONE = DaemonIdentity("visio", 999, {999: "visio"}, "test")
+
+
+def test_the_daemon_in_the_video_group_can_open_the_camera_nodes():
+    result = _access_check(CAMERA_NODES, _CAMERA, _VISIO_IN_VIDEO)
+
+    assert result.ok is True
+    assert "5 node(s)" in result.detail
+
+
+def test_a_daemon_missing_the_video_group_is_blocked_by_name():
+    result = _access_check(CAMERA_NODES, _CAMERA, _VISIO_ALONE)
+
+    assert result.ok is False and result.severity == BLOCK
+    assert "/dev/dma_heap/system (root:video 0660)" in result.detail
+    assert "visio is not in the video group" in result.detail
+    assert "SupplementaryGroups=" in result.detail
+
+
+def test_a_node_owned_by_the_wrong_group_points_at_the_udev_rules():
+    # The account is right; the node is not what Raspberry Pi OS's rules make.
+    nodes = {"/dev/spidev0.0": _node(0o600, gid=0)}
+    daemon = DaemonIdentity("visio", 999, {999: "visio", 996: "spi"}, "test")
+
+    result = _access_check(LED_NODES, nodes, daemon)
+
+    assert result.ok is False and result.severity == BLOCK
+    assert "/dev/spidev0.0 (root:root 0600)" in result.detail
+    assert "expected group spi" in result.detail
+    assert "99-com.rules" in result.detail
+
+
+def test_root_under_sudo_still_gets_the_daemons_answer():
+    # Root can open every node itself; the report must not pass on its behalf.
+    result = _access_check(CAMERA_NODES, _CAMERA, _VISIO_ALONE, getuid=lambda: 0)
+
+    assert result.ok is False
+
+
+def test_as_the_daemon_itself_the_kernel_is_asked_with_the_real_groups():
+    asked = []
+
+    def access(path):
+        asked.append(path)
+        return path != "/dev/video0"
+
+    result = _access_check(
+        CAMERA_NODES,
+        _CAMERA,
+        _VISIO_IN_VIDEO,
+        getuid=lambda: 999,
+        getgroups=lambda: [999],
+        access=access,
+    )
+
+    assert sorted(asked) == sorted(_CAMERA)
+    assert result.ok is False
+    # The process's own groups, not the account's: here video is missing.
+    assert "visio is not in the video group" in result.detail
+    assert "this process" in result.detail
+
+
+def test_directories_under_a_pattern_are_not_nodes():
+    nodes = {
+        "/dev/snd/controlC0": _node(0o660, gid=29),
+        "/dev/snd/by-path": _node(0o755, kind=0o040000),
+    }
+    daemon = DaemonIdentity("visio", 999, {999: "visio", 29: "audio"}, "test")
+
+    result = _access_check(MIC_NODES, nodes, daemon)
+
+    assert result.ok is True and "1 node(s)" in result.detail
+    assert result.severity == WARN
+
+
+def test_no_nodes_at_all_is_reported_rather_than_passed():
+    result = _access_check(LED_NODES, {}, _VISIO_IN_VIDEO)
+
+    assert result.ok is False and result.severity == BLOCK
+    assert "/dev/spidev0.0" in result.detail
+
+
+def test_a_missing_account_cannot_be_checked_and_says_so():
+    missing = DaemonIdentity("visio", None, {}, "test")
+
+    result = _access_check(CAMERA_NODES, _CAMERA, missing)
+
+    assert result.ok is False and "does not exist" in result.detail
+
+
+def test_the_owner_bits_apply_to_a_node_the_daemon_owns():
+    nodes = {"/dev/spidev0.0": _node(0o600, uid=999, gid=0)}
+
+    assert _access_check(LED_NODES, nodes, _VISIO_ALONE).ok is True
+
+
+def test_the_default_seams_read_real_permission_bits(tmp_path):
+    # A regular file standing in for a node: the stat-based path for another
+    # account, against real st_mode/st_gid values.
+    node = tmp_path / "spidev0.0"
+    node.write_bytes(b"")
+    node.chmod(0o660)
+    gid = node.stat().st_gid
+    requirement = LED_NODES.__class__(
+        name="spi_access", patterns=(str(node),), group="spi", severity=BLOCK,
+        needed_for="the status LED",
+    )  # fmt: skip
+    member = DaemonIdentity("visio", 64999, {gid: "spi"}, "test")
+    outsider = DaemonIdentity("visio", 64999, {64998: "visio"}, "test")
+
+    assert check_device_access(requirement, member, getuid=lambda: -1).ok is True
+    assert check_device_access(requirement, outsider, getuid=lambda: -1).ok is False
+
+
+def test_run_checks_covers_every_node_class_the_configuration_uses(monkeypatch):
+    from visio_recorder import preflight
+
+    monkeypatch.setattr(preflight, "probe_audio_device", lambda runner, audio: False)
+
+    with_all = {r.name for r in run_checks("pijuice", daemon=_DAEMON)}
+    minimal = {r.name for r in run_checks("none", audio_device=None, daemon=_DAEMON)}
+
+    assert {"daemon_user", "camera_access", "spi_access", "gpio_access"} <= minimal
+    assert {"audio_access", "i2c_access"} <= with_all
+    assert not {"audio_access", "i2c_access"} & minimal

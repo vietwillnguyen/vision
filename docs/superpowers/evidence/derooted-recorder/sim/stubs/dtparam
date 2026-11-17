@@ -1,0 +1,4 @@
+#!/bin/sh
+# raspi-config's do_spi and do_i2c apply the parameter to the running kernel's
+# device tree with dtparam; a container has no device tree to apply it to.
+echo "STUB dtparam $*" >> /var/log/visio-sim-stubs.log

@@ -46,13 +46,21 @@ def parse_onboarding_qr_payload(payload: str) -> OnboardingPayload:
     return OnboardingPayload(**fields)
 
 
-def _validate_credentials(ssid: str, password: str) -> None:
+def validate_credentials(ssid: str, password: str) -> None:
     for name, value in (("ssid", ssid), ("password", password)):
         if any(ch in value for ch in _UNSAFE_CHARS):
             raise ValueError(
                 f"{name} contains an unsafe character (quote, newline, or backslash); "
                 "rejecting rather than attempting to escape it for wpa_supplicant.conf"
             )
+    if "\t" in password:
+        # nmcli's connection editor, the only way onboarding can hand
+        # NetworkManager the key off argv, reads it with readline, which binds
+        # TAB to completion and drops it from the stored key.
+        raise ValueError(
+            "password contains a tab, which is not a printable-ASCII WPA "
+            "passphrase character and cannot be carried to NetworkManager"
+        )
     if not _PSK_MIN_LENGTH <= len(password) <= _PSK_MAX_LENGTH:
         raise ValueError(
             f"password length {len(password)} is outside the 8-63 character range "
@@ -61,7 +69,7 @@ def _validate_credentials(ssid: str, password: str) -> None:
 
 
 def render_wpa_supplicant(ssid: str, password: str) -> str:
-    _validate_credentials(ssid, password)
+    validate_credentials(ssid, password)
     return (
         "country=US\n"
         "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
@@ -85,30 +93,6 @@ def _write_private_text(path: Path, content: str) -> None:
 
 def write_wpa_supplicant(path: Path, ssid: str, password: str) -> None:
     _write_private_text(path, render_wpa_supplicant(ssid, password))
-
-
-def render_nm_keyfile(ssid: str, password: str) -> str:
-    _validate_credentials(ssid, password)
-    return (
-        "[connection]\n"
-        "id=visio\n"
-        "type=wifi\n"
-        "autoconnect=true\n\n"
-        "[wifi]\n"
-        "mode=infrastructure\n"
-        f"ssid={ssid}\n\n"
-        "[wifi-security]\n"
-        "key-mgmt=wpa-psk\n"
-        f"psk={password}\n\n"
-        "[ipv4]\n"
-        "method=auto\n\n"
-        "[ipv6]\n"
-        "method=auto\n"
-    )
-
-
-def write_nm_keyfile(path: Path, ssid: str, password: str) -> None:
-    _write_private_text(path, render_nm_keyfile(ssid, password))
 
 
 def write_session_credentials(

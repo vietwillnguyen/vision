@@ -995,11 +995,11 @@ git commit -m "docs: point firmware prerequisites at setup-device.sh and the pro
 
 **Files:** none (verification only - no code changes).
 
-**Verification artifact:** a Pi Zero 2W running `visio-recorder` under the new root/preflight/battery-source setup, confirmed via SSH, on a USB power bank.
+**Verification artifact:** a Pi Zero 2W running `visio-recorder` as the unprivileged `visio` user under the preflight/battery-source setup, confirmed via SSH, on a USB power bank.
 
 This task requires the physical device. Steps needing direct visual/physical confirmation (LED color, camera framing, button feel) are marked **[human]**; the rest are plain SSH commands either the human or an agent with SSH access to the device can run and report output for.
 
-Updated 2026-11-17 for the LED SPI rewire (#85), the I2S microphone (#87) and the 50 MB segment contract (#86), which all landed on `main` after this checklist was written.
+Updated 2026-11-17 for the LED SPI rewire (#85), the I2S microphone (#87) and the 50 MB segment contract (#86), which all landed on `main` after this checklist was written, and for the de-rooted recorder (the daemon runs as `visio`; Step 11 checks it).
 
 - [ ] **Step 0: [human] Rewire the LED and wire the microphone (power off first)**
 
@@ -1060,7 +1060,7 @@ Expected: an opening `[INFO] install:` line naming `/opt/visio-recorder/firmware
 With the microphone wired, `audio` is `[OK]`; without it, `[WARN] audio: ...` naming what is missing, which is expected and does not change the exit code.
 An unprivileged run cannot read the env file, so it also prints the `pijuice`/`i2c` warnings and a `data_dir` caveat (both described as expected); `sudo visio-preflight` should show neither. If anything shows `[BLOCK]`, stop here and fix it before proceeding - that's exactly the failure this task exists to catch before it becomes an opaque daemon crash.
 
-- [ ] **Step 5: Start the daemon and confirm it runs as root with no permission errors**
+- [ ] **Step 5: Start the daemon and confirm it runs as `visio` with no permission errors**
 
 ```bash
 sudo systemctl start visio-recorder
@@ -1068,7 +1068,7 @@ sudo systemctl status visio-recorder
 sudo journalctl -u visio-recorder -f
 ```
 
-Expected: `Active: active (running)`, no `PermissionError` writing the NM keyfile, no LED driver or `/dev/spidev0.0` errors, and the startup log line `recording 1280x720@30 fps at 4000000 bps in 60000 ms segments (upload limit 52428800 bytes)`.
+Expected: `Active: active (running)`, `ps -o user= -C rpicam-vid` prints `visio`, no `PermissionError`, `Not authorized` or `/dev/spidev0.0` errors, and the startup log line `recording 1280x720@30 fps at 4000000 bps in 60000 ms segments (upload limit 52428800 bytes)`.
 With the microphone wired there is no `ALSA capture device 'visio_mic' did not open` warning; without it that warning appears once and recording continues video only.
 
 - [ ] **Step 5a: [human] Confirm every LED colour on the SPI wiring**
@@ -1088,7 +1088,7 @@ Expected: `test.wav` plays back speech at an audible level (an unwired I2S bus s
 
 - [ ] **Step 6: [human] Confirm the QR onboarding flow end to end**
 
-Generate an onboarding QR (WiFi SSID/password + Supabase session tokens per `wifi_onboard.py`'s payload format) and present it to the camera. Confirm: the LED shows the onboarding state, `nmcli connection reload && nmcli connection up visio` succeeds, and the Pi comes up on the target WiFi network.
+Generate an onboarding QR (WiFi SSID/password + Supabase session tokens per `wifi_onboard.py`'s payload format) and present it to the camera. Confirm: the LED shows the onboarding state, the journal has no `NetworkManager did not store the onboarded network` error, `nmcli -f NAME,DEVICE connection show --active` lists `visio` on `wlan0`, and the Pi comes up on the target WiFi network (the daemon creates the profile with `nmcli connection add` and brings it up as `visio`; Step 11 checks the profile).
 
 - [ ] **Step 7: [human] Confirm the flag button and LED**
 
@@ -1115,8 +1115,55 @@ Expected: no re-onboarding (session already persisted), no re-registration (devi
 
 - [ ] **Step 10: Confirm power-loss resilience**
 
-**[human]** Physically disconnect the USB power bank mid-recording (not a clean `systemctl stop`), then reconnect. Confirm the Pi boots cleanly and the daemon starts without a corrupted `session.json` or NM keyfile blocking the next boot.
+**[human]** Physically disconnect the USB power bank mid-recording (not a clean `systemctl stop`), then reconnect. Confirm the Pi boots cleanly and the daemon starts without a corrupted `session.json` or `visio` connection profile blocking the next boot.
 
-- [ ] **Step 11: Record the outcome**
+- [ ] **Step 11: De-root - confirm everything above ran as `visio`**
+
+The unit runs the daemon as the `visio` system user (provisioning spec, "De-rooted recorder").
+The simulation covered the account, the files, preflight and `nmcli` against real NetworkManager and polkit, but not real device nodes or the sandboxed unit, so check each on the Pi.
+Run with the daemon started (Step 5) and the microphone wired if it is.
+
+```bash
+# Who runs what: every line must say visio.
+systemctl show visio-recorder -p User -p Group -p SupplementaryGroups
+ps -o user=,pid=,args= -C python3 | grep visio_recorder
+ps -o user= -C rpicam-vid
+id visio
+
+# The device nodes and their udev ownership: root video / spi / gpio / i2c / audio, mode crw-rw----.
+ls -l /dev/video* /dev/media* /dev/v4l-subdev* /dev/dma_heap/* /dev/spidev0.0 /dev/gpiochip* /dev/i2c-1 /dev/snd/*
+
+# Preflight as the daemon ran it (the unit's ExecStartPre, inside the sandbox), and as you:
+# daemon_user and every *_access line [OK].
+sudo journalctl -u visio-recorder -b -o cat | grep -E 'daemon_user|_access|data_dir' | tail -8
+visio-preflight | grep -E 'daemon_user|_access'
+
+# Files: env root:visio 0640; data dir visio:visio 0750 and everything in it visio's.
+stat -c '%n %U:%G %a' /etc/visio-recorder.env /var/lib/visio-recorder
+sudo find /var/lib/visio-recorder ! -user visio
+ls -l /etc/polkit-1/rules.d/50-visio-recorder.rules
+
+# WiFi: the profile NetworkManager wrote for visio, root-owned 0600, and active on wlan0.
+sudo ls -l /etc/NetworkManager/system-connections/
+nmcli -f NAME,TYPE,DEVICE connection show --active
+
+# Uploads and the journal: no permission errors of any kind since the start.
+sudo journalctl -u visio-recorder -b | grep -iE 'permission denied|eacces|erofs|not authorized|PinFactoryFallback|Traceback' || echo clean
+sudo journalctl -u visio-recorder -b | grep -i upload | tail -5
+```
+
+Expected:
+- `User=visio`, `Group=visio`, `SupplementaryGroups=video gpio i2c spi audio`; the daemon and `rpicam-vid` both run as `visio`.
+- Every node listed is `root` plus its group (`video`, `spi`, `gpio`, `i2c`, `audio`) with `crw-rw----`; anything else means the udev rules differ from those the spec cites, and the `*_access` line names it.
+- Both preflight runs show `[OK] daemon_user` and `[OK]` for `camera_access`, `spi_access`, `gpio_access` and, with the microphone, `audio_access`.
+- `find` prints nothing; the keyfile `visio.nmconnection` is `root root -rw-------`.
+- **[human]** The LED colours of Step 5a, a flag press of Step 7 and an upload of Step 8 all happened in this run; `arecord` of Step 5b as `visio` too: `sudo -u visio arecord -D visio_mic -f S16_LE -r 48000 -c 1 -d 5 /tmp/visio.wav` (stop the daemon first).
+- The journal grep prints `clean`, and the upload lines show segments reaching Storage.
+- Re-onboarding as `visio`: `sudo systemctl stop visio-recorder; sudo -u visio mv /var/lib/visio-recorder/session.json /var/lib/visio-recorder/session.json.bak; sudo systemctl start visio-recorder`, present a QR for a second network, and confirm `nmcli -f NAME,DEVICE connection show --active` shows `visio` on the new SSID (`nmcli -g 802-11-wireless.ssid connection show visio`); then restore the backup the same way and restart.
+- PiJuice, once fitted: with `VISIO_BATTERY_SOURCE=pijuice`, `[OK] i2c_access` and no I2C error in the journal.
+
+Rollback, if any of this fails and the fix is not obvious: the one-line drop-in in the spec's "Migration and rollback" runs the daemon as root again without touching anything else; re-run this step after removing it.
+
+- [ ] **Step 12: Record the outcome**
 
 If every step above passes, this plan is fully verified end to end. If anything fails, file it as a GitHub issue against the `vision` repo referencing this plan and the specific step, rather than patching ad hoc - the fix should go through its own TDD cycle like everything else in this codebase.

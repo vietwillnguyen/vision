@@ -1,0 +1,9 @@
+#!/bin/sh
+# Not a stub: records the argv the real nmcli was called with, then runs it.
+# Onboarding hands NetworkManager the WiFi pre-shared key on nmcli's stdin
+# precisely so it stays out of this log - /proc/<pid>/cmdline is what the log
+# stands in for, and it is readable by every local user for the life of the
+# call. run.sh creates the log 0666 before starting anything, because the
+# daemon's calls run as the unprivileged visio user.
+echo "nmcli $*" >> /var/log/visio-sim-nmcli-argv.log
+exec /usr/bin/nmcli "$@"

@@ -12,6 +12,25 @@ SYSTEMD_UNIT_DST="/etc/systemd/system/visio-recorder.service"
 BIN_DIR="/usr/local/bin"
 PREFLIGHT_BIN="visio-preflight"
 
+# The unprivileged system account the unit runs the daemon as (User=visio),
+# and the groups Raspberry Pi OS's udev rules give the devices it opens. Both
+# are pinned to firmware/systemd/visio-recorder.service by tests; the unit
+# also grants the groups via SupplementaryGroups=, and the account carries
+# them so `sudo -u visio` diagnostics see the same access the daemon does.
+SERVICE_USER="visio"
+SERVICE_GROUP="visio"
+SERVICE_GROUPS=(video gpio i2c spi audio)
+# Lets visio add, modify and bring up the onboarded NetworkManager connection
+# without a login session (see the file's own comment).
+POLKIT_RULE_SRC="firmware/polkit/50-visio-recorder.rules"
+POLKIT_RULE_DST="/etc/polkit-1/rules.d/50-visio-recorder.rules"
+# Drop-ins this script owns, and the rollback one it must never touch: an
+# operator who sets User=root there (see the provisioning spec's "De-rooted
+# recorder" section) has decided the daemon runs as root until they remove it.
+UNIT_DROPIN_DIR="/etc/systemd/system/visio-recorder.service.d"
+DATA_DIR_DROPIN="${UNIT_DROPIN_DIR}/10-visio-data-dir.conf"
+ROLLBACK_DROPIN="${UNIT_DROPIN_DIR}/90-run-as-root.conf"
+
 # ${VENV_DIR}/bin/python3 is the interpreter behind both ${PREFLIGHT_BIN} and
 # the systemd unit's ExecStart/ExecStartPre, and the hardware libraries they
 # import - gpiozero, spidev, pijuice - live outside this project (see
@@ -59,6 +78,8 @@ config_txt_changed=false
 config_txt_failed=false
 interfaces_failed=false
 data_dir_failed=false
+service_user_failed=false
+unit_changed=false
 
 log() {
   echo "[setup-device] $*"
@@ -224,8 +245,10 @@ apt-get update -y
 # supply them should fail here rather than hand back a device whose daemon
 # never starts. Debian ships both (spidev prebuilt, so nothing compiles on the
 # device). alsa-utils provides arecord for checking the I2S microphone by hand.
+# polkitd evaluates the rule that lets the unprivileged daemon onboard WiFi
+# through NetworkManager; without it every non-root nmcli change is refused.
 apt-get install -y rpicam-apps zbar-tools ffmpeg network-manager git \
-  python3-gpiozero python3-spidev alsa-utils
+  python3-gpiozero python3-spidev alsa-utils polkitd
 
 # Whether this release's index offers a package at all. Probing beats
 # swallowing an install's exit code: a genuine failure (dependency conflict, no
@@ -585,8 +608,75 @@ install_alsa_config() {
   log "Installed ${dst} from ${src} (defines the visio_mic capture device)"
 }
 
-log "Step 6/10: systemd and ALSA"
-cp "${INSTALL_DIR}/${SYSTEMD_UNIT_SRC}" "${SYSTEMD_UNIT_DST}"
+# The daemon's account: a system user with no login shell, whose home is the
+# default data dir, in every group whose devices it opens. Creates whatever is
+# missing and leaves the rest alone, so a device provisioned when the daemon
+# ran as root is migrated by the same pass that keeps a current one current.
+# A group Raspberry Pi OS normally ships but this image lacks is created too:
+# the unit names it in SupplementaryGroups=, and systemd refuses to start a
+# unit naming a group that does not exist (216/GROUP) - before preflight could
+# explain anything. Preflight's *_access lines then say which nodes it does
+# not own. Never aborts: the summary reports a failure.
+ensure_service_user() {
+  local group missing=()
+  for group in "${SERVICE_GROUPS[@]}"; do
+    if ! getent group "${group}" >/dev/null; then
+      if groupadd --system "${group}"; then
+        log "Created missing system group ${group} - Raspberry Pi OS images normally ship it, so check its udev rules give it the device nodes preflight names"
+      else
+        log "ERROR: cannot create the system group ${group}"
+        return 1
+      fi
+    fi
+  done
+  if ! getent passwd "${SERVICE_USER}" >/dev/null; then
+    if ! useradd --system --user-group --home-dir "${DATA_DIR}" --no-create-home \
+      --shell /usr/sbin/nologin --comment "visio-recorder daemon" "${SERVICE_USER}"; then
+      log "ERROR: cannot create the ${SERVICE_USER} system user"
+      return 1
+    fi
+    log "Created system user ${SERVICE_USER}"
+  fi
+  local current
+  current=" $(id -nG "${SERVICE_USER}") "
+  for group in "${SERVICE_GROUPS[@]}"; do
+    [[ "${current}" == *" ${group} "* ]] || missing+=("${group}")
+  done
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    log "${SERVICE_USER} already in ${SERVICE_GROUPS[*]}"
+    return 0
+  fi
+  local joined
+  joined="$(IFS=,; printf '%s' "${missing[*]}")"
+  if ! usermod --append --groups "${joined}" "${SERVICE_USER}"; then
+    log "ERROR: cannot add ${SERVICE_USER} to ${missing[*]}"
+    return 1
+  fi
+  log "Added ${SERVICE_USER} to ${missing[*]}"
+}
+
+# Install ${1} as ${2} with mode ${3} (root-owned, since this runs as root),
+# only when it differs, recording in ${installed_changed} whether it did.
+install_managed_file() {
+  local src="$1" dst="$2" mode="$3"
+  installed_changed=false
+  if [[ -f "${dst}" ]] && cmp -s "${src}" "${dst}"; then
+    log "${dst} already installed - no change"
+    return 0
+  fi
+  mkdir -p "$(dirname "${dst}")"
+  install -m "${mode}" "${src}" "${dst}"
+  installed_changed=true
+  log "Installed ${dst}"
+}
+
+log "Step 6/10: service user, systemd, polkit and ALSA"
+if ! ensure_service_user; then
+  service_user_failed=true
+fi
+install_managed_file "${INSTALL_DIR}/${SYSTEMD_UNIT_SRC}" "${SYSTEMD_UNIT_DST}" 0644
+unit_changed="${installed_changed}"
+install_managed_file "${INSTALL_DIR}/${POLKIT_RULE_SRC}" "${POLKIT_RULE_DST}" 0644
 systemctl daemon-reload
 systemctl enable visio-recorder
 # The microphone's PCM. Installed whether or not a microphone is wired: the
@@ -620,6 +710,27 @@ env_file_value() {
   printf '%s\n' "${value}"
 }
 
+# Secret, but the daemon's to read: root:visio 0640 (root-owned because this
+# script, running as root, writes it). systemd reads an
+# EnvironmentFile= as root before dropping privileges, so the daemon does not
+# strictly need the group bit, but preflight reads the file itself to find the
+# configured data dir, audio device and battery source, and it runs as visio in
+# ExecStartPre. Applied to an existing file too, which migrates a device whose
+# file is still the root-only 0600 of the root daemon.
+secure_env_file() {
+  if ! getent group "${SERVICE_GROUP}" >/dev/null; then
+    chmod 600 "${ENV_FILE}"
+    log "WARNING: no ${SERVICE_GROUP} group, so ${ENV_FILE} stays owner-only 0600 - see the step 6 error"
+    return 0
+  fi
+  if [[ "$(stat -c '%G %a' "${ENV_FILE}")" == "${SERVICE_GROUP} 640" ]]; then
+    return 0
+  fi
+  chgrp "${SERVICE_GROUP}" "${ENV_FILE}"
+  chmod 640 "${ENV_FILE}"
+  log "${ENV_FILE} is now group ${SERVICE_GROUP}, mode 0640"
+}
+
 log "Step 7/10: env file"
 if [[ ! -f "${ENV_FILE}" ]]; then
   cat > "${ENV_FILE}" <<'EOF'
@@ -647,8 +758,8 @@ VISIO_DEV_SHELL=1
 # creates whatever is set here, and the daemon reads it from this file through
 # the unit's EnvironmentFile=, so those two always agree.
 #
-# visio-preflight reads it too, but only when it can: this file is mode 600
-# root-owned, so a plain SSH user cannot see it. An unprivileged run therefore
+# visio-preflight reads it too, but only when it can: this file is mode 0640
+# root:visio, so a plain SSH user cannot see it. An unprivileged run therefore
 # checks the default below and says so on its data_dir line instead of
 # claiming the configured path was verified. Run it under sudo to check the
 # configured one.
@@ -674,7 +785,7 @@ VISIO_DEV_SHELL=1
 # VISIO_AUDIO_DEVICE=visio_mic
 # VISIO_AUDIO_BITRATE=64000
 EOF
-  chmod 600 "${ENV_FILE}"
+  secure_env_file
   log "Wrote template ${ENV_FILE} - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script"
   if [[ "${reboot_needed}" == "true" ]]; then
     log "REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or ${CONFIG_TXT}. The re-run reports it again."
@@ -697,6 +808,7 @@ else
     exit 1
   fi
   log "${ENV_FILE} already configured"
+  secure_env_file
 fi
 
 log "Step 8/10: developer shell"
@@ -1004,6 +1116,56 @@ BASHRC_BODY
   fi
 fi
 
+# The data dir is the daemon's: owned by ${SERVICE_USER}, mode 0750, holding
+# recorded video, the session tokens and the upload queue. Re-owned recursively
+# whenever anything in it has another owner - a device provisioned while the
+# daemon ran as root, or files a root rollback wrote into a non-default dir
+# that StateDirectory= never re-owns.
+own_data_dir() {
+  local dir="$1"
+  if ! getent passwd "${SERVICE_USER}" >/dev/null; then
+    log "ERROR: no ${SERVICE_USER} user to own ${dir} - see the step 6 error"
+    return 1
+  fi
+  if [[ -n "$(find "${dir}" \( ! -user "${SERVICE_USER}" -o ! -group "${SERVICE_GROUP}" \) -print -quit)" ]]; then
+    chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${dir}" || return 1
+    log "${dir} (and everything in it) now owned by ${SERVICE_USER}"
+  fi
+  if [[ "$(stat -c '%a' "${dir}")" != "750" ]]; then
+    chmod 750 "${dir}" || return 1
+    log "${dir} is now mode 0750"
+  fi
+}
+
+# ProtectSystem=strict leaves only the unit's StateDirectory= (the default data
+# dir) writable, so a configured VISIO_DATA_DIR elsewhere needs its own
+# ReadWritePaths=. Written for a non-default path, removed for the default one,
+# rewritten only when it changes.
+write_data_dir_dropin() {
+  local dir="$1" want
+  if [[ "${dir}" == "${DATA_DIR}" ]]; then
+    if [[ -e "${DATA_DIR_DROPIN}" ]]; then
+      rm -f "${DATA_DIR_DROPIN}" && systemctl daemon-reload
+      unit_changed=true
+      log "Removed ${DATA_DIR_DROPIN}: the data dir is the default again"
+    fi
+    return 0
+  fi
+  want="# Managed by visio setup-device.sh - VISIO_DATA_DIR is not the default.
+[Service]
+ReadWritePaths=${dir}"
+  if [[ -f "${DATA_DIR_DROPIN}" && "$(cat "${DATA_DIR_DROPIN}")" == "${want}" ]]; then
+    return 0
+  fi
+  if ! mkdir -p "${UNIT_DROPIN_DIR}" || ! printf '%s\n' "${want}" > "${DATA_DIR_DROPIN}"; then
+    log "ERROR: cannot write ${DATA_DIR_DROPIN}, so the hardened unit cannot write to ${dir}"
+    return 1
+  fi
+  systemctl daemon-reload
+  unit_changed=true
+  log "Wrote ${DATA_DIR_DROPIN} making ${dir} writable for the hardened unit"
+}
+
 log "Step 9/10: data dir"
 # The daemon records into ${ENV_FILE}'s VISIO_DATA_DIR (daemon.py's
 # load_config) and preflight checks that same directory, so provision the one
@@ -1028,6 +1190,12 @@ elif ! mkdir -p "${data_dir}"; then
   data_dir_failed=true
   log "ERROR: cannot create ${data_dir}, the data dir named by VISIO_DATA_DIR in ${ENV_FILE}."
   log "  Check that the path is on a writable, mounted filesystem and that nothing else already occupies it, then re-run."
+elif ! own_data_dir "${data_dir}"; then
+  data_dir_failed=true
+  log "ERROR: cannot give ${data_dir} to ${SERVICE_USER}, so the daemon cannot record into it."
+fi
+if [[ "${data_dir_failed}" != "true" ]] && ! write_data_dir_dropin "${data_dir}"; then
+  data_dir_failed=true
 fi
 
 log "Step 10/10: summary"
@@ -1036,11 +1204,22 @@ battery_source="${battery_source:-pijuice}"
 log "Provisioned revision: ${target_sha}"
 log "VISIO_BATTERY_SOURCE=${battery_source}"
 log "Data dir: ${data_dir}"
+if [[ -f "${ROLLBACK_DROPIN}" ]]; then
+  log "WARNING: ${ROLLBACK_DROPIN} is present, so the daemon runs as root, not ${SERVICE_USER}. Left in place; remove it, re-run this script (which hands the data dir back to ${SERVICE_USER}) and restart visio-recorder to run unprivileged."
+else
+  log "Daemon user: ${SERVICE_USER} (groups ${SERVICE_GROUPS[*]})"
+fi
+if [[ "${unit_changed}" == "true" ]] && systemctl is-active --quiet visio-recorder; then
+  log "visio-recorder is running the previous unit - 'sudo systemctl restart visio-recorder' (or the reboot below) applies the new one."
+fi
 if [[ "${battery_source}" == "none" ]]; then
   log "Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now."
 fi
 if [[ "${data_dir_failed}" == "true" ]]; then
-  log "INCOMPLETE: ${data_dir} was NOT created (see the step 9 error above), so the daemon has nowhere to record and '${PREFLIGHT_BIN}' will report data_dir as a blocking failure."
+  log "INCOMPLETE: the data dir ${data_dir} could not be set up for ${SERVICE_USER} (see the step 9 error above), so the daemon cannot record into it and '${PREFLIGHT_BIN}' will report data_dir as a blocking failure."
+fi
+if [[ "${service_user_failed}" == "true" ]]; then
+  log "INCOMPLETE: the ${SERVICE_USER} user or its groups could not be set up (see the step 6 error above), so systemd cannot start the daemon."
 fi
 report_step3_incomplete
 log "Run '${PREFLIGHT_BIN}' from any directory to check the runtime environment."
@@ -1055,7 +1234,7 @@ fi
 # Reaching here with an INCOMPLETE line means the run finished and the device
 # is not usable, which neither the last line an operator reads nor an exit
 # status a caller tests may report as success.
-if [[ "${data_dir_failed}" == "true" || "${config_txt_failed}" == "true" || "${interfaces_failed}" == "true" ]]; then
+if [[ "${data_dir_failed}" == "true" || "${config_txt_failed}" == "true" || "${interfaces_failed}" == "true" || "${service_user_failed}" == "true" ]]; then
   log "Setup incomplete - see the INCOMPLETE lines above. Fix what they name and re-run this script."
   exit 1
 fi

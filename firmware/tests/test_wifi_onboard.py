@@ -6,9 +6,8 @@ import pytest
 from visio_recorder.wifi_onboard import (
     QrDecodeError,
     parse_onboarding_qr_payload,
-    render_nm_keyfile,
     render_wpa_supplicant,
-    write_nm_keyfile,
+    validate_credentials,
     write_session_credentials,
     write_wpa_supplicant,
 )
@@ -163,26 +162,27 @@ def test_write_wpa_supplicant_rejects_out_of_range_psk_length(tmp_path):
     assert not path.exists()
 
 
-def test_render_nm_keyfile_produces_a_wifi_psk_connection():
-    keyfile = render_nm_keyfile("HomeNet", "hunter2secret")
-    assert "[connection]" in keyfile
-    assert "type=wifi" in keyfile
-    assert "ssid=HomeNet" in keyfile
-    assert "key-mgmt=wpa-psk" in keyfile
-    assert "psk=hunter2secret" in keyfile
-
-
-def test_render_nm_keyfile_rejects_unsafe_characters():
+def test_validate_credentials_rejects_unsafe_characters():
+    # NetworkManager would accept these, but the QR payload is untrusted input
+    # and nothing legitimate needs them, so the conservative rule stays.
     with pytest.raises(ValueError):
-        render_nm_keyfile('Home"Net', "hunter2secret")
+        validate_credentials('Home"Net', "hunter2secret")
 
 
-def test_render_nm_keyfile_rejects_out_of_range_psk_length():
+def test_validate_credentials_rejects_out_of_range_psk_length():
     with pytest.raises(ValueError):
-        render_nm_keyfile("HomeNet", "short")
+        validate_credentials("HomeNet", "short")
 
 
-def test_write_nm_keyfile_is_owner_read_write_only(tmp_path):
-    path = tmp_path / "visio.nmconnection"
-    write_nm_keyfile(path, "HomeNet", "hunter2secret")
-    assert oct(path.stat().st_mode & 0o777) == "0o600"
+def test_validate_credentials_accepts_a_normal_network():
+    validate_credentials("HomeNet", "hunter2secret")
+
+
+def test_validate_credentials_accepts_edge_spaces_and_an_ssid_tab():
+    validate_credentials("Cafe ", " correct horse ")
+    validate_credentials("Home\tNet", "hunter2secret")
+
+
+def test_validate_credentials_refuses_a_tab_in_the_password():
+    with pytest.raises(ValueError, match="not a printable-ASCII WPA passphrase"):
+        validate_credentials("HomeNet", "hunter2\tsecret")

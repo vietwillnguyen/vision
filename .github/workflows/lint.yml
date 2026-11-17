@@ -40,6 +40,8 @@ jobs:
             docs/superpowers/evidence/app-jest-container-flake/run-loaded.sh \
             docs/superpowers/evidence/audio-capture/mixed_reel_before.sh \
             docs/superpowers/evidence/dependabot-triage/seed-screens.sh \
+            docs/superpowers/evidence/derooted-recorder/sim/run.sh \
+            docs/superpowers/evidence/derooted-recorder/sim/stubs/* \
             docs/superpowers/evidence/provisioning-led-spi-audio/sim/failure-paths.sh \
             docs/superpowers/evidence/provisioning-led-spi-audio/sim/run.sh \
             docs/superpowers/evidence/provisioning-led-spi-audio/sim/stubs/* \

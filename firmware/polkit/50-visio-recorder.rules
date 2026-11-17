@@ -1,0 +1,23 @@
+// Installed by firmware/scripts/setup-device.sh to
+// /etc/polkit-1/rules.d/50-visio-recorder.rules.
+//
+// Lets the visio-recorder daemon, which runs as the visio system user with no
+// login session, store the WiFi network it onboards from a QR code and bring
+// it up. Debian's own NetworkManager rule only covers members of sudo/netdev
+// in an active local session, and without a session NetworkManager's policy
+// falls back to auth_admin, which a daemon cannot answer.
+//
+//   settings.modify.system - nmcli connection add/modify of the system
+//                            connection "visio", and the save in
+//                            nmcli connection edit id visio that stores its
+//                            pre-shared key
+//   network-control        - nmcli connection up visio
+//
+// Nothing else: not wifi.share, not enable-disable-network, not reload.
+polkit.addRule(function (action, subject) {
+  if (subject.user === "visio" &&
+      (action.id === "org.freedesktop.NetworkManager.settings.modify.system" ||
+       action.id === "org.freedesktop.NetworkManager.network-control")) {
+    return polkit.Result.YES;
+  }
+});

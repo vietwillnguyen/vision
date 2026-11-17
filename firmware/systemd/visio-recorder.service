@@ -3,14 +3,64 @@ Description=Visio Pendant Recording Daemon
 After=network-online.target
 Wants=network-online.target
 
+# Runs as the unprivileged visio system user that setup-device.sh creates.
+# Rollback to root, if a device shows a permission problem the simulation
+# could not: see docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md,
+# "De-rooted recorder" - a drop-in setting User=root and Group=root is the whole
+# change, and setup-device.sh leaves such a drop-in alone.
+
 [Service]
 Type=simple
+User=visio
+Group=visio
+# Device access is by group, the way Raspberry Pi OS's udev rules hand it out:
+# video for the camera (media, video, v4l-subdev and dma_heap nodes), gpio for
+# the flag button (/dev/gpiochip*), i2c for the battery HAT (/dev/i2c-1), spi
+# for the status LED (/dev/spidev0.0), audio for the microphone (/dev/snd/*).
+# Listed here as well as on the account so the unit grants them even if the
+# account's membership drifts. preflight.py pins its own list to this line.
+SupplementaryGroups=video gpio i2c spi audio
 EnvironmentFile=/etc/visio-recorder.env
+# lgpio (gpiozero's pin factory on trixie) chdir()s into its work dir and
+# creates its notification pipes there, so it needs a writable one: the
+# WorkingDirectory below is root-owned and read-only under ProtectSystem.
+RuntimeDirectory=visio-recorder
+RuntimeDirectoryMode=0750
+Environment=LG_WD=/run/visio-recorder
+# The default data dir. systemd creates it owned by visio and, when it already
+# exists with another owner (a device provisioned while this ran as root),
+# re-owns it recursively before starting. A non-default VISIO_DATA_DIR is made
+# writable by the ReadWritePaths= drop-in setup-device.sh writes for it.
+StateDirectory=visio-recorder
+StateDirectoryMode=0750
+UMask=0027
 ExecStartPre=/opt/visio-recorder/firmware/.venv/bin/python3 -m visio_recorder.preflight
 ExecStart=/opt/visio-recorder/firmware/.venv/bin/python3 -m visio_recorder.daemon
 WorkingDirectory=/opt/visio-recorder/firmware
 Restart=on-failure
 RestartSec=5
+
+# Hardening. Only options that leave the real /dev in place: PrivateDevices=,
+# DevicePolicy= and DeviceAllow= are deliberately absent, because each would
+# cut the camera, SPI, GPIO, I2C and sound nodes off. MemoryDenyWriteExecute=
+# (ctypes/cffi callbacks) and RestrictRealtime= (libcamera and ALSA threads)
+# are left out as untested risks on the device.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+# Unix for D-Bus (nmcli) and ALSA, inet for Supabase, netlink for libcamera's
+# udev device enumeration.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
