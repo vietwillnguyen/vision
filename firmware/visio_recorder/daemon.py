@@ -31,6 +31,7 @@ from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
 from visio_recorder.onboarding import (
     NmcliConnectionActivator,
+    NmcliWifiConfigurator,
     RpicamZbarScanner,
     activate_connection,
     reactivate_connection_if_configured,
@@ -58,8 +59,7 @@ from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
 from visio_recorder.uploader import StorageClient
 
 _ONBOARDING_MAX_ATTEMPTS = 60
-_NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
-_NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
+_NM_CONNECTION_ID = "visio"  # the NetworkManager profile onboarding manages
 _DEVICE_NAME = "visio-pendant"
 
 _BATTERY_READER_FACTORIES: dict[str, Callable[[], BatteryReader]] = {
@@ -438,10 +438,11 @@ def main() -> int:
     if not startup.proceed:
         return 0
 
+    wifi = NmcliWifiConfigurator(connection_id=_NM_CONNECTION_ID)
     if not session_path.exists():
         payload = run_onboarding(
             RpicamZbarScanner(),
-            _NM_KEYFILE_PATH,
+            wifi,
             session_path,
             _ONBOARDING_MAX_ATTEMPTS,
         )
@@ -450,12 +451,12 @@ def main() -> int:
         if not activate_connection(
             NmcliConnectionActivator(), _NM_CONNECTION_ID, led_driver
         ):
-            # Keyfile and session are on disk; systemd's Restart=on-failure
+            # Connection and session are stored; systemd's Restart=on-failure
             # plus NetworkManager autoconnect retry from here.
             return 1
     else:
         reactivate_connection_if_configured(
-            NmcliConnectionActivator(), _NM_CONNECTION_ID, _NM_KEYFILE_PATH
+            NmcliConnectionActivator(), _NM_CONNECTION_ID, wifi
         )
 
     device_id = load_or_create_device_id(state_path)
