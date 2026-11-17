@@ -42,6 +42,45 @@ import { useDeviceStatus } from '../../src/hooks/useDeviceStatus';
 // this test is actually verifying.
 const restFetch = nodeFetch as unknown as typeof fetch;
 
+/**
+ * Closes a client's realtime socket without leaving a timer behind.
+ *
+ * @supabase/realtime-js (2.119.0) races the socket teardown in
+ * `RealtimeClient.disconnect()` against a 10s
+ * `setTimeout(() => resolve('timeout'))` inside its phoenix SocketAdapter and
+ * never clears that timer when the teardown wins. The ref'd timer then holds
+ * the jest worker open for up to 10s after this file finishes: if the worker
+ * has no other file left to run by then, jest-worker force-kills it and the
+ * run ends with "A worker process has failed to exit gracefully".
+ * jest.timerLeakEnv.js fails this file if that happens again.
+ *
+ * The SDK offers no way to clear it, so capture the timers created by the
+ * (synchronous) start of the disconnect and clear them once the socket has
+ * actually closed - by then they only guard an already-settled promise.
+ */
+async function disconnectRealtime(client: SupabaseClient): Promise<void> {
+  const created: ReturnType<typeof setTimeout>[] = [];
+  const realSetTimeout = global.setTimeout;
+  const spy = jest.spyOn(global, 'setTimeout').mockImplementation(((
+    ...args: Parameters<typeof setTimeout>
+  ) => {
+    const handle = realSetTimeout(...args);
+    created.push(handle);
+    return handle;
+  }) as typeof setTimeout);
+  let disconnecting: Promise<string>;
+  try {
+    disconnecting = client.realtime.disconnect();
+  } finally {
+    spy.mockRestore();
+  }
+  const status = await disconnecting;
+  created.forEach((handle) => clearTimeout(handle));
+  if (status !== 'ok') {
+    throw new Error(`realtime socket did not close cleanly: ${status}`);
+  }
+}
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -184,16 +223,21 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
 
       await unmount();
     } finally {
-      // The hook's own cleanup only unsubscribes/tears down its channel
-      // (RealtimeClient.removeChannel never closes the underlying socket -
-      // see node_modules/@supabase/realtime-js's RealtimeClient.removeChannel),
-      // so the websocket connection created by createClient() above stays
-      // open and leaves Jest hanging ("did not exit one second after the
-      // test run has completed") without this explicit disconnect.
-      if (ownerClient) {
-        await ownerClient.realtime.disconnect();
+      try {
+        // The hook's own cleanup only unsubscribes/tears down its channel
+        // (RealtimeClient.removeChannel never closes the underlying socket -
+        // see node_modules/@supabase/realtime-js's RealtimeClient.removeChannel),
+        // so the websocket connection created by createClient() above stays
+        // open and leaves Jest hanging ("did not exit one second after the
+        // test run has completed") without this explicit disconnect.
+        if (ownerClient) {
+          await ownerClient.auth.stopAutoRefresh();
+          await disconnectRealtime(ownerClient);
+        }
+      } finally {
+        await adminClient.auth.stopAutoRefresh();
+        await adminClient.auth.admin.deleteUser(userId);
       }
-      await adminClient.auth.admin.deleteUser(userId);
     }
   });
 });
