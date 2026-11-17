@@ -331,7 +331,7 @@ def run_recording_loop(
             uploaded_today[0] = segments_uploaded_today
 
         while True:
-            if not pending_segments(deps.queue_dir):
+            if stopping.is_set() or not pending_segments(deps.queue_dir):
                 retry_at = None
             elif retry_at is None:
                 retry_at = deps.monotonic() + deps.retry_backoff.delay_sec(

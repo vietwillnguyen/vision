@@ -860,6 +860,28 @@ def test_retry_pending_segments_on_an_empty_queue_leaves_critical_latched(tmp_pa
     assert led.calls == []
 
 
+def test_a_retry_round_cancelled_before_its_first_file_leaves_critical_latched(
+    tmp_path,
+):
+    # The same rule as the empty queue, reached through cancel: a round that
+    # tried nothing must not report "nothing failed" and clear the red.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+    led = FakeLedDriver()
+    storage = FakeStorageClient()
+
+    outcome = _retry(queue_dir, storage, health, led=led, cancel=lambda: True)
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 0, 0)
+    assert outcome.attempted == 0
+    assert health.consecutive_failures == UPLOAD_FAILURES_TO_CRITICAL
+    assert health.is_critical
+    assert storage.uploaded == []
+    assert led.calls == []
+    assert [p.name for p in pending_segments(queue_dir)] == ["20260704_120000.mp4"]
+
+
 def test_retry_moves_an_unsplittable_oversized_segment_aside_exactly_once(tmp_path):
     # The 50 MB limit cannot become a retry loop: the first round moves a
     # segment that will not fit and cannot be split to rejected/ beside the

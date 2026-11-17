@@ -1,7 +1,7 @@
 import logging
 import shutil
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -258,6 +258,7 @@ def drain_pending(
     device_id: str,
     upload_limit: UploadLimit,
     cancel: Callable[[], bool] | None = None,
+    before_first_attempt: Callable[[], None] | None = None,
 ) -> UploadOutcome:
     """Upload each of ``paths``, returning the totals across all of them.
 
@@ -269,12 +270,20 @@ def drain_pending(
     give up on a backlog (the daemon is stopping, or the battery hit the halt
     threshold) without abandoning an upload mid-flight. Whatever is left is
     still queued, so the next round or the next boot takes it.
+
+    ``before_first_attempt`` runs once, just before the first upload is tried,
+    and not at all when nothing is: ``attempted`` on the result says how many
+    files were tried, so a caller can tell a drain that did nothing from one
+    whose every upload succeeded.
     """
     total = UploadOutcome()
     for path in paths:
         if cancel is not None and cancel():
             _logger.info("stopping the queue drain early; %s stays queued", path.name)
             break
+        if total.attempted == 0 and before_first_attempt is not None:
+            before_first_attempt()
+        total.attempted += 1
         try:
             outcome = upload_queued(path, storage_client, device_id, upload_limit)
         except Exception:
@@ -309,9 +318,26 @@ def _upload_succeeded(outcome: UploadOutcome) -> bool:
     return outcome.failed == 0 and outcome.rejected == 0
 
 
+def _show_upload_led(
+    led_driver: LedDriver,
+    *,
+    battery_is_low: bool,
+    is_uploading: bool,
+    upload_health: UploadHealth,
+) -> None:
+    apply_led_state(
+        led_driver,
+        next_led_state(
+            battery_is_low,
+            is_uploading=is_uploading,
+            upload_critical=upload_health.is_critical,
+        ),
+    )
+
+
 def _upload_showing_led(
     *,
-    upload: Callable[[], UploadOutcome],
+    upload: Callable[[Callable[[], None]], UploadOutcome],
     led_driver: LedDriver,
     battery_is_low: bool,
     upload_health: UploadHealth,
@@ -323,24 +349,28 @@ def _upload_showing_led(
     escalated to Critical shows red for the whole attempt instead of blue then
     green, and the success that resets the counter turns the LED green on its
     own attempt rather than one attempt later.
+
+    ``upload`` is handed the call that shows the first state and makes it just
+    before it tries a file. One that tries none reports ``attempted == 0`` and
+    leaves both the LED and ``upload_health`` untouched: "nothing failed"
+    would otherwise clear Critical without anything having reached storage.
     """
-    apply_led_state(
-        led_driver,
-        next_led_state(
-            battery_is_low,
+    outcome = upload(
+        lambda: _show_upload_led(
+            led_driver,
+            battery_is_low=battery_is_low,
             is_uploading=True,
-            upload_critical=upload_health.is_critical,
-        ),
+            upload_health=upload_health,
+        )
     )
-    outcome = upload()
+    if outcome.attempted == 0:
+        return outcome
     upload_health.record(upload_ok=_upload_succeeded(outcome))
-    apply_led_state(
+    _show_upload_led(
         led_driver,
-        next_led_state(
-            battery_is_low,
-            is_uploading=False,
-            upload_critical=upload_health.is_critical,
-        ),
+        battery_is_low=battery_is_low,
+        is_uploading=False,
+        upload_health=upload_health,
     )
     return outcome
 
@@ -368,9 +398,10 @@ def retry_pending_segments(
 
     The round's outcome feeds the same ``UploadHealth`` counter a segment's own
     upload does, so retry failures escalate to Critical and a retry success
-    clears it. An empty queue is a no-op that deliberately leaves the counter
-    alone: reporting "nothing failed" would clear Critical without anything
-    having reached storage.
+    clears it. A round that tries no file, because the queue is empty or
+    ``cancel`` was already true, is a no-op that deliberately leaves the
+    counter and the LED alone: reporting "nothing failed" would clear Critical
+    without anything having reached storage.
 
     No ``device_status`` upsert of its own: the next segment completes within
     one segment period and reports the new ``segments_pending`` and
@@ -379,14 +410,19 @@ def retry_pending_segments(
     would mean with no capture involved.
     """
     paths = pending_segments(queue_dir)
-    if not paths:
-        return UploadOutcome()
-    _logger.info("retrying %d queued segment(s) in process", len(paths))
     battery_status = read_battery_status(battery_reader)
+
+    def drain(show_uploading: Callable[[], None]) -> UploadOutcome:
+        def before_first_attempt() -> None:
+            _logger.info("retrying %d queued segment(s) in process", len(paths))
+            show_uploading()
+
+        return drain_pending(
+            paths, storage_client, device_id, upload_limit, cancel, before_first_attempt
+        )
+
     return _upload_showing_led(
-        upload=lambda: drain_pending(
-            paths, storage_client, device_id, upload_limit, cancel
-        ),
+        upload=drain,
         led_driver=led_driver,
         battery_is_low=battery_status.is_low,
         upload_health=upload_health,
@@ -425,10 +461,16 @@ def on_segment_complete(
     queued_path = enqueue(queue_dir, mp4_path)
 
     battery_status = read_battery_status(battery_reader)
+
+    def upload(show_uploading: Callable[[], None]) -> UploadOutcome:
+        show_uploading()
+        return replace(
+            upload_queued(queued_path, storage_client, device_id, upload_limit),
+            attempted=1,
+        )
+
     outcome = _upload_showing_led(
-        upload=lambda: upload_queued(
-            queued_path, storage_client, device_id, upload_limit
-        ),
+        upload=upload,
         led_driver=led_driver,
         battery_is_low=battery_status.is_low,
         upload_health=upload_health,

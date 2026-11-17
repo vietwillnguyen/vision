@@ -1,5 +1,6 @@
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -1039,6 +1040,53 @@ def test_a_retry_round_still_runs_while_segments_arrive_faster_than_the_backoff(
     assert storage.attempts.count(first) >= 3
 
 
+def test_a_stop_with_a_lapsed_retry_deadline_leaves_the_critical_led_red(tmp_path):
+    # Three failed segments latch Critical. The third upload is still timing
+    # out when the stop arrives, long enough for the retry deadline to lapse.
+    # The worker must collect the shutdown sentinel rather than start a round
+    # that is cancelled before its first file and reads as a success.
+    spi = SimulatedSpiDevice()
+    led = Ws2812LedDriver(spi=spi)
+    red = (255, 0, 0)
+    now = [0.0]
+    stop = threading.Event()
+
+    class SlowAndDown(FailingStorageClient):
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        def upload(self, bucket, object_path, local_path):
+            self.attempts += 1
+            if self.attempts == 3:
+                assert stop.wait(timeout=5)
+                # Let the main thread see the stop and queue the sentinel.
+                time.sleep(0.2)
+                now[0] += 3600.0
+            raise RuntimeError("network down")
+
+    def on_record(count: int) -> None:
+        if count >= 3:
+            stop.set()
+
+    storage = SlowAndDown()
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=on_record),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=led,
+        storage_client=storage,
+        retry_backoff=RetryBackoff(),
+        monotonic=lambda: now[0],
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    colours = [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+    assert storage.attempts == 3
+    assert colours[-1] == red
+    assert set(colours[colours.index(red) :]) == {red}
+
+
 @dataclass(frozen=True)
 class _RecordingBackoff(RetryBackoff):
     """A real backoff that also records the failure count it was asked about.
@@ -1073,7 +1121,7 @@ def test_the_worker_waits_longer_after_each_failed_retry_round(tmp_path):
 
         def upload(self, bucket, object_path, local_path):
             self.attempts += 1
-            if self.attempts >= 4:
+            if self.attempts >= 5:
                 rounds_done.set()
             raise RuntimeError("network down")
 
@@ -1091,8 +1139,8 @@ def test_the_worker_waits_longer_after_each_failed_retry_round(tmp_path):
 
     # Segment 1's own upload is attempt 1; attempts 2+ are retry rounds, each
     # asked about one more consecutive failure than the last.
-    assert storage.attempts >= 4
-    assert backoff.asked[:3] == [1, 2, 3]
+    assert storage.attempts >= 5
+    assert backoff.asked[:4] == [1, 2, 3, 4]
     assert backoff.asked == sorted(backoff.asked)
     assert [backoff.delay_sec(n) for n in backoff.asked[:4]] == [0.01, 0.02, 0.03, 0.03]
 

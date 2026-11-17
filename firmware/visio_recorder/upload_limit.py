@@ -100,6 +100,9 @@ class UploadOutcome:
     uploaded: int = 0
     failed: int = 0
     rejected: int = 0
+    # Queue entries an upload was actually tried for, which a drain cancelled
+    # before its first file, or given nothing to drain, leaves at zero.
+    attempted: int = 0
 
 
 def rejected_dir(queue_dir: Path) -> Path:
