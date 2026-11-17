@@ -1,0 +1,33 @@
+# Every Docker image the CI jobs in .github/workflows/tests.yml need from the
+# Supabase CLI pinned there (SUPABASE_CLI_VERSION), under the exact name the CLI
+# looks for locally. scripts/ci/supabase-images.sh seeds these from the GHCR
+# mirror and the supabase-images action caches them, so `supabase start`,
+# `supabase test db` and `supabase gen types` find every image already present
+# and never pull from public.ecr.aws, whose quotas for anonymous clients (1 pull
+# per second, 500GB a month) shared GitHub runner IPs keep exhausting.
+#
+# Bump this list in the same PR as SUPABASE_CLI_VERSION. When it is stale CI
+# fails loudly instead of pulling: the "Verify Supabase images" step names any
+# container image missing from here, and a command that runs a one-off image
+# (gen types, test db) fails with a connection error because the workflow blocks
+# public.ecr.aws and the registries the CLI falls back to, ghcr.io and Docker
+# Hub. The tags
+# for a CLI version are in its source at the matching tag:
+# apps/cli-go/pkg/config/templates/Dockerfile for the services and pg_prove,
+# and packages/stack/src/versions.ts for the postgres-meta tag `gen types`
+# uses (it differs from the Dockerfile's).
+
+# supabase start
+public.ecr.aws/supabase/postgres:17.6.1.140
+public.ecr.aws/supabase/kong:2.8.1
+public.ecr.aws/supabase/postgrest:v14.14
+public.ecr.aws/supabase/gotrue:v2.192.0
+public.ecr.aws/supabase/realtime:v2.112.1
+public.ecr.aws/supabase/storage-api:v1.61.7
+public.ecr.aws/supabase/mailpit:v1.30.2
+
+# supabase test db (integration job)
+public.ecr.aws/supabase/pg_prove:3.36
+
+# supabase gen types typescript --local (app job, scripts/gen-db-types.sh)
+public.ecr.aws/supabase/postgres-meta:v0.96.1

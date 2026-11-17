@@ -8,6 +8,9 @@ on:
 
 permissions:
   contents: read
+  # Pull Supabase's public GHCR image mirror authenticated on a cold image cache
+  # (.github/actions/supabase-images).
+  packages: read
 
 env:
   # Pinned deliberately. `version: latest` let the Supabase CLI - and with it the
@@ -15,13 +18,32 @@ env:
   # with no commit, so a green build could go red with nothing in the diff. Bump
   # this in its own PR so a CLI regression is bisectable. Dependabot tracks
   # action *refs*, not action *inputs*, so this bump stays manual.
+  #
+  # Bumping it also means updating .github/supabase-images.txt, the images that
+  # version boots: CI serves them from a cache and blocks public.ecr.aws and
+  # its ghcr.io and Docker Hub fallbacks, so a stale list fails loudly rather
+  # than pulling.
   SUPABASE_CLI_VERSION: "2.109.0"
+  # With [experimental.pgdelta] enabled in supabase/config.toml (kept for
+  # developers' `db diff`), `supabase start` runs a one-off edge-runtime
+  # container after migrating to cache a pg-delta catalog that only `db diff`
+  # reads - a 1.1GB image pull per job for nothing CI uses. The CLI reads
+  # SUPABASE_-prefixed env as config overrides, so CI turns it off here only.
+  SUPABASE_EXPERIMENTAL_PGDELTA_ENABLED: "false"
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  ci-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test scripts/ci
+        # Stubbed docker; no daemon or network.
+        run: scripts/ci/tests/test-supabase-images.sh
+
   firmware:
     runs-on: ubuntu-latest
     defaults:
@@ -69,9 +91,27 @@ jobs:
       - uses: supabase/setup-cli@v3
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Provide Supabase images
+        # Anonymous pulls from public.ecr.aws (the CLI's default registry) hit
+        # `toomanyrequests` on shared runners. This loads every image from the
+        # Actions cache, or seeds it from Supabase's GHCR mirror on a miss, and
+        # then blocks public.ecr.aws and its ghcr.io and Docker Hub fallbacks for
+        # the rest of the job.
+        uses: ./.github/actions/supabase-images
+        with:
+          cli-version: ${{ env.SUPABASE_CLI_VERSION }}
       - name: Start local Supabase
         working-directory: .
-        run: supabase start
+        # imgproxy is pulled whenever storage is enabled but only started with
+        # [storage.image_transformation], which config.toml leaves off, so
+        # excluding it changes no running service and skips a 250MB image.
+        run: supabase start -x imgproxy
+      - name: Verify Supabase images
+        working-directory: .
+        # Every running container must use an image from the manifest the
+        # previous steps cached; anything else means the CLI pin moved on
+        # without .github/supabase-images.txt.
+        run: scripts/ci/supabase-images.sh verify
       - name: Run pgTAP database tests
         working-directory: .
         # The database contract - RLS policies, table grants, storage bucket
@@ -128,9 +168,27 @@ jobs:
       - uses: supabase/setup-cli@v3
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Provide Supabase images
+        # Anonymous pulls from public.ecr.aws (the CLI's default registry) hit
+        # `toomanyrequests` on shared runners. This loads every image from the
+        # Actions cache, or seeds it from Supabase's GHCR mirror on a miss, and
+        # then blocks public.ecr.aws and its ghcr.io and Docker Hub fallbacks for
+        # the rest of the job.
+        uses: ./.github/actions/supabase-images
+        with:
+          cli-version: ${{ env.SUPABASE_CLI_VERSION }}
       - name: Start local Supabase
         working-directory: .
-        run: supabase start
+        # imgproxy is pulled whenever storage is enabled but only started with
+        # [storage.image_transformation], which config.toml leaves off, so
+        # excluding it changes no running service and skips a 250MB image.
+        run: supabase start -x imgproxy
+      - name: Verify Supabase images
+        working-directory: .
+        # Every running container must use an image from the manifest the
+        # previous steps cached; anything else means the CLI pin moved on
+        # without .github/supabase-images.txt.
+        run: scripts/ci/supabase-images.sh verify
       - name: Export local Supabase connection env
         working-directory: .
         # Same NAME mapping as the integration job, so useDeviceStatus.live.test.tsx's
