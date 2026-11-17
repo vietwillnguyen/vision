@@ -347,8 +347,8 @@ def check_device_access(
             ),
         )
     described = "; ".join(
-        f"{path} is {owner_name(st.st_uid)}:{group_name(st.st_gid)} "
-        f"{stat.S_IMODE(st.st_mode):04o}"
+        f"{path} ({owner_name(st.st_uid)}:{group_name(st.st_gid)} "
+        f"{stat.S_IMODE(st.st_mode):04o})"
         for path, st in denied
     )
     node_groups = {group_name(st.st_gid) for _, st in denied}

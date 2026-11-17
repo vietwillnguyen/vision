@@ -1243,7 +1243,7 @@ def test_a_daemon_missing_the_video_group_is_blocked_by_name():
     result = _access_check(CAMERA_NODES, _CAMERA, _VISIO_ALONE)
 
     assert result.ok is False and result.severity == BLOCK
-    assert "/dev/dma_heap/system is root:video 0660" in result.detail
+    assert "/dev/dma_heap/system (root:video 0660)" in result.detail
     assert "visio is not in the video group" in result.detail
     assert "SupplementaryGroups=" in result.detail
 
@@ -1256,7 +1256,7 @@ def test_a_node_owned_by_the_wrong_group_points_at_the_udev_rules():
     result = _access_check(LED_NODES, nodes, daemon)
 
     assert result.ok is False and result.severity == BLOCK
-    assert "/dev/spidev0.0 is root:root 0600" in result.detail
+    assert "/dev/spidev0.0 (root:root 0600)" in result.detail
     assert "expected group spi" in result.detail
     assert "99-com.rules" in result.detail
 
