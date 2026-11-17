@@ -18,20 +18,20 @@ full run exit=0
 
 === root era: what the root daemon left behind (session, identity, queued segment, keyfile)
 (unit has no User= - runs as root)
--rw------- 1 0 0 2644 Nov 17 14:16 /etc/visio-recorder.env
+-rw------- 1 0 0 2644 Nov 17 14:33 /etc/visio-recorder.env
 /var/lib/visio-recorder:
 total 12
--rw-r--r-- 1 0 0   20 Nov 17 14:16 device.json
--rw-r--r-- 1 0 0    0 Nov 17 14:16 device_registered
-drwxr-xr-x 2 0 0 4096 Nov 17 14:16 queue
--rw------- 1 0 0   42 Nov 17 14:16 session.json
+-rw-r--r-- 1 0 0   20 Nov 17 14:33 device.json
+-rw-r--r-- 1 0 0    0 Nov 17 14:33 device_registered
+drwxr-xr-x 2 0 0 4096 Nov 17 14:33 queue
+-rw------- 1 0 0   42 Nov 17 14:33 session.json
 
 /var/lib/visio-recorder/queue:
 total 4
--rw-r--r-- 1 0 0 1024 Nov 17 14:16 20261117T070000.mp4
+-rw-r--r-- 1 0 0 1024 Nov 17 14:33 20261117T070000.mp4
 visio
 
-=== migration: provision with 7582309396f0e0cde4625d448ac888cb90c276ba on the same device
+=== migration: provision with f7333344844703e49bca5663fbee4dedb3310747 on the same device
 [setup-device] An earlier run made changes that need a reboot, and the device has not rebooted since - the reboot is still required
 [setup-device] Step 1/10: swap size
 [setup-device] Swap already 1023MB (>= 1024MB) - no change needed
@@ -47,10 +47,10 @@ visio
 [setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
 [setup-device] Step 5/10: code
 Previous HEAD position was a85ef42 chore: merge origin/main into worktree-visio-device-provisioning
-HEAD is now at 7582309 fix: keep the wifi pre-shared key off nmcli's command line
-[setup-device] Provisioned revision 7582309396f0e0cde4625d448ac888cb90c276ba (requested '7582309396f0e0cde4625d448ac888cb90c276ba')
+HEAD is now at f733334 wip
+[setup-device] Provisioned revision f7333344844703e49bca5663fbee4dedb3310747 (requested 'f7333344844703e49bca5663fbee4dedb3310747')
 Resolved 42 packages in 1ms
-Checked 31 packages in 0.45ms
+Checked 31 packages in 0.51ms
 [setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
 [setup-device] Step 6/10: service user, systemd, polkit and ALSA
 [setup-device] Created system user visio
@@ -69,7 +69,7 @@ Checked 31 packages in 0.45ms
 [setup-device] /var/lib/visio-recorder (and everything in it) now owned by visio
 [setup-device] /var/lib/visio-recorder is now mode 0750
 [setup-device] Step 10/10: summary
-[setup-device] Provisioned revision: 7582309396f0e0cde4625d448ac888cb90c276ba
+[setup-device] Provisioned revision: f7333344844703e49bca5663fbee4dedb3310747
 [setup-device] VISIO_BATTERY_SOURCE=none
 [setup-device] Data dir: /var/lib/visio-recorder
 [setup-device] Daemon user: visio (groups video gpio i2c spi audio)
@@ -81,14 +81,14 @@ exit=0
 
 === re-run: a migrated device converges to no change
 exit=0
-[setup-device] Provisioned revision 7582309396f0e0cde4625d448ac888cb90c276ba (requested '7582309396f0e0cde4625d448ac888cb90c276ba')
+[setup-device] Provisioned revision f7333344844703e49bca5663fbee4dedb3310747 (requested 'f7333344844703e49bca5663fbee4dedb3310747')
 [setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
 [setup-device] visio already in video gpio i2c spi audio
 [setup-device] /etc/systemd/system/visio-recorder.service already installed - no change
 [setup-device] /etc/polkit-1/rules.d/50-visio-recorder.rules already installed - no change
 [setup-device] /etc/visio-recorder.env already configured
 [setup-device] Installed: neovim ripgrep fd-find tmux htop tree jq less bash-completion
-[setup-device] Provisioned revision: 7582309396f0e0cde4625d448ac888cb90c276ba
+[setup-device] Provisioned revision: f7333344844703e49bca5663fbee4dedb3310747
 [setup-device] Data dir: /var/lib/visio-recorder
 [setup-device] Daemon user: visio (groups video gpio i2c spi audio)
 [setup-device] Run 'visio-preflight' from any directory to check the runtime environment.
@@ -98,7 +98,7 @@ byte-identical: the re-run changed nothing
 === after migration: account, env file, data dir, unit, polkit rule
 uid=995(visio) gid=992(visio) groups=992(visio),29(audio),44(video),995(spi),994(gpio),993(i2c)
 visio:x:995:992:visio-recorder daemon:/var/lib/visio-recorder:/usr/sbin/nologin
--rw-r----- 1 0 992 2644 Nov 17 14:16 /etc/visio-recorder.env
+-rw-r----- 1 0 992 2644 Nov 17 14:33 /etc/visio-recorder.env
 /etc/visio-recorder.env root:visio 640
 /var/lib/visio-recorder visio:visio 750
 /var/lib/visio-recorder/device.json visio:visio 644
@@ -120,21 +120,21 @@ ProtectSystem=strict
 verify: no complaints
 
 === fake device nodes, owned the way Raspberry Pi OS's udev rules own them
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/dma_heap/linux,cma
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/dma_heap/system
--rw-rw---- 1 root gpio  0 Nov 17 14:16 /dev/gpiochip0
--rw-rw---- 1 root i2c   0 Nov 17 14:16 /dev/i2c-1
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/media0
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/media1
--rw-rw---- 1 root audio 0 Nov 17 14:16 /dev/snd/controlC0
--rw-rw---- 1 root audio 0 Nov 17 14:16 /dev/snd/pcmC0D0c
--rw-rw---- 1 root audio 0 Nov 17 14:16 /dev/snd/timer
--rw-rw---- 1 root spi   0 Nov 17 14:16 /dev/spidev0.0
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/v4l-subdev0
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/video0
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/video10
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/video11
--rw-rw---- 1 root video 0 Nov 17 14:16 /dev/video12
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/dma_heap/linux,cma
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/dma_heap/system
+-rw-rw---- 1 root gpio  0 Nov 17 14:33 /dev/gpiochip0
+-rw-rw---- 1 root i2c   0 Nov 17 14:33 /dev/i2c-1
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/media0
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/media1
+-rw-rw---- 1 root audio 0 Nov 17 14:33 /dev/snd/controlC0
+-rw-rw---- 1 root audio 0 Nov 17 14:33 /dev/snd/pcmC0D0c
+-rw-rw---- 1 root audio 0 Nov 17 14:33 /dev/snd/timer
+-rw-rw---- 1 root spi   0 Nov 17 14:33 /dev/spidev0.0
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/v4l-subdev0
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/video0
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/video10
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/video11
+-rw-rw---- 1 root video 0 Nov 17 14:33 /dev/video12
 
 === ExecStartPre as visio with every unit group (video gpio i2c spi audio)
 [INFO] install: /opt/visio-recorder/firmware/visio_recorder
@@ -208,8 +208,8 @@ session.json readable: True
 queued segment readable: 1024 bytes
 new segment written as visio
 total 8
--rw-r--r-- 1 995 992 1024 Nov 17 14:16 20261117T070000.mp4
--rw-r--r-- 1 995 992    3 Nov 17 14:16 20261117T070100.mp4
+-rw-r--r-- 1 995 992 1024 Nov 17 14:33 20261117T070000.mp4
+-rw-r--r-- 1 995 992    3 Nov 17 14:33 20261117T070100.mp4
 
 === wifi onboarding as visio through the real NetworkManager and polkitd
 --- re-onboarding over the root-era keyfile (modify path)
@@ -219,7 +219,7 @@ configure ok
 activate: CalledProcessError 4
 profiles named visio: 1
 total 4
--rw------- 1 0 0 215 Nov 17 14:16 visio.nmconnection
+-rw------- 1 0 0 215 Nov 17 14:33 visio.nmconnection
 ssid=OtherNet
 psk=newsecret99
 --- connection up as visio: authorized, fails only for want of a wifi device
@@ -232,7 +232,7 @@ configure ok
 activate: CalledProcessError 4
 profiles named visio: 1
 total 4
--rw------- 1 0 0 259 Nov 17 14:16 visio.nmconnection
+-rw------- 1 0 0 259 Nov 17 14:33 visio.nmconnection
 ssid=HomeNet
 psk=hunter2secret
 --- what the rule does not grant
@@ -241,14 +241,16 @@ exit=1
 Error: failed to reload connections: access denied.
 exit=1
 --- without the polkit rule: refused, the error carries no password, the stored profile is unchanged
-configure refused: nmcli connection edit did not store the pre-shared key for connection 'visio'
+configure refused: nmcli connection modify exited 1
 psk=hunter2secret
 
 === the pre-shared key never reached nmcli's argv, in any call this run made
-nmcli calls recorded: 33
+nmcli calls recorded: 34
 no onboarded key appears in any recorded argv
+nmcli connection add type wifi con-name visio ifname wlan0 ssid HomeNet wifi-sec.key-mgmt wpa-psk connection.autoconnect yes
 nmcli connection edit id visio
-nmcli connection edit type wifi con-name visio
+nmcli connection modify visio wifi.ssid HomeNet2 wifi-sec.key-mgmt wpa-psk connection.autoconnect yes
+nmcli connection modify visio wifi.ssid OtherNet wifi-sec.key-mgmt wpa-psk connection.autoconnect yes
 nmcli connection up visio
 ssid=HomeNet
 psk=hunter2secret

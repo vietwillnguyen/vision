@@ -8,7 +8,9 @@
 // falls back to auth_admin, which a daemon cannot answer.
 //
 //   settings.modify.system - nmcli connection add/modify of the system
-//                            connection "visio"
+//                            connection "visio", and the save in
+//                            nmcli connection edit id visio that stores its
+//                            pre-shared key
 //   network-control        - nmcli connection up visio
 //
 // Nothing else: not wifi.share, not enable-disable-network, not reload.

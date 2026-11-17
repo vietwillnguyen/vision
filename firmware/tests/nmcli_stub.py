@@ -5,14 +5,22 @@ Written onto ``PATH`` by :mod:`tests.test_onboarding` so the real
 own ``argv`` and the bytes it was handed on stdin to a transcript, which lets a
 test assert what the daemon exposed in the process list and what it kept off it.
 
-Only the three forms onboarding uses are understood - listing profile names,
-the connection editor, and reading a property back.
+Only the forms onboarding uses are understood - listing profile names,
+``connection add``/``modify``, the connection editor, and reading a property
+back.
 """
 
 import json
 import os
 import sys
 from pathlib import Path
+
+_WSEC = "802-11-wireless-security."
+_ALIASES = {
+    "ssid": "802-11-wireless.ssid",
+    "wifi.ssid": "802-11-wireless.ssid",
+    "ifname": "connection.interface-name",
+}
 
 
 def _load(store: Path) -> dict[str, dict[str, str]]:
@@ -41,40 +49,38 @@ def main(argv: list[str]) -> int:
             print(name)
         return 0
 
-    # nmcli connection add|modify ... <property> <value> ...
-    # The pre-shared-key-on-argv form this package no longer uses; understood
-    # so a test that asserts the secret is off argv fails on that assertion
-    # rather than on an unknown command.
+    # nmcli connection add type wifi con-name <ID> ifname <IF> ssid <SSID> ...
+    # nmcli connection modify <ID> <property> <value> ...
+    # argv carries every byte of a value as given.
     if argv[:2] in (["connection", "add"], ["connection", "modify"]):
-        name = argv[argv.index("con-name") + 1] if "con-name" in argv else argv[3]
+        words = argv[2:] if argv[1] == "add" else argv[3:]
+        pairs = dict(zip(words[::2], words[1::2], strict=True))
+        name = pairs.pop("con-name", argv[2])
+        pairs.pop("type", None)
         pending = dict(profiles.get(name, {}))
-        words = argv[2:]
-        for index, word in enumerate(words[:-1]):
-            if "." in word:
-                pending[word.replace("wifi-sec.", "802-11-wireless-security.")] = words[
-                    index + 1
-                ]
+        for prop, value in pairs.items():
+            pending[_ALIASES.get(prop, prop).replace("wifi-sec.", _WSEC)] = value
         profiles[name] = pending
         store.write_text(json.dumps(profiles))
         return 0
 
-    # nmcli connection edit [id <ID> | type wifi con-name <ID>]
-    if argv[:2] == ["connection", "edit"]:
-        name = (
-            argv[argv.index("id") + 1]
-            if "id" in argv
-            else argv[argv.index("con-name") + 1]
-        )
+    # nmcli connection edit id <ID>
+    if argv[:3] == ["connection", "edit", "id"]:
+        name = argv[3]
         pending = dict(profiles.get(name, {}))
         saved = False
-        for line in stdin.splitlines():
+        lines = iter(stdin.splitlines())
+        for line in lines:
             head, _, rest = line.partition(" ")
             if head == "set":
                 prop, _, value = rest.partition(" ")
-                # The editor strips the separators between the property and
-                # its value, and drops tabs inside it; mirroring that is the
-                # point of a stub, so a test can catch a mangled secret.
-                pending[prop] = value.strip().replace("\t", "")
+                if value:
+                    # `set <property> <value>` strips the value and drops tabs.
+                    pending[prop] = value.strip().replace("\t", "")
+                else:
+                    # `set <property>` prompts and reads the next line whole;
+                    # readline still swallows a tab as completion.
+                    pending[prop] = next(lines, "").replace("\t", "")
             elif head == "save":
                 profiles[name] = pending
                 saved = True

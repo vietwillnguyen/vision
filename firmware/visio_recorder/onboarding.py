@@ -75,17 +75,16 @@ class SubprocessNmcliRunner:
         ).stdout
 
 
-def _editor_script(properties: list[tuple[str, str]]) -> str:
-    """Render the ``nmcli connection edit`` commands for one atomic save.
+def _psk_editor_script(password: str) -> str:
+    """Render the ``nmcli connection edit`` commands that store only the key.
 
-    The blank line after ``save`` is load-bearing in both directions: the
-    editor asks "That might result in an immediate activation. Do you still
-    want to save?" when the save turns autoconnect on and asks nothing when it
-    is on already, and an empty line both takes that prompt's default (yes)
-    and is a no-op at the editor's own prompt.
+    ``set <property>`` with no value makes the editor prompt for it and take
+    the whole next line verbatim, leading, trailing and inner spaces included;
+    ``set <property> <value>`` would strip the value. The blank line after
+    ``save`` answers the editor's "Do you still want to save?" when it asks
+    one, and is a no-op at its own prompt when it does not.
     """
-    sets = "".join(f"set {name} {value}\n" for name, value in properties)
-    return f"{sets}save\n\nquit\n"
+    return f"set 802-11-wireless-security.psk\n{password}\nsave\n\nquit\n"
 
 
 class NmcliWifiConfigurator:
@@ -99,12 +98,14 @@ class NmcliWifiConfigurator:
     installs (``firmware/polkit/50-visio-recorder.rules``) is what lets the
     ``visio`` user do that without a session.
 
-    The pre-shared key never travels on nmcli's argv, which is world-readable
-    through ``/proc/<pid>/cmdline`` for the life of the call. It goes in on
-    nmcli's stdin instead, as a ``set`` command for the connection editor
-    (``nmcli connection edit``), which is the only nmcli form that takes a
-    property value from anywhere but the command line. nmcli's own
-    ``passwd-file`` is not an option here: it is accepted only by
+    The SSID, key management and autoconnect go on ``connection add`` or
+    ``modify`` argv, which stores every byte as given and reports a refusal
+    through its exit status. The pre-shared key never travels on nmcli's argv,
+    which is world-readable through ``/proc/<pid>/cmdline`` for the life of
+    the call. It goes in on nmcli's stdin instead, answering the connection
+    editor's prompt (``nmcli connection edit``), which is the only nmcli form
+    that takes a property value from anywhere but the command line. nmcli's
+    own ``passwd-file`` is not an option here: it is accepted only by
     ``connection up`` and ``device wifi connect``, where it answers
     NetworkManager's activation-time secret request, so it cannot put the key
     into the stored profile - and the profile is where it has to be, because a
@@ -146,24 +147,28 @@ class NmcliWifiConfigurator:
 
     def configure(self, ssid: str, password: str) -> None:
         validate_credentials(ssid, password)
-        properties = [
-            ("802-11-wireless.ssid", ssid),
-            ("802-11-wireless-security.key-mgmt", "wpa-psk"),
-            ("802-11-wireless-security.psk", password),
-            ("connection.autoconnect", "yes"),
-        ]
+        security = ["wifi-sec.key-mgmt", "wpa-psk"]
+        autoconnect = ["connection.autoconnect", "yes"]
         if self.exists():
             # Also the migration path: the root-era keyfile NetworkManager
             # already loaded has id "visio", so this rewrites it in place
             # rather than adding a second profile of the same name.
-            target = ["id", self._connection_id]
+            self._nmcli(
+                "modify",
+                ["nmcli", "connection", "modify", self._connection_id,
+                 "wifi.ssid", ssid, *security, *autoconnect],
+            )  # fmt: skip
         else:
-            target = ["type", "wifi", "con-name", self._connection_id]
-            properties.insert(0, ("connection.interface-name", self._interface))
+            self._nmcli(
+                "add",
+                ["nmcli", "connection", "add", "type", "wifi",
+                 "con-name", self._connection_id, "ifname", self._interface,
+                 "ssid", ssid, *security, *autoconnect],
+            )  # fmt: skip
         self._nmcli(
             "edit",
-            ["nmcli", "connection", "edit", *target],
-            stdin=_editor_script(properties),
+            ["nmcli", "connection", "edit", "id", self._connection_id],
+            stdin=_psk_editor_script(password),
         )
         self._verify_psk_stored(password)
 
@@ -173,8 +178,8 @@ class NmcliWifiConfigurator:
         ``save`` prints "Insufficient privileges" and exits 0 when polkit
         refuses it, so the exit status alone would let onboarding report
         success over an unchanged profile and leave the device offline with
-        nothing in the journal to say why. One ``save`` commits every property
-        at once, so reading the key back settles the whole transaction.
+        nothing in the journal to say why. The editor sets nothing but the
+        key, so reading it back settles that call.
 
         ``-e no`` is required: nmcli escapes ``:`` in terse output by default,
         which a key containing a colon would come back with. The key reaches

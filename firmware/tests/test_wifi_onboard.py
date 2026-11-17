@@ -176,3 +176,13 @@ def test_validate_credentials_rejects_out_of_range_psk_length():
 
 def test_validate_credentials_accepts_a_normal_network():
     validate_credentials("HomeNet", "hunter2secret")
+
+
+def test_validate_credentials_accepts_edge_spaces_and_an_ssid_tab():
+    validate_credentials("Cafe ", " correct horse ")
+    validate_credentials("Home\tNet", "hunter2secret")
+
+
+def test_validate_credentials_refuses_a_tab_in_the_password():
+    with pytest.raises(ValueError, match="not a printable-ASCII WPA passphrase"):
+        validate_credentials("HomeNet", "hunter2\tsecret")

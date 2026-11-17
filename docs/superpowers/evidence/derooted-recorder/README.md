@@ -5,7 +5,7 @@ No physical device was used; the spec's "Needs the physical device" list and Tas
 
 ## Files
 
-- `01-migration-simulation.log` - `sim/run.sh` output at this branch's merge with #26's `raspi-config` change.
+- `01-migration-simulation.log` - `sim/run.sh` output for the change that moves the SSID back onto `connection add`/`modify` argv; it ran from a local commit of the working tree (`wip` in the log), which is why its HEAD line names no branch commit.
 - `02-unit-tests.txt` - the new and changed onboarding, preflight and setup-script tests, verbose.
 - `03-firmware-suite.txt` - the whole firmware suite.
 - `04-systemd-analyze-host.txt` - `systemd-analyze verify` on the repo's unit on a dev host (systemd 255), where the only complaint is the venv interpreter not existing; the log above has the clean run on the provisioned trixie stand-in (systemd 257).
@@ -30,10 +30,10 @@ Not simulated: the camera, the GPIO and SPI hardware, the microphone, WiFi radio
 - Node owned wrongly (`/dev/spidev0.0 root:root 0600`): BLOCK pointing at the udev rules rather than at the account.
 - Operator view (`pi`, and root under sudo) reports the daemon's access, not the caller's; the unit's `SupplementaryGroups=` keeps `gpio` granted after `visio` is removed from it in `/etc/group`, and dropping it from the unit too turns the line into a BLOCK.
 - The daemon's files as `visio`: env file parsed, `session.json` and a root-era queued segment read, a new segment written.
-- WiFi as `visio` through real polkitd and NetworkManager: `connection edit id visio` over the root-era keyfile and `connection edit type wifi con-name visio` on a fresh device both store the network, NetworkManager writes `root:root 0600` keyfiles itself, and `connection up` is authorized (it fails only for want of a wifi device).
-  `nmcli networking off` and `nmcli connection reload` are refused; without the polkit rule the editor prints "Insufficient privileges" and still exits 0, so what surfaces the refusal is `configure`'s read-back - `nmcli connection edit did not store the pre-shared key for connection 'visio'`, with no password in it and the stored profile unchanged.
-- The pre-shared key never reaches `nmcli`'s argv: `stubs/nmcli` records the argv of every `nmcli` call in the run before exec'ing the real binary, and none of the 33 recorded calls carries any onboarded key.
-  The only onboarding forms recorded are `connection edit id visio`, `connection edit type wifi con-name visio` and `connection up visio`; the keys themselves went in on stdin, and the keyfiles hold them.
+- WiFi as `visio` through real polkitd and NetworkManager: `connection modify visio` over the root-era keyfile and `connection add type wifi con-name visio` on a fresh device both store the network, `connection edit id visio` then stores the pre-shared key from stdin, NetworkManager writes `root:root 0600` keyfiles itself, and `connection up` is authorized (it fails only for want of a wifi device).
+  `nmcli networking off` and `nmcli connection reload` are refused; without the polkit rule `connection modify` exits 1 before the editor runs, so `configure` raises `nmcli connection modify exited 1`, with no password in it and the stored profile unchanged.
+- The pre-shared key never reaches `nmcli`'s argv: `stubs/nmcli` records the argv of every `nmcli` call in the run before exec'ing the real binary, and none of the 34 recorded calls carries any onboarded key.
+  The only onboarding forms recorded are `connection add type wifi con-name visio ...`, `connection modify visio ...`, `connection edit id visio` and `connection up visio`; the keys themselves went in on stdin, and the keyfiles hold them.
 - Rollback: a `90-run-as-root.conf` drop-in is warned about and left alone by setup, and preflight then reports `daemon_user: root`.
 
 ## Reproduce

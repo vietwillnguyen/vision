@@ -81,10 +81,10 @@ class ScriptedNmcli:
             # that asks for a mismatch sees one.
             if self._stored_psk is not None:
                 return f"{self._stored_psk}\n"
-            for line in "".join(self.stdins).splitlines():
-                prefix = "set 802-11-wireless-security.psk "
-                if line.startswith(prefix):
-                    return f"{line[len(prefix) :]}\n"
+            lines = "".join(self.stdins).splitlines()
+            for index, line in enumerate(lines[:-1]):
+                if line == "set 802-11-wireless-security.psk":
+                    return f"{lines[index + 1]}\n"
             return "\n"
         return ""
 
@@ -220,15 +220,19 @@ def test_a_failing_nmcli_still_never_sees_the_password_on_its_command_line(
     assert nmcli_stub.argv(), "the real runner never reached the stub"
     for argv in nmcli_stub.argv():
         assert "hunter2secret" not in " ".join(argv)
-    assert nmcli_stub.stored() == {}
+    assert "802-11-wireless-security.psk" not in nmcli_stub.stored()
 
 
-def test_configure_rewrites_an_existing_profile_through_the_editor(nmcli_stub):
+def test_configure_rewrites_an_existing_profile_in_place(nmcli_stub):
     nmcli_stub.seed("visio", **{"802-11-wireless.ssid": "HomeNet"})
 
     NmcliWifiConfigurator().configure("OtherNet", "newsecret99")
 
-    assert ["connection", "edit", "id", "visio"] in nmcli_stub.argv()
+    assert [argv[:2] for argv in nmcli_stub.argv()[1:]] == [
+        ["connection", "modify"],
+        ["connection", "edit"],
+        ["-e", "no"],
+    ]
     assert nmcli_stub.stored() == {
         "802-11-wireless.ssid": "OtherNet",
         "802-11-wireless-security.key-mgmt": "wpa-psk",
@@ -242,18 +246,53 @@ def test_configure_adds_a_system_connection_when_none_exists():
 
     NmcliWifiConfigurator(nmcli).configure("HomeNet", "hunter2secret")
 
-    assert nmcli.calls[:2] == [
+    assert nmcli.calls[:3] == [
         ["nmcli", "-g", "NAME", "connection", "show"],
-        ["nmcli", "connection", "edit", "type", "wifi", "con-name", "visio"],
-    ]
-    assert nmcli.stdins[1] == (
-        "set connection.interface-name wlan0\n"
-        "set 802-11-wireless.ssid HomeNet\n"
-        "set 802-11-wireless-security.key-mgmt wpa-psk\n"
-        "set 802-11-wireless-security.psk hunter2secret\n"
-        "set connection.autoconnect yes\n"
-        "save\n\nquit\n"
+        ["nmcli", "connection", "add", "type", "wifi",
+         "con-name", "visio", "ifname", "wlan0", "ssid", "HomeNet",
+         "wifi-sec.key-mgmt", "wpa-psk", "connection.autoconnect", "yes"],
+        ["nmcli", "connection", "edit", "id", "visio"],
+    ]  # fmt: skip
+    assert nmcli.stdins[2] == (
+        "set 802-11-wireless-security.psk\nhunter2secret\nsave\n\nquit\n"
     )
+
+
+@pytest.mark.parametrize(
+    ("ssid", "password"),
+    [
+        ("Cafe ", "hunter2secret"),
+        (" Cafe", "hunter2secret"),
+        ("HomeNet", " correct horse"),
+        ("HomeNet", "correct horse "),
+    ],
+)
+def test_edge_spaces_reach_networkmanager_byte_for_byte(nmcli_stub, ssid, password):
+    # Legal in an SSID and in a WPA passphrase alike; the editor's
+    # `set <property> <value>` form would strip them, so only the key goes
+    # through the editor and only through its prompted form.
+    NmcliWifiConfigurator().configure(ssid, password)
+
+    stored = nmcli_stub.stored()
+    assert stored["802-11-wireless.ssid"] == ssid
+    assert stored["802-11-wireless-security.psk"] == password
+    for argv in nmcli_stub.argv():
+        assert password not in argv
+
+
+def test_a_tab_in_the_ssid_reaches_networkmanager_on_argv(nmcli_stub):
+    NmcliWifiConfigurator().configure("Home\tNet", "hunter2secret")
+
+    assert nmcli_stub.stored()["802-11-wireless.ssid"] == "Home\tNet"
+
+
+def test_a_tab_in_the_password_is_refused_before_calling_nmcli(nmcli_stub):
+    # readline in the connection editor would drop it, storing a key the
+    # device can never connect with.
+    with pytest.raises(ValueError, match="tab.*printable-ASCII"):
+        NmcliWifiConfigurator().configure("HomeNet", "hunter2\tsecret")
+
+    assert nmcli_stub.argv() == []
 
 
 def test_configure_reads_the_key_back_rather_than_trusting_the_exit_status():
@@ -289,13 +328,13 @@ def test_configure_modifies_the_existing_connection_on_re_onboarding():
 
     NmcliWifiConfigurator(nmcli).configure("OtherNet", "newsecret99")
 
-    assert nmcli.calls[1] == ["nmcli", "connection", "edit", "id", "visio"]
-    assert nmcli.stdins[1] == (
-        "set 802-11-wireless.ssid OtherNet\n"
-        "set 802-11-wireless-security.key-mgmt wpa-psk\n"
-        "set 802-11-wireless-security.psk newsecret99\n"
-        "set connection.autoconnect yes\n"
-        "save\n\nquit\n"
+    assert nmcli.calls[1:3] == [
+        ["nmcli", "connection", "modify", "visio", "wifi.ssid", "OtherNet",
+         "wifi-sec.key-mgmt", "wpa-psk", "connection.autoconnect", "yes"],
+        ["nmcli", "connection", "edit", "id", "visio"],
+    ]  # fmt: skip
+    assert nmcli.stdins[2] == (
+        "set 802-11-wireless-security.psk\nnewsecret99\nsave\n\nquit\n"
     )
 
 
