@@ -161,7 +161,17 @@ A single Python systemd service manages the full device lifecycle.
   Resolution, framerate and H.264 bitrate are passed explicitly, and the segment length is derived from the bitrate; see Segment Size Contract below.
 - On segment completion the daemon wraps it into MP4 (`ffmpeg -c copy`), moves it to the upload queue, and hands it to a single background worker thread.
 - The worker thread is the sole owner of upload state (segment count, consecutive-failure count) and every upload-related LED transition; the main thread only records and enqueues.
-- The worker attempts the upload once per segment as it arrives; there is no continuous while-running retry loop - a failed upload's file stays queued and the *next process startup's* flush (step 5 above) is the retry mechanism.
+- The worker attempts the upload once per segment as it arrives, and also retries whatever is still queued while the daemon runs, so a failed upload no longer waits for the next process start.
+  The retry belongs to the worker rather than to a second thread or a scheduler: the worker already blocks on its work queue, so it blocks with a timeout instead, and a round of retries runs whenever that timeout elapses with no new segment waiting.
+  A new segment or the shutdown sentinel still wakes it at once, so the retry never delays either.
+  The wait between rounds doubles per consecutive failure from 30 s and is capped at 480 s, driven by the same consecutive-failure counter as the Critical LED, so the wait is reset by exactly what clears the red.
+  A brief WiFi drop is therefore recovered inside one segment period, while an outage lasting hours settles into one attempt every eight minutes rather than spending radio power on a dead network.
+  The *next process startup's* flush (step 5 above) remains the backstop for anything a run could not drain, and is still the only retry for flag markers, which their own worker owns while the daemon runs.
+- A retry round goes through the same upload path a segment does, so the 50 MB upload limit behaves identically: an oversized segment is split and its parts uploaded, and one that cannot be split under the limit is moved to `rejected/` and so leaves the queue for good, which is what keeps the limit from becoming a retry loop.
+  A round's outcome feeds the same consecutive-failure counter a segment's own upload does, so retry failures escalate to Critical and a retry success clears it.
+  An empty queue is a no-op that deliberately leaves that counter alone, since reporting "nothing failed" would clear Critical without anything having reached storage.
+  A round in flight is abandoned when the daemon is stopping or the battery has hit the halt threshold, so a backlog is never uploaded on a dying battery; whatever is left stays queued.
+  A round pushes no `device_status` row of its own - the next segment completes within one segment period and reports the new `segments_pending` and `segments_uploaded_today` then.
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
   Critical is a latched condition rather than a momentary one, so it is derived from the consecutive-failure counter (`UploadHealth`) instead of being applied once at the moment of escalation.
   That makes the red survive the following segments: while the counter is at or past the threshold, the segment's own upload shows red too, not the Uploading blue and the restored Recording green, and only the resetting success returns the LED to green or yellow.

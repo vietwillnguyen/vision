@@ -1,11 +1,13 @@
 import subprocess
 import threading
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from tests.fakes import (
+    FailingStorageClient,
     FakeBatteryReader,
     FakeClock,
     FakeCommandRunner,
@@ -30,7 +32,8 @@ from visio_recorder.daemon import (
 )
 from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.led import LedPattern
-from visio_recorder.recording_loop import DiskStats
+from visio_recorder.recording_loop import DiskStats, RetryBackoff
+from visio_recorder.upload_queue import list_pending
 
 CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)
 RECORDING_LED = ((0, 255, 0), LedPattern.SOLID)
@@ -136,6 +139,7 @@ def _make_deps(
     storage_client=None,
     status_client=None,
     audio=None,
+    retry_backoff=None,
 ) -> LoopDeps:
     return LoopDeps(
         command_runner=command_runner,
@@ -151,6 +155,7 @@ def _make_deps(
         video=VideoSettings(),
         upload_limit=unlimited_upload_limit(),
         audio=audio,
+        **({} if retry_backoff is None else {"retry_backoff": retry_backoff}),
     )
 
 
@@ -925,3 +930,192 @@ def test_critical_red_survives_the_next_segments_upload_colours(tmp_path):
         + [red, red]  # 4: fail (4 -> stays Critical, no blue, no green)
         + [red, green]  # 5: success resets the counter and clears Critical
     )
+
+
+def test_a_failed_segment_is_retried_in_process_without_a_restart(tmp_path):
+    # Reproduces the gap item 3 closes: a segment whose upload failed used to
+    # sit in the queue for the rest of the run, because on_segment_complete
+    # only ever uploads its own segment and flush_pending is called once, at
+    # daemon start. A pendant that lost WiFi for a minute therefore held that
+    # footage until someone power-cycled it.
+    queue_dir = tmp_path / "queue"
+
+    class FailFirstThenSucceed(FakeStorageClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+            self.retry_succeeded = threading.Event()
+
+        def upload(self, bucket, object_path, local_path):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("network down")
+            super().upload(bucket, object_path, local_path)
+            self.retry_succeeded.set()
+
+    storage = FailFirstThenSucceed()
+    stop = threading.Event()
+
+    def on_record(count: int) -> None:
+        # Segment 1 is already queued and failed by now, and the main thread
+        # parks here, so the worker is idle: the only thing that can clear the
+        # queue is its own in-process retry.
+        if count >= 2:
+            assert storage.retry_succeeded.wait(timeout=5), (
+                "the upload worker never retried the failed segment in process"
+            )
+            stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=on_record),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        retry_backoff=RetryBackoff(base_sec=0.01, max_sec=0.04),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    # Segment 1 reached storage on the retry, before segment 2 was handled.
+    assert storage.uploaded == [
+        "device-abc/20260704_120000.mp4",
+        "device-abc/20260704_120001.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+
+
+@dataclass(frozen=True)
+class _RecordingBackoff(RetryBackoff):
+    """A real backoff that also records the failure count it was asked about.
+
+    Still a ``RetryBackoff``, so the loop is exercised through the type it
+    really takes; the list is mutated, not the frozen field.
+    """
+
+    asked: list[int] = field(default_factory=list)
+
+    def delay_sec(self, consecutive_failures: int) -> float:
+        self.asked.append(consecutive_failures)
+        return super().delay_sec(consecutive_failures)
+
+
+def test_the_worker_waits_longer_after_each_failed_retry_round(tmp_path):
+    # Bounded, increasing waits, proved through the loop rather than the
+    # dataclass: each round feeds the worker's live consecutive-failure count
+    # into the backoff, which is the thing that makes the waits grow.
+    backoff = _RecordingBackoff(base_sec=0.01, max_sec=0.03)
+    rounds_done = threading.Event()
+    stop = threading.Event()
+
+    def on_record(count: int) -> None:
+        if count >= 2:
+            assert rounds_done.wait(timeout=5), "the worker never retried repeatedly"
+            stop.set()
+
+    class CountingFailure(FailingStorageClient):
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        def upload(self, bucket, object_path, local_path):
+            self.attempts += 1
+            if self.attempts >= 4:
+                rounds_done.set()
+            raise RuntimeError("network down")
+
+    storage = CountingFailure()
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=on_record),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        retry_backoff=backoff,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    # Segment 1's own upload is attempt 1; attempts 2+ are retry rounds, each
+    # asked about one more consecutive failure than the last.
+    assert storage.attempts >= 4
+    assert backoff.asked[:3] == [1, 2, 3]
+    assert backoff.asked == sorted(backoff.asked)
+    assert [backoff.delay_sec(n) for n in backoff.asked[:4]] == [0.01, 0.02, 0.03, 0.03]
+
+
+def test_retry_rounds_escalate_to_the_critical_led_without_a_new_segment(tmp_path):
+    # One segment, then nothing but retries: the third consecutive failure is
+    # a retry round's, not a segment's, and it must still turn the LED red.
+    spi = SimulatedSpiDevice()
+    led = Ws2812LedDriver(spi=spi)
+    red = (255, 0, 0)
+    went_red = threading.Event()
+    stop = threading.Event()
+
+    class FailUntilRed(FailingStorageClient):
+        def upload(self, bucket, object_path, local_path):
+            if any(decode_frame(f, 6_250_000)[0] == red for f in spi.writes):
+                went_red.set()
+            raise RuntimeError("network down")
+
+    def on_record(count: int) -> None:
+        if count >= 2:
+            assert went_red.wait(timeout=5), "retry failures never escalated to red"
+            stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=on_record),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=led,
+        storage_client=FailUntilRed(),
+        retry_backoff=RetryBackoff(base_sec=0.01, max_sec=0.02),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    colours = [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+    assert red in colours
+    # Only one segment ever uploaded, so the escalation came from retries.
+    first_red = colours.index(red)
+    assert first_red >= 2
+    # And it never goes back to a normal colour while every retry fails.
+    assert set(colours[first_red:]) == {red}
+
+
+def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path):
+    # flush_pending at daemon start can leave files behind (it ran while the
+    # network was still down). With no failures of its own the worker must
+    # still pick them up rather than wait for the next boot.
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir(parents=True)
+    (queue_dir / "20260703_235900.mp4").write_bytes(b"yesterday")
+    drained = threading.Event()
+
+    class NoticingStorage(FakeStorageClient):
+        def upload(self, bucket, object_path, local_path):
+            super().upload(bucket, object_path, local_path)
+            if object_path.endswith("20260703_235900.mp4"):
+                drained.set()
+
+    storage = NoticingStorage()
+    stop = threading.Event()
+
+    def on_record(count: int) -> None:
+        if count >= 2:
+            assert drained.wait(timeout=5), "the inherited queue was never drained"
+            stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=on_record),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        retry_backoff=RetryBackoff(base_sec=0.01, max_sec=0.02),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    assert "device-abc/20260703_235900.mp4" in storage.uploaded
+    assert list_pending(queue_dir) == []

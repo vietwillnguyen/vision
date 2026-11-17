@@ -1,5 +1,6 @@
 """Shared test fakes for the visio_recorder firmware suite."""
 
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -270,3 +271,50 @@ class UnusedProbe:
 def unlimited_upload_limit() -> UploadLimit:
     """An upload limit no test segment reaches, so nothing is ever split."""
     return UploadLimit(max_bytes=2**62, runner=FakeCommandRunner(), probe=UnusedProbe())
+
+
+class SizeCheckedStorageClient(StorageClient):
+    """Models ``SupabaseStorage.upload``'s idempotence without a real server.
+
+    The adapter sends ``x-upsert: false`` on purpose - object keys are
+    second-resolution naive local timestamps, which can repeat across a DST
+    fall-back or an RTC-less Pi rebooting before NTP sync - and instead looks
+    the stored object up first: a byte-identical object counts as already
+    uploaded, a different one raises ``FileExistsError``. That is what makes a
+    retry after a crash between a successful upload and the queue unlink
+    succeed instead of failing on the duplicate forever.
+
+    ``bodies_sent`` counts the uploads that actually sent the file, so a test
+    can tell a no-op retry from one that pushed a segment over WiFi again.
+    """
+
+    def __init__(self) -> None:
+        self.stored: dict[str, int] = {}
+        self.bodies_sent = 0
+
+    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
+        local_size = local_path.stat().st_size
+        stored_size = self.stored.get(object_path)
+        if stored_size is not None:
+            if stored_size == local_size:
+                return
+            raise FileExistsError(
+                f"{bucket}/{object_path} already stores {stored_size} bytes"
+            )
+        self.stored[object_path] = local_size
+        self.bodies_sent += 1
+
+
+class FailingSplitRunner(CommandRunner):
+    """An ffmpeg that cannot split anything, so the segment is unsplittable."""
+
+    def run(self, args: list[str]) -> None:
+        raise subprocess.CalledProcessError(1, args)
+
+
+class FakeDurationProbe:
+    def __init__(self, duration_sec: float) -> None:
+        self._duration_sec = duration_sec
+
+    def duration_sec(self, path: Path) -> float:
+        return self._duration_sec

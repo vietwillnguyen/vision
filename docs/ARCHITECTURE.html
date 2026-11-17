@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: d36a30fda8cd18cd7c4a43c43d71231d81aa824cb122939238ea264be3d3e265  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 39e7c798001445df44e3de6b5150fda78f05eec35b98ad5f95ede8f354854ed3  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-17 (latched Critical LED for consecutive upload failures) -->
+<!-- regenerated-at: 2026-11-17 (latched Critical LED + in-process upload retry) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -214,8 +214,10 @@ flowchart TD
         <pre class="mermaid">
 flowchart TD
   M["main thread"] -- "rpicam-vid per 5-min segment" --> Q["queue.Queue"]
-  Q --> W["worker thread<br/>(sole owner of upload state + LED)"]
+  Q -- "get(timeout=backoff)" --> W["worker thread<br/>(sole owner of upload state + LED)"]
   W -- "mux + upload" --> S["Supabase Storage"]
+  W -- "timeout elapsed,<br/>nothing new queued" --> R["retry everything still queued<br/>(30 s doubling to 480 s)"]
+  R --> S
   W --> H["UploadHealth<br/>(consecutive-failure counter)"]
   H -- "3 in a row: latched" --> CRIT["CRITICAL LED held through<br/>every following segment's upload"]
   H -- "any success" --> RESET["reset counter, LED back to green/yellow"]
@@ -248,7 +250,7 @@ flowchart TD
       <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
         <li>Segment size is pinned, not defaulted: <span class="font-mono text-xs bg-base-200 rounded px-1">--width 1280 --height 720 --framerate 30 --bitrate 4000000</span> are passed explicitly, and the default segment length (60 s) is derived from the bitrate so a segment fits the hosted 50 MiB upload limit with a 1.66x margin. See the segment size contract below.</li>
-        <li>Upload retry is <em>startup-flush only</em> — no continuous while-running retry loop. A failed segment stays queued until the next process start.</li>
+        <li>Upload retry is <em>in-process</em>, owned by the existing upload worker: it blocks on its work queue with a timeout instead of indefinitely, and retries everything still queued whenever that timeout elapses with no new segment. The wait doubles per consecutive failure from 30 s to a 480 s cap, indexed by the same <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter that drives the CRITICAL LED, so retry failures escalate and a retry success clears it. No second thread and no scheduler; a new segment or the shutdown sentinel still wakes the worker at once, and a round in flight stops early once the loop is shutting down so a backlog is never uploaded through a battery halt. The startup flush is now the backstop rather than the only retry — and remains the only retry for flag markers, which <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> owns while the daemon runs.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
