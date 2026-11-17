@@ -1,4 +1,4 @@
-=== provisioning revision 2b5776f356b4e17af770d8bbd05a8136875357bf
+=== provisioning revision 6db4c89450f43cd725a0eaca63aa77a14e6d66d7
 === run 1: fresh device (stops at the env file template)
 [setup-device] Step 1/10: swap size
 [setup-device] Swap is 208MB - wrote /etc/rpi/swap.conf.d/10-visio.conf pinning a 1024MB swap file, applied on the reboot reported at the end
@@ -16,20 +16,20 @@
 [setup-device] Step 5/10: code
 Cloning into '/opt/visio-recorder'...
 done.
-HEAD is now at 2b5776f feat: enable spi and i2c through raspi-config nonint
-[setup-device] Provisioned revision 2b5776f356b4e17af770d8bbd05a8136875357bf (requested '2b5776f356b4e17af770d8bbd05a8136875357bf')
+HEAD is now at 6db4c89 no-mistakes(document): Note the env-checkpoint step 3 exit 1 in README
+[setup-device] Provisioned revision 6db4c89450f43cd725a0eaca63aa77a14e6d66d7 (requested '6db4c89450f43cd725a0eaca63aa77a14e6d66d7')
 Using CPython 3.13.5 interpreter at: /usr/bin/python3
 Creating virtual environment at: /opt/visio-recorder/firmware/.venv
 Activate with: source /opt/visio-recorder/firmware/.venv/bin/activate
-Resolved 42 packages in 4ms
+Resolved 42 packages in 1ms
    Building visio-recorder @ file:///opt/visio-recorder/firmware
 Downloading pydantic-core (2.0MiB)
 Downloading cryptography (4.5MiB)
  Downloaded pydantic-core
-      Built visio-recorder @ file:///opt/visio-recorder/firmware
  Downloaded cryptography
-Prepared 31 packages in 10.19s
-Installed 31 packages in 31ms
+      Built visio-recorder @ file:///opt/visio-recorder/firmware
+Prepared 31 packages in 2.91s
+Installed 31 packages in 34ms
  + annotated-types==0.7.0
  + anyio==4.16.0
  + certifi==2026.6.17
@@ -134,10 +134,10 @@ VISIO_DEV_SHELL=1
 [setup-device] Step 4/10: uv
 [setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
 [setup-device] Step 5/10: code
-HEAD is now at 2b5776f feat: enable spi and i2c through raspi-config nonint
-[setup-device] Provisioned revision 2b5776f356b4e17af770d8bbd05a8136875357bf (requested '2b5776f356b4e17af770d8bbd05a8136875357bf')
-Resolved 42 packages in 3ms
-Checked 31 packages in 2ms
+HEAD is now at 6db4c89 no-mistakes(document): Note the env-checkpoint step 3 exit 1 in README
+[setup-device] Provisioned revision 6db4c89450f43cd725a0eaca63aa77a14e6d66d7 (requested '6db4c89450f43cd725a0eaca63aa77a14e6d66d7')
+Resolved 42 packages in 2ms
+Checked 31 packages in 1ms
 [setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
 [setup-device] Step 6/10: systemd and ALSA
 [setup-device] /etc/asound.conf already installed - no change
@@ -149,7 +149,7 @@ Checked 31 packages in 2ms
 [setup-device] Managed dev-shell block written to /home/pi/.bashrc (owner pi:pi)
 [setup-device] Step 9/10: data dir
 [setup-device] Step 10/10: summary
-[setup-device] Provisioned revision: 2b5776f356b4e17af770d8bbd05a8136875357bf
+[setup-device] Provisioned revision: 6db4c89450f43cd725a0eaca63aa77a14e6d66d7
 [setup-device] VISIO_BATTERY_SOURCE=none
 [setup-device] Data dir: /var/lib/visio-recorder
 [setup-device] Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now.
@@ -213,10 +213,10 @@ SwapTotal:       1048572 kB
 [setup-device] Step 4/10: uv
 [setup-device] uv already installed at /usr/local/bin/uv (uv 0.12.17 (x86_64-unknown-linux-gnu)) - reusing it, nothing downloaded
 [setup-device] Step 5/10: code
-HEAD is now at 2b5776f feat: enable spi and i2c through raspi-config nonint
-[setup-device] Provisioned revision 2b5776f356b4e17af770d8bbd05a8136875357bf (requested '2b5776f356b4e17af770d8bbd05a8136875357bf')
-Resolved 42 packages in 2ms
-Checked 31 packages in 0.79ms
+HEAD is now at 6db4c89 no-mistakes(document): Note the env-checkpoint step 3 exit 1 in README
+[setup-device] Provisioned revision 6db4c89450f43cd725a0eaca63aa77a14e6d66d7 (requested '6db4c89450f43cd725a0eaca63aa77a14e6d66d7')
+Resolved 42 packages in 1ms
+Checked 31 packages in 0.49ms
 [setup-device] /usr/local/bin/visio-preflight -> /opt/visio-recorder/firmware/.venv/bin/visio-preflight
 [setup-device] Step 6/10: systemd and ALSA
 [setup-device] /etc/asound.conf already installed - no change
@@ -228,7 +228,7 @@ Checked 31 packages in 0.79ms
 [setup-device] Managed dev-shell block written to /home/pi/.bashrc (owner pi:pi)
 [setup-device] Step 9/10: data dir
 [setup-device] Step 10/10: summary
-[setup-device] Provisioned revision: 2b5776f356b4e17af770d8bbd05a8136875357bf
+[setup-device] Provisioned revision: 6db4c89450f43cd725a0eaca63aa77a14e6d66d7
 [setup-device] VISIO_BATTERY_SOURCE=none
 [setup-device] Data dir: /var/lib/visio-recorder
 [setup-device] Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now.
@@ -250,7 +250,6 @@ c165b6fccadb0c0eace646c8b1ad76c1ec2203fb885eba6da32ab761189f3a35  home/pi/.confi
 === run 4: the same device with raspi-config missing (a non-Raspberry-Pi OS image)
 [setup-device] Step 3/10: interfaces
 [setup-device] ERROR: raspi-config is not installed, so SPI and I2C were NOT enabled. This script provisions Raspberry Pi OS, which ships raspi-config; on any other image, install it or flash Raspberry Pi OS Lite and re-run.
-HEAD is now at 2b5776f feat: enable spi and i2c through raspi-config nonint
 [setup-device] INCOMPLETE: SPI, I2C or the camera could not be enabled through raspi-config (see the step 3 error above) - without SPI the status LED cannot be driven and 'visio-preflight' will report spidev0.0 as a blocking failure.
 [setup-device] Setup incomplete - see the INCOMPLETE lines above. Fix what they name and re-run this script.
 exit=1
@@ -281,7 +280,7 @@ ModuleNotFoundError: No module named 'rpi_ws281x'
 [WARN] i2c: I2C not enabled - run setup-device.sh, may need a reboot
 exit=1
 === after the reboot: /dev/spidev0.0 appears root:spi 0660 (simulated node)
--rw-rw---- 1 root spi 0 Nov 17 07:19 /dev/spidev0.0
+-rw-rw---- 1 root spi 0 Nov 17 10:01 /dev/spidev0.0
 === visio-preflight as the operator (pi, in the spi group)
 [INFO] install: /opt/visio-recorder/firmware/visio_recorder
 [BLOCK] rpicam-vid: rpicam-vid not found on PATH - check the apt install step
