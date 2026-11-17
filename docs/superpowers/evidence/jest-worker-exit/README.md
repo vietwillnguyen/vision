@@ -8,12 +8,12 @@ Each run is `CI=true npx jest --ci --maxWorkers=<n>` from `app/`, cycling `--max
 `loop.sh` runs the loop and counts runs whose output contains "failed to exit gracefully".
 Reproduce with `SB_ENV=<file holding supabase status -o env> APP_DIR=$PWD ../docs/superpowers/evidence/jest-worker-exit/loop.sh <label> 10 1 2 3 4 15` from `app/` (third argument `0` runs without the live env).
 
-| Loop | Live Supabase env | Runs | Runs with the warning |
-| --- | --- | --- | --- |
-| `before-live-loop.txt` | yes | 40 | 40 |
-| `before-nolive-loop.txt` | no | 20 | 0 |
-| `after-live-loop.txt` | yes | 40 | 0 |
-| `after-nolive-loop.txt` | no | 20 | 0 |
+| Loop                     | Live Supabase env | Runs | Runs with the warning |
+| ------------------------ | ----------------- | ---- | --------------------- |
+| `before-live-loop.txt`   | yes               | 40   | 40                    |
+| `before-nolive-loop.txt` | no                | 20   | 0                     |
+| `after-live-loop.txt`    | yes               | 40   | 0                     |
+| `after-nolive-loop.txt`  | no                | 20   | 0                     |
 
 `before-live-sample-run.log` and `after-live-sample-run.log` are one full run of each.
 Every run in every loop passed all its tests; the warning never failed a run, which is why it went unnoticed as a flake.
