@@ -1,0 +1,19 @@
+$ npx tsc --noEmit
+exit=0
+$ npm run lint
+exit=0
+$ npm run format:check
+Checking formatting...
+All matched files use Prettier code style!
+exit=0
+$ npx expo install --check
+Dependencies are up to date
+exit=0
+$ npm ls test-renderer react-test-renderer @testing-library/react-native
+app@1.0.0 <repo>/app
+├─┬ @testing-library/react-native@14.1.0
+│ └── test-renderer@1.2.0 deduped
+├─┬ jest-expo@57.0.6
+│ └── react-test-renderer@19.2.3
+└── test-renderer@1.2.0
+

@@ -12,26 +12,26 @@ jest.mock('expo-video', () => {
 });
 
 describe('ReelPlayer', () => {
-  it('renders the video view with an accessibility label when a uri is ready', () => {
-    render(
+  it('renders the video view with an accessibility label when a uri is ready', async () => {
+    await render(
       <ReelPlayer videoUri="https://signed/reel.mp4" title="Today's Reel" onShare={jest.fn()} />,
     );
     expect(screen.getByTestId('video-view')).toBeTruthy();
     expect(screen.getByLabelText('Reel video player')).toBeTruthy();
   });
 
-  it('shows a placeholder while the uri is pending', () => {
-    render(<ReelPlayer videoUri={null} title="Today's Reel" onShare={jest.fn()} />);
+  it('shows a placeholder while the uri is pending', async () => {
+    await render(<ReelPlayer videoUri={null} title="Today's Reel" onShare={jest.fn()} />);
     expect(screen.getByText('Preparing playback...')).toBeTruthy();
     expect(screen.queryByTestId('video-view')).toBeNull();
   });
 
-  it('invokes onShare from the labeled share button', () => {
+  it('invokes onShare from the labeled share button', async () => {
     const onShare = jest.fn();
-    render(
+    await render(
       <ReelPlayer videoUri="https://signed/reel.mp4" title="Today's Reel" onShare={onShare} />,
     );
-    fireEvent.press(screen.getByLabelText('Share reel'));
+    await fireEvent.press(screen.getByLabelText('Share reel'));
     expect(onShare).toHaveBeenCalled();
   });
 });

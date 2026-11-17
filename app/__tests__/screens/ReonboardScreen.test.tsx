@@ -19,8 +19,8 @@ jest.mock(
 function noop() {}
 
 describe('ReonboardScreen', () => {
-  it('renders the form step with SSID and password inputs', () => {
-    render(
+  it('renders the form step with SSID and password inputs', async () => {
+    await render(
       <ReonboardScreen
         step="form"
         ssid=""
@@ -39,8 +39,8 @@ describe('ReonboardScreen', () => {
     expect(screen.getByTestId('password-input')).toBeTruthy();
   });
 
-  it('disables Generate QR until both fields are filled', () => {
-    render(
+  it('disables Generate QR until both fields are filled', async () => {
+    await render(
       <ReonboardScreen
         step="form"
         ssid=""
@@ -58,8 +58,8 @@ describe('ReonboardScreen', () => {
     expect(screen.getByTestId('generate-qr-button').props.accessibilityState.disabled).toBe(true);
   });
 
-  it('disables Generate QR and shows a submitting label while isSubmitting is true', () => {
-    render(
+  it('disables Generate QR and shows a submitting label while isSubmitting is true', async () => {
+    await render(
       <ReonboardScreen
         step="form"
         ssid="HomeNet"
@@ -79,9 +79,9 @@ describe('ReonboardScreen', () => {
     expect(screen.getByText('Generating...')).toBeTruthy();
   });
 
-  it('calls onSubmit with the typed SSID and password', () => {
+  it('calls onSubmit with the typed SSID and password', async () => {
     const onSubmit = jest.fn();
-    render(
+    await render(
       <ReonboardScreen
         step="form"
         ssid="HomeNet"
@@ -96,14 +96,14 @@ describe('ReonboardScreen', () => {
         onRetry={noop}
       />,
     );
-    fireEvent.press(screen.getByTestId('generate-qr-button'));
+    await fireEvent.press(screen.getByTestId('generate-qr-button'));
     expect(onSubmit).toHaveBeenCalledWith('HomeNet', 'hunter2');
   });
 
-  it('reports typed input via onSsidChange/onPasswordChange', () => {
+  it('reports typed input via onSsidChange/onPasswordChange', async () => {
     const onSsidChange = jest.fn();
     const onPasswordChange = jest.fn();
-    render(
+    await render(
       <ReonboardScreen
         step="form"
         ssid=""
@@ -118,14 +118,14 @@ describe('ReonboardScreen', () => {
         onRetry={noop}
       />,
     );
-    fireEvent.changeText(screen.getByTestId('ssid-input'), 'HomeNet');
-    fireEvent.changeText(screen.getByTestId('password-input'), 'hunter2');
+    await fireEvent.changeText(screen.getByTestId('ssid-input'), 'HomeNet');
+    await fireEvent.changeText(screen.getByTestId('password-input'), 'hunter2');
     expect(onSsidChange).toHaveBeenCalledWith('HomeNet');
     expect(onPasswordChange).toHaveBeenCalledWith('hunter2');
   });
 
-  it('renders the QR code with exactly qrValue on the ready step, plus the privacy hint', () => {
-    render(
+  it('renders the QR code with exactly qrValue on the ready step, plus the privacy hint', async () => {
+    await render(
       <ReonboardScreen
         step="ready"
         ssid="HomeNet"
@@ -149,9 +149,9 @@ describe('ReonboardScreen', () => {
     ).toBeTruthy();
   });
 
-  it('calls onDone when Done is pressed on the ready step', () => {
+  it('calls onDone when Done is pressed on the ready step', async () => {
     const onDone = jest.fn();
-    render(
+    await render(
       <ReonboardScreen
         step="ready"
         ssid="HomeNet"
@@ -166,13 +166,13 @@ describe('ReonboardScreen', () => {
         onRetry={noop}
       />,
     );
-    fireEvent.press(screen.getByTestId('done-button'));
+    await fireEvent.press(screen.getByTestId('done-button'));
     expect(onDone).toHaveBeenCalled();
   });
 
-  it('shows the error message and calls onRetry on the error step', () => {
+  it('shows the error message and calls onRetry on the error step', async () => {
     const onRetry = jest.fn();
-    render(
+    await render(
       <ReonboardScreen
         step="error"
         ssid="HomeNet"
@@ -190,7 +190,7 @@ describe('ReonboardScreen', () => {
     expect(screen.getByTestId('reonboard-error')).toHaveTextContent(
       'No active session - please sign in again.',
     );
-    fireEvent.press(screen.getByTestId('try-again-button'));
+    await fireEvent.press(screen.getByTestId('try-again-button'));
     expect(onRetry).toHaveBeenCalled();
   });
 });

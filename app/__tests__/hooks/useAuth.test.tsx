@@ -6,13 +6,18 @@ import type { VisionClient } from '../../src/lib/supabase';
 
 const SESSION = { access_token: 'tok', user: { id: 'u1' } } as unknown as Session;
 
-function fakeAuthClient(initialSession: Session | null) {
+type SessionResult = { data: { session: Session | null } };
+
+function fakeAuthClient(initialSession: Session | null | Promise<SessionResult>) {
   let authCallback: ((event: string, session: Session | null) => void) | null = null;
   const signInWithPassword = jest.fn();
   const signOut = jest.fn().mockResolvedValue({ error: null });
   const client = {
     auth: {
-      getSession: () => Promise.resolve({ data: { session: initialSession } }),
+      getSession: () =>
+        initialSession instanceof Promise
+          ? initialSession
+          : Promise.resolve({ data: { session: initialSession } }),
       onAuthStateChange: (cb: (event: string, session: Session | null) => void) => {
         authCallback = cb;
         return { data: { subscription: { unsubscribe: jest.fn() } } };
@@ -29,38 +34,48 @@ function fakeAuthClient(initialSession: Session | null) {
   };
 }
 
+// getSession stays pending until failSession() so the loading state is observable.
 function fakeAuthClientWithFailingSession(error: Error) {
+  let failSession!: () => void;
+  const pending = new Promise<never>((_resolve, reject) => (failSession = () => reject(error)));
   const client = {
     auth: {
-      getSession: () => Promise.reject(error),
+      getSession: () => pending,
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe: jest.fn() } } }),
       signInWithPassword: jest.fn(),
       signOut: jest.fn().mockResolvedValue({ error: null }),
     },
   } as unknown as VisionClient;
-  return { client };
+  return { client, failSession };
 }
 
 describe('useAuth', () => {
   it('starts loading then resolves to signed-out without a session', async () => {
-    const { client } = fakeAuthClient(null);
-    const { result } = renderHook(() => useAuth(client));
+    // An awaited render flushes already-resolved promises, so the fetch is
+    // held open to observe the state before it lands.
+    let respond!: (value: SessionResult) => void;
+    const { client } = fakeAuthClient(new Promise((resolve) => (respond = resolve)));
+    const { result } = await renderHook(() => useAuth(client));
     expect(result.current.state).toEqual({ kind: 'loading' });
+    respond({ data: { session: null } });
     await waitFor(() => expect(result.current.state).toEqual({ kind: 'signed-out' }));
   });
 
   it('falls back to signed-out when getSession rejects', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    const { client } = fakeAuthClientWithFailingSession(new Error('AsyncStorage unavailable'));
-    const { result } = renderHook(() => useAuth(client));
+    const { client, failSession } = fakeAuthClientWithFailingSession(
+      new Error('AsyncStorage unavailable'),
+    );
+    const { result } = await renderHook(() => useAuth(client));
     expect(result.current.state).toEqual({ kind: 'loading' });
+    failSession();
     await waitFor(() => expect(result.current.state).toEqual({ kind: 'signed-out' }));
     errorSpy.mockRestore();
   });
 
   it('restores a persisted session', async () => {
     const { client } = fakeAuthClient(SESSION);
-    const { result } = renderHook(() => useAuth(client));
+    const { result } = await renderHook(() => useAuth(client));
     await waitFor(() =>
       expect(result.current.state).toEqual({ kind: 'signed-in', session: SESSION }),
     );
@@ -68,17 +83,17 @@ describe('useAuth', () => {
 
   it('follows auth state changes', async () => {
     const { client, emitAuthChange } = fakeAuthClient(null);
-    const { result } = renderHook(() => useAuth(client));
+    const { result } = await renderHook(() => useAuth(client));
     await waitFor(() => expect(result.current.state.kind).toBe('signed-out'));
-    emitAuthChange('SIGNED_IN', SESSION);
+    await emitAuthChange('SIGNED_IN', SESSION);
     expect(result.current.state).toEqual({ kind: 'signed-in', session: SESSION });
-    emitAuthChange('SIGNED_OUT', null);
+    await emitAuthChange('SIGNED_OUT', null);
     expect(result.current.state).toEqual({ kind: 'signed-out' });
   });
 
   it('signIn resolves null on success and a message on failure', async () => {
     const { client, signInWithPassword } = fakeAuthClient(null);
-    const { result } = renderHook(() => useAuth(client));
+    const { result } = await renderHook(() => useAuth(client));
     await waitFor(() => expect(result.current.state.kind).toBe('signed-out'));
 
     signInWithPassword.mockResolvedValueOnce({ data: {}, error: null });

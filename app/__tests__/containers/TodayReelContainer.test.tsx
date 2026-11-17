@@ -40,7 +40,7 @@ function fakeClient(rows: Record<string, unknown>[]) {
 
 describe('TodayReelContainer', () => {
   it("plays today's reel through a signed url", async () => {
-    render(
+    await render(
       <TodayReelContainer
         client={fakeClient([REEL_ROW])}
         deviceId="dev-1"
@@ -51,7 +51,7 @@ describe('TodayReelContainer', () => {
   });
 
   it('explains when no reel exists yet', async () => {
-    render(
+    await render(
       <TodayReelContainer
         client={fakeClient([])}
         deviceId="dev-1"
@@ -63,7 +63,7 @@ describe('TodayReelContainer', () => {
 
   it('renders placeholder when reel has empty s3_key', async () => {
     const rowWithEmptyKey = { ...REEL_ROW, s3_key: '' };
-    render(
+    await render(
       <TodayReelContainer
         client={fakeClient([rowWithEmptyKey])}
         deviceId="dev-1"

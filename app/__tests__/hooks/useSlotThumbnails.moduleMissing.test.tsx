@@ -37,7 +37,7 @@ function fakeStorageClient() {
 describe('useSlotThumbnails when the platform has no video-thumbnails support', () => {
   it('logs once at error level and never populates thumbnails, without throwing', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    const { result } = renderHook(() => useSlotThumbnails(fakeStorageClient(), SLOTS));
+    const { result } = await renderHook(() => useSlotThumbnails(fakeStorageClient(), SLOTS));
 
     await waitFor(() =>
       expect(errorSpy).toHaveBeenCalledWith(

@@ -81,7 +81,7 @@ function fakeClient(options?: {
 
 describe('ArchiveContainer', () => {
   it('renders 30 UTC-midnight-aligned cells ending today', async () => {
-    render(
+    await render(
       <ArchiveContainer
         client={fakeClient()}
         deviceId="dev-1"
@@ -96,7 +96,7 @@ describe('ArchiveContainer', () => {
   });
 
   it('plays the reel for a pressed day', async () => {
-    render(
+    await render(
       <ArchiveContainer
         client={fakeClient()}
         deviceId="dev-1"
@@ -104,14 +104,14 @@ describe('ArchiveContainer', () => {
       />,
     );
     await waitFor(() => expect(screen.getByTestId('heatmap-cell-2026-07-10')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-10'));
+    await fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-10'));
     await waitFor(() => expect(screen.getByTestId('video-view')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('Back to archive'));
+    await fireEvent.press(screen.getByLabelText('Back to archive'));
     expect(screen.getByTestId('archive-heatmap')).toBeTruthy();
   });
 
   it('handles empty s3_key without crashing', async () => {
-    render(
+    await render(
       <ArchiveContainer
         client={fakeClient({
           reelsInRange: [REEL_ROW_EMPTY_KEY],
@@ -122,7 +122,7 @@ describe('ArchiveContainer', () => {
       />,
     );
     await waitFor(() => expect(screen.getByTestId('heatmap-cell-2026-07-09')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-09'));
+    await fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-09'));
     await waitFor(() => {
       expect(screen.getByLabelText('Back to archive')).toBeTruthy();
       expect(screen.queryByTestId('video-view')).toBeNull();
@@ -135,7 +135,7 @@ describe('ArchiveContainer', () => {
       singleReelData: null,
       singleReelError: { message: 'Failed to fetch reel details' },
     });
-    render(
+    await render(
       <ArchiveContainer
         client={errorClient}
         deviceId="dev-1"
@@ -143,7 +143,7 @@ describe('ArchiveContainer', () => {
       />,
     );
     await waitFor(() => expect(screen.getByTestId('heatmap-cell-2026-07-10')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-10'));
+    await fireEvent.press(screen.getByTestId('heatmap-cell-2026-07-10'));
     await waitFor(() => {
       expect(screen.getByLabelText('Reel error')).toBeTruthy();
       expect(screen.getByText('Failed to fetch reel details')).toBeTruthy();

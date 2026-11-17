@@ -71,6 +71,9 @@ updates:
     ignore:
       - dependency-name: "react"
       - dependency-name: "react-dom"
+      # No longer a direct dependency (@testing-library/react-native 14 uses
+      # test-renderer), but jest-expo still pins it to the SDK's React version,
+      # so keep a transitive security bump from drifting it off that pin.
       - dependency-name: "react-test-renderer"
       - dependency-name: "react-native"
       - dependency-name: "react-native-svg"
@@ -97,6 +100,11 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/jest"
         update-types: ["version-update:semver-major"]
+      # test-renderer: its minor line tracks the React minor it renders with
+      # (1.2 is React 19.2, 1.3 is React 19.3), so a minor bump is a React
+      # upgrade in disguise. Move it with the SDK's react pin, not on its own.
+      - dependency-name: "test-renderer"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
   # Scans .github/workflows/. Keeps actions/checkout, setup-node, setup-uv,
   # astral-sh, and supabase/setup-cli current. Note this bumps the action *ref*
