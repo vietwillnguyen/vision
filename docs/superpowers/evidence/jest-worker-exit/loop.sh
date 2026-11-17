@@ -19,7 +19,7 @@ for ((r=1;r<=runs;r++)); do
     start=$(date +%s)
     CI=true npx jest --ci --maxWorkers=$w > "$log" 2>&1; rc=$?
     dur=$(( $(date +%s)-start ))
-    leak=$(grep -c "failed to exit gracefully" "$log")
+    leak=$(grep -c "^A worker process has failed to exit gracefully" "$log")
     tests=$(grep -E "^Tests:" "$log" | tail -1)
     echo "run=$i workers=$w live=$live rc=$rc dur=${dur}s leak=$leak $tests" | tee -a "$summary"
   done

@@ -5,7 +5,7 @@ Each run is `CI=true npx jest --ci --maxWorkers=<n>` from `app/`, cycling `--max
 
 ## Reproduction and result
 
-`loop.sh` runs the loop and counts runs whose output contains "failed to exit gracefully".
+`loop.sh` runs the loop and counts runs whose output contains jest's own "A worker process has failed to exit gracefully" line (anchored, so the guard's error message, which quotes the phrase, is not counted).
 Reproduce with `SB_ENV=<file holding supabase status -o env> APP_DIR=$PWD ../docs/superpowers/evidence/jest-worker-exit/loop.sh <label> 10 1 2 3 4 15` from `app/` (third argument `0` runs without the live env).
 
 | Loop                     | Live Supabase env | Runs | Runs with the warning |
