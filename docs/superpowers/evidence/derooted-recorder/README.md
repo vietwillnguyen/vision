@@ -10,11 +10,13 @@ No physical device was used; the spec's "Needs the physical device" list and Tas
 - `03-firmware-suite.txt` - the whole firmware suite.
 - `04-systemd-analyze-host.txt` - `systemd-analyze verify` on the repo's unit on a dev host (systemd 255), where the only complaint is the venv interpreter not existing; the log above has the clean run on the provisioned trixie stand-in (systemd 257).
 - `sim/` - the harness: `Dockerfile`, `stubs/`, `stock-config.txt` and `run.sh`.
+  `stubs/nmcli` is the one entry there that is not a stub: it records each call's argv and then runs the real `nmcli`.
 
 ## What the simulation is and is not
 
 Real: both `setup-device.sh` revisions (the root-era `a85ef42`, then this branch) run from the operator's clone, `useradd`/`usermod`/`groupadd`, Raspberry Pi OS's own `raspi-config` at the base harness's pinned commit, `uv sync`, the provisioned venv, `visio-preflight` and `python3 -m visio_recorder.preflight`, `systemd-analyze verify` (systemd 257), and a D-Bus system bus with polkitd 126 and NetworkManager 1.52.1, against which the firmware's own `NmcliWifiConfigurator` and `NmcliConnectionActivator` run as `visio`.
 Stubbed: apt, `systemctl` (it logs, and answers `show` from the installed unit and drop-ins the way systemd would), `dtparam`, `modprobe`, the clone URL.
+`nmcli` is wrapped rather than stubbed: the wrapper records argv and execs the real binary, so the argv finding below is about real `nmcli` calls.
 Simulated: device nodes are regular files with the owner, group and mode Raspberry Pi OS's udev rules give the real ones; the unit's process credentials are reproduced with `setpriv --reuid visio --regid visio --groups ...`, because systemd is not PID 1, so the sandboxing directives themselves are verified only by `systemd-analyze`.
 Not simulated: the camera, the GPIO and SPI hardware, the microphone, WiFi radios, lgpio, and the hardened unit actually running.
 
@@ -28,8 +30,10 @@ Not simulated: the camera, the GPIO and SPI hardware, the microphone, WiFi radio
 - Node owned wrongly (`/dev/spidev0.0 root:root 0600`): BLOCK pointing at the udev rules rather than at the account.
 - Operator view (`pi`, and root under sudo) reports the daemon's access, not the caller's; the unit's `SupplementaryGroups=` keeps `gpio` granted after `visio` is removed from it in `/etc/group`, and dropping it from the unit too turns the line into a BLOCK.
 - The daemon's files as `visio`: env file parsed, `session.json` and a root-era queued segment read, a new segment written.
-- WiFi as `visio` through real polkitd and NetworkManager: `modify` over the root-era keyfile and `add` on a fresh device both succeed, NetworkManager writes `root:root 0600` keyfiles itself, and `connection up` is authorized (it fails only for want of a wifi device).
-  `nmcli networking off` and `nmcli connection reload` are refused; without the polkit rule `configure` raises `nmcli connection modify exited 1` with no password in it and the stored profile is unchanged.
+- WiFi as `visio` through real polkitd and NetworkManager: `connection edit id visio` over the root-era keyfile and `connection edit type wifi con-name visio` on a fresh device both store the network, NetworkManager writes `root:root 0600` keyfiles itself, and `connection up` is authorized (it fails only for want of a wifi device).
+  `nmcli networking off` and `nmcli connection reload` are refused; without the polkit rule the editor prints "Insufficient privileges" and still exits 0, so what surfaces the refusal is `configure`'s read-back - `nmcli connection edit did not store the pre-shared key for connection 'visio'`, with no password in it and the stored profile unchanged.
+- The pre-shared key never reaches `nmcli`'s argv: `stubs/nmcli` records the argv of every `nmcli` call in the run before exec'ing the real binary, and none of the 33 recorded calls carries any onboarded key.
+  The only onboarding forms recorded are `connection edit id visio`, `connection edit type wifi con-name visio` and `connection up visio`; the keys themselves went in on stdin, and the keyfiles hold them.
 - Rollback: a `90-run-as-root.conf` drop-in is warned about and left alone by setup, and preflight then reports `daemon_user: root`.
 
 ## Reproduce
