@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
@@ -123,6 +124,21 @@ def _dev_shell_step() -> str:
         _script_text()
         .split('log "Step 8/10: developer shell"')[1]
         .split('log "Step 9/10')[0]
+    )
+
+
+def _reboot_prelude(marker: Path) -> str:
+    """The script's real owed-reboot setup before step 1, with the marker moved."""
+    text = _script_text()
+    start = text.index("\nload_pending_reboot\n")
+    return "\n".join(
+        [
+            _extract_function("load_pending_reboot"),
+            _extract_function("record_pending_reboot"),
+            f'REBOOT_MARKER="{marker}"',
+            "reboot_needed=false",
+            text[start : text.index('log "Step 1/10: ', start)],
+        ]
     )
 
 
@@ -1455,31 +1471,62 @@ def test_step_5_builds_the_venv_before_syncing_and_rechecks_it_afterwards():
     assert "--inexact" not in step
 
 
-def test_the_hardware_libraries_preflight_blocks_on_are_actually_provisioned():
+def _apt_installed_packages(tmp_path: Path) -> list[str]:
+    """Run the real step 2 against stub apt tools; return every package installed."""
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    installs = tmp_path / "apt-installs"
+    for name, body in (
+        ("dpkg", "exit 0"),
+        ("apt-get", f'[ "$1" = install ] && echo "$@" >> "{installs}"; exit 0'),
+        ("apt-cache", "printf '  Installed: (none)\\n  Candidate: 1.8\\n'"),
+    ):
+        (stubs / name).write_text(f"#!/bin/sh\n{body}\n")
+        (stubs / name).chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{_extract_function('log')}\n{_step_block(2)}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    return [
+        word
+        for line in installs.read_text().splitlines()
+        for word in line.split()
+        if not word.startswith("-") and word != "install"
+    ]
+
+
+def test_the_hardware_libraries_preflight_blocks_on_are_actually_provisioned(
+    tmp_path,
+):
     # preflight blocks on gpiozero and spidev (see visio_recorder/preflight.py's
     # run_checks), so provisioning has to supply both or no device it produces
     # can pass its own preflight. Both are apt packages the venv reaches
     # through --system-site-packages.
-    apt_step = _step_block(2)
+    packages = _apt_installed_packages(tmp_path)
 
-    assert "python3-gpiozero" in apt_step, "gpiozero is an apt package on the target"
-    assert "python3-spidev" in apt_step, "the SPI LED driver imports spidev"
-    assert "pijuice-base" in apt_step
+    assert "python3-gpiozero" in packages, "gpiozero is an apt package on the target"
+    assert "python3-spidev" in packages, "the SPI LED driver imports spidev"
+    assert "pijuice-base" in packages
 
 
-def test_nothing_is_compiled_on_the_device_any_more():
+def test_nothing_is_compiled_on_the_device_any_more(tmp_path):
     # The SPI LED rewire (#85) retired rpi_ws281x, the one library that had to
-    # be built from source - and with it the C toolchain step 5 installed.
-    text = "\n".join(
-        line
-        for line in _script_text().splitlines()
-        if not line.lstrip().startswith("#")
-    )
+    # be built from source - and with it the C toolchain it needed.
+    packages = _apt_installed_packages(tmp_path)
 
-    assert "ws281x" not in text.lower()
-    assert "build-essential" not in text
-    assert "python3-dev" not in text
-    assert "uv pip install" not in text
+    assert not [p for p in packages if "ws281x" in p.lower()]
+    assert "build-essential" not in packages
+    assert "python3-dev" not in packages
 
 
 # --------------------------------------------------------------------------
@@ -1612,11 +1659,10 @@ def _run_final_steps(
         [
             _extract_function("log"),
             _extract_function("env_file_value"),
-            _extract_function("record_pending_reboot"),
+            _reboot_prelude(tmp_path / "run" / "visio-setup-reboot-required"),
             _extract_assignment("PREFLIGHT_BIN"),
             'CONFIG_TXT="/boot/firmware/config.txt"',
             f'DATA_DIR="{tmp_path}/default-data-dir"',
-            f'REBOOT_MARKER="{tmp_path}/run/visio-setup-reboot-required"',
             'target_sha="deadbee"',
             f"reboot_needed={reboot_needed}",
             "data_dir_failed=false",
@@ -1761,9 +1807,7 @@ def test_a_created_data_dir_says_nothing_about_being_incomplete(tmp_path):
 def test_the_env_template_does_not_promise_preflight_can_read_it(tmp_path):
     # The file is chmod 600 root-owned, so the unprivileged read fails; the
     # template must not document that path as working.
-    template = (
-        _script_text().split("""cat > "${ENV_FILE}" <<'EOF'""")[1].split("\nEOF\n")[0]
-    )
+    template = _env_template(tmp_path)
 
     assert "VISIO_DATA_DIR" in template
     assert template.count("VISIO_DATA_DIR=") == 1, "the key must not be duplicated"
@@ -1833,26 +1877,86 @@ def test_no_marker_means_no_owed_reboot(tmp_path):
     assert "REBOOT_NEEDED=false" in result.stdout
 
 
-def test_the_owed_reboot_is_loaded_before_step_1_and_saved_at_both_exits():
-    text = _script_text()
-    template_branch = _step_block(7).split("chmod 600")[1].split("else")[0]
-
-    assert 'REBOOT_MARKER="/run/visio-setup-reboot-required"' in text
-    assert text.index("\nload_pending_reboot\n") < text.index('log "Step 1/10: ')
-    assert "record_pending_reboot" in template_branch, (
-        "the checkpoint exit has to keep run 1's reboot for run 2"
+def _run_after_reboot_prelude(
+    tmp_path: Path, body: str, env_file: Path | None = None
+) -> subprocess.CompletedProcess:
+    (tmp_path / "run").mkdir(exist_ok=True)
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            _extract_function("env_file_value"),
+            _reboot_prelude(tmp_path / "run" / "visio-setup-reboot-required"),
+            body,
+        ]
     )
-    assert "REBOOT REQUIRED" in template_branch
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": "/usr/bin:/bin", "ENV_FILE": str(env_file or "/nonexistent")},
+    )
 
 
-def test_the_env_template_checkpoint_still_exits_zero():
+@pytest.mark.parametrize("failure", ["exit 1", "false"])
+def test_a_run_that_fails_after_a_reboot_needing_change_still_owes_it(
+    tmp_path, failure
+):
+    # Run 1 writes the swap drop-in and edits config.txt, then a later step
+    # fails - an explicit exit 1, or errexit on a flaky-network uv sync. Run 2
+    # finds both already converged, so only the marker can still report it.
+    result = _run_after_reboot_prelude(
+        tmp_path, f"reboot_needed=true\n{failure}\necho UNREACHABLE"
+    )
+
+    assert result.returncode == 1
+    assert "UNREACHABLE" not in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def test_a_failed_run_that_needed_no_reboot_leaves_no_marker(tmp_path):
+    result = _run_after_reboot_prelude(tmp_path, "exit 1")
+
+    assert result.returncode == 1
+    assert not (tmp_path / "run" / "visio-setup-reboot-required").exists()
+
+
+def _run_env_step(tmp_path: Path, reboot_needed: str) -> subprocess.CompletedProcess:
+    """Run the real step 7 on a device with no env file yet."""
+    return _run_after_reboot_prelude(
+        tmp_path,
+        "\n".join(
+            [
+                'CONFIG_TXT="/boot/firmware/config.txt"',
+                f"reboot_needed={reboot_needed}",
+                _step_block(7),
+                "echo PAST_THE_CHECKPOINT",
+            ]
+        ),
+        env_file=tmp_path / "visio-recorder.env",
+    )
+
+
+def test_the_env_template_checkpoint_keeps_the_reboot_and_still_exits_zero(
+    tmp_path,
+):
     # Writing the template and stopping is a deliberate re-run checkpoint, not
-    # a failure, so the non-zero outcome above must not have leaked into it.
-    step = _step_block(7)
-    template_branch = step.split("chmod 600")[1].split("else")[0]
+    # a failure - and run 1's reboot has to survive it for run 2 to report.
+    result = _run_env_step(tmp_path, reboot_needed="true")
 
-    assert "exit 0" in template_branch
-    assert "exit 1" not in template_branch
+    assert result.returncode == 0, result.stderr
+    assert "PAST_THE_CHECKPOINT" not in result.stdout
+    assert "REBOOT REQUIRED" in result.stdout
+    assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
+    assert (tmp_path / "visio-recorder.env").stat().st_mode & 0o777 == 0o600
+
+
+def test_the_env_template_checkpoint_owes_no_reboot_it_was_not_asked_for(tmp_path):
+    result = _run_env_step(tmp_path, reboot_needed="false")
+
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT REQUIRED" not in result.stdout
+    assert not (tmp_path / "run" / "visio-setup-reboot-required").exists()
 
 
 def test_env_file_value_reads_an_indented_key_the_way_systemd_does(tmp_path):
@@ -2078,14 +2182,49 @@ def test_a_missing_config_txt_is_a_failure_not_a_crash(tmp_path):
     assert "FAILED=true" in result.stdout
 
 
-def test_step_3_makes_the_config_txt_edits_and_asks_for_a_reboot():
-    step = _step_block(3)
+def _run_interfaces_step(tmp_path: Path, config: Path) -> subprocess.CompletedProcess:
+    """Run the real step 3 with I2C and the camera already on."""
+    stubs = tmp_path / "stubs"
+    stubs.mkdir(parents=True)
+    raspi_config = stubs / "raspi-config"
+    raspi_config.write_text('#!/bin/sh\ncase "$2" in get_*) echo 0 ;; esac\n')
+    raspi_config.chmod(0o755)
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            f'CONFIG_TXT="{config}"',
+            "reboot_needed=false",
+            "config_txt_changed=false",
+            "config_txt_failed=false",
+            _step_block(3),
+            'echo "REBOOT_NEEDED=${reboot_needed} FAILED=${config_txt_failed}"',
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
 
-    assert 'CONFIG_TXT="/boot/firmware/config.txt"' in _script_text()
-    for call in _CONFIG_TXT_EDITS.splitlines()[:3]:
-        assert call in step, f"step 3 no longer runs: {call}"
-    assert 'if [[ "${config_txt_changed}" == "true" ]]; then' in step
-    assert "reboot_needed=true" in step
+
+def test_step_3_makes_the_config_txt_edits_and_asks_for_a_reboot(tmp_path):
+    config = tmp_path / "config.txt"
+    config.write_text(_STOCK_CONFIG_TXT)
+
+    first = _run_interfaces_step(tmp_path / "a", config)
+
+    assert first.returncode == 0, first.stderr
+    assert "REBOOT_NEEDED=true FAILED=false" in first.stdout
+    effective = _effective_all_scope(config.read_text())
+    for line in ("dtparam=spi=on", "core_freq_fixed=1", "dtoverlay=adau7002-simple"):
+        assert effective.count(line) == 1, f"{line} must apply exactly once"
+
+    second = _run_interfaces_step(tmp_path / "b", config)
+
+    assert second.returncode == 0, second.stderr
+    assert "REBOOT_NEEDED=false FAILED=false" in second.stdout
 
 
 # --------------------------------------------------------------------------
@@ -2132,12 +2271,45 @@ def test_an_operators_own_asound_conf_is_kept_aside(tmp_path):
     )
 
 
-def test_step_6_installs_the_alsa_config_from_the_provisioned_checkout():
-    step = _step_block(6)
+def test_step_6_installs_the_alsa_config_from_the_provisioned_checkout(tmp_path):
+    firmware = Path(__file__).resolve().parent.parent
+    install_dir = tmp_path / "opt"
+    for relative in ("alsa/visio-mic.conf", "systemd/visio-recorder.service"):
+        target = install_dir / "firmware" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(firmware / relative, target)
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    systemctl = stubs / "systemctl"
+    systemctl.write_text('#!/bin/sh\necho "SYSTEMCTL $*"\n')
+    systemctl.chmod(0o755)
+    snippet = "\n".join(
+        [
+            _extract_function("log"),
+            _extract_function("install_alsa_config"),
+            _extract_assignment("SYSTEMD_UNIT_SRC"),
+            f'INSTALL_DIR="{install_dir}"',
+            f'SYSTEMD_UNIT_DST="{etc}/visio-recorder.service"',
+            f'ALSA_CONF_DST="{etc}/asound.conf"',
+            _step_block(6),
+        ]
+    )
 
-    src = '"${INSTALL_DIR}/firmware/alsa/visio-mic.conf"'
-    assert f'install_alsa_config {src} "${{ALSA_CONF_DST}}"' in step
-    assert 'ALSA_CONF_DST="/etc/asound.conf"' in _script_text()
+    result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (etc / "asound.conf").read_bytes() == (
+        firmware / "alsa" / "visio-mic.conf"
+    ).read_bytes()
+    assert "SYSTEMCTL enable visio-recorder" in result.stdout
 
 
 # --------------------------------------------------------------------------
@@ -2148,32 +2320,53 @@ def test_step_6_installs_the_alsa_config_from_the_provisioned_checkout():
 # --------------------------------------------------------------------------
 
 
-def _env_template() -> str:
-    match = re.search(
-        r'cat > "\$\{ENV_FILE\}" <<\'EOF\'\n(.*?)\nEOF\n', _script_text(), re.DOTALL
-    )
-    assert match, "the env file template heredoc was not found"
-    return match.group(1)
+def _env_template(tmp_path: Path) -> str:
+    """The env file step 7 writes on a fresh device."""
+    result = _run_env_step(tmp_path, reboot_needed="false")
+    assert result.returncode == 0, result.stderr
+    return (tmp_path / "visio-recorder.env").read_text()
+
+
+class _RecordingEnv(Mapping[str, str]):
+    """An environment that remembers every key looked up in it."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.read: set[str] = set()
+
+    def __getitem__(self, key: str) -> str:
+        self.read.add(key)
+        return self._values[key]
+
+    def __contains__(self, key: object) -> bool:
+        if isinstance(key, str):
+            self.read.add(key)
+        return key in self._values
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
 
 
 def _daemon_env_keys() -> set[str]:
-    package = Path(__file__).resolve().parent.parent / "visio_recorder"
-    keys: set[str] = set()
-    for module in ("daemon.py", "preflight.py"):
-        keys |= set(
-            re.findall(
-                r'env(?:iron)?(?:\.get\(|\[)"([A-Z][A-Z0-9_]+)"',
-                (package / module).read_text(),
-            )
-        )
-    return keys
+    from visio_recorder import preflight
+    from visio_recorder.daemon import load_config
+
+    env = _RecordingEnv({"SUPABASE_URL": "http://x", "SUPABASE_ANON_KEY": "k"})
+    load_config(env)
+    preflight.resolve_data_dir(env)
+    preflight.resolve_battery_source(env, read_file=lambda _path: {})
+    preflight.resolve_audio_device(env, read_file=lambda _path: {})
+    return env.read
 
 
-def test_the_env_template_lists_every_key_the_daemon_reads():
-    template = _env_template()
+def test_the_env_template_lists_every_key_the_daemon_reads(tmp_path):
+    template = _env_template(tmp_path)
     keys = _daemon_env_keys()
     assert {"VISIO_VIDEO_BITRATE", "VISIO_AUDIO", "VISIO_MAX_UPLOAD_BYTES"} <= keys, (
-        "the key scan no longer finds the daemon's config reads"
+        "the recorded lookups no longer reach the daemon's config reads"
     )
 
     for key in sorted(keys):
@@ -2182,11 +2375,13 @@ def test_the_env_template_lists_every_key_the_daemon_reads():
         )
 
 
-def test_the_env_template_leaves_derived_and_tunable_keys_at_their_defaults():
+def test_the_env_template_leaves_derived_and_tunable_keys_at_their_defaults(
+    tmp_path,
+):
     from visio_recorder.capture import AudioSettings, VideoSettings
     from visio_recorder.segment_size import DEFAULT_MAX_UPLOAD_BYTES
 
-    template = _env_template()
+    template = _env_template(tmp_path)
     video, audio = VideoSettings(), AudioSettings()
     for line in (
         f"# VISIO_VIDEO_WIDTH={video.width}",
@@ -2206,9 +2401,10 @@ def test_the_env_template_parses_to_a_config_the_daemon_accepts(tmp_path):
     from visio_recorder.daemon import load_config
     from visio_recorder.preflight import read_env_file
 
-    env_file = tmp_path / "visio-recorder.env"
+    env_file = tmp_path / "parsed" / "visio-recorder.env"
+    env_file.parent.mkdir()
     env_file.write_text(
-        _env_template()
+        _env_template(tmp_path)
         .replace("SUPABASE_URL=\n", "SUPABASE_URL=http://x\n")
         .replace("SUPABASE_ANON_KEY=\n", "SUPABASE_ANON_KEY=k\n")
     )

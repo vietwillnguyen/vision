@@ -106,7 +106,8 @@ load_pending_reboot() {
   fi
 }
 
-# Remember an owed reboot for the next run, at either way this script ends.
+# Remember an owed reboot for the next run, however this script ends - the
+# env-file checkpoint, an error exit, or the summary. Runs as the EXIT trap.
 # Best effort: a /run that cannot be written only costs that reminder.
 record_pending_reboot() {
   if [[ "${reboot_needed}" == "true" ]]; then
@@ -115,6 +116,7 @@ record_pending_reboot() {
 }
 
 load_pending_reboot
+trap record_pending_reboot EXIT
 
 log "Step 1/10: swap size"
 SWAP_CONF="/etc/dphys-swapfile"
@@ -623,7 +625,6 @@ VISIO_DEV_SHELL=1
 EOF
   chmod 600 "${ENV_FILE}"
   log "Wrote template ${ENV_FILE} - fill in SUPABASE_URL and SUPABASE_ANON_KEY (and set VISIO_DEV_SHELL=0 now if this is an appliance image), then re-run this script"
-  record_pending_reboot
   if [[ "${reboot_needed}" == "true" ]]; then
     log "REBOOT REQUIRED once the re-run finishes: this run changed swap, interfaces or ${CONFIG_TXT}. The re-run reports it again."
   fi
@@ -989,7 +990,6 @@ if [[ "${config_txt_failed}" == "true" ]]; then
   log "INCOMPLETE: ${CONFIG_TXT} could not be edited (see the step 3 error above), so SPI may be off - the status LED cannot be driven and '${PREFLIGHT_BIN}' will report spidev0.0 as a blocking failure."
 fi
 log "Run '${PREFLIGHT_BIN}' from any directory to check the runtime environment."
-record_pending_reboot
 if [[ "${reboot_needed}" == "true" ]]; then
   log "REBOOT REQUIRED: swap, interface or ${CONFIG_TXT} changes need a reboot to take effect before the daemon will work."
 else
