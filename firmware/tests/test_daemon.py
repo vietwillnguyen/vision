@@ -18,8 +18,8 @@ from tests.fakes import (
     TriggerableBatteryReader,
     unlimited_upload_limit,
 )
-from visio_recorder.capture import VideoSettings
 from tests.ws2812_waveform import decode_frame
+from visio_recorder.capture import VideoSettings
 from visio_recorder.daemon import (
     LoopDeps,
     load_config,
