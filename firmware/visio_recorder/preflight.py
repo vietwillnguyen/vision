@@ -11,6 +11,13 @@ fixed-core-clock check, since a scaling clock skews LED colours rather than
 stopping anything; and the data-dir and SPI-device checks when the path
 exists but cannot be used by a caller other than the uid the daemon runs as.
 
+The daemon runs as the unprivileged ``visio`` user, so whether *that* user
+can open each device node is checked separately from whether the caller
+can: the ``*_access`` checks always answer for the daemon's user, from its
+real process credentials when this is the unit's own ExecStartPre, and from
+its account plus the unit's ``SupplementaryGroups=`` otherwise - so an
+operator over SSH, with or without sudo, sees what the daemon will see.
+
 Severity is therefore not always a property of the check alone - it can
 depend on who is running it, because this module is both the daemon's
 own startup gate and a diagnostic an operator runs over SSH. Only the
@@ -22,14 +29,19 @@ touching real hardware, matching the rest of firmware/'s Protocol/fake
 convention.
 """
 
+import glob as globmod
+import grp
 import importlib.util
 import os
+import pwd
 import re
 import shutil
+import stat
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from visio_recorder.capture import AudioSettings, probe_audio_device
 
@@ -50,14 +62,18 @@ _ASOUND_CONF = Path("/etc/asound.conf")
 # The I2S card dtoverlay=adau7002-simple registers.
 _I2S_CARD = "adau7002"
 
-# The systemd unit's EnvironmentFile=. Written mode 600 root-owned by
+# The systemd unit's EnvironmentFile=. Written mode 0640 root:visio by
 # setup-device.sh, which is why reading it is a best effort here.
 _ENV_FILE = Path("/etc/visio-recorder.env")
 _ENV_LINE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
-# The uid the systemd unit starts the daemon as (User= is unset, so root).
-# Only that caller is gated on the data dir being writable.
-_DAEMON_UID = 0
+# Who the systemd unit runs the daemon as. Both are pinned to
+# visio-recorder.service by tests; at runtime the installed unit's own values
+# win (``resolve_daemon_identity``), so a rollback drop-in setting User=root is
+# reported as what it is rather than as a broken visio account.
+_UNIT_NAME = "visio-recorder.service"
+_DAEMON_USER = "visio"
+_DAEMON_GROUPS: tuple[str, ...] = ("video", "gpio", "i2c", "spi", "audio")
 
 
 @dataclass
@@ -66,6 +82,303 @@ class CheckResult:
     severity: str
     ok: bool
     detail: str
+
+
+@dataclass(frozen=True)
+class DaemonIdentity:
+    """The account the unit runs the daemon as, and the groups it gets.
+
+    ``uid`` is None when the account does not exist. ``groups`` maps gid to
+    name for the account's primary group, every group listing it as a member,
+    and the unit's ``SupplementaryGroups=`` - which systemd grants even when
+    the account's own membership has drifted.
+    """
+
+    user: str
+    uid: int | None
+    groups: Mapping[int, str]
+    source: str
+
+
+def _systemctl_show() -> Mapping[str, str] | None:
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", _UNIT_NAME,
+             "--property=LoadState,User,SupplementaryGroups"],
+            capture_output=True, text=True, timeout=5,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return dict(
+        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+    )
+
+
+class _Account(Protocol):
+    @property
+    def pw_uid(self) -> int: ...
+    @property
+    def pw_gid(self) -> int: ...
+
+
+class _Group(Protocol):
+    @property
+    def gr_name(self) -> str: ...
+    @property
+    def gr_gid(self) -> int: ...
+    @property
+    def gr_mem(self) -> list[str]: ...
+
+
+def resolve_daemon_identity(
+    show: Callable[[], Mapping[str, str] | None] = _systemctl_show,
+    getpwnam: Callable[[str], _Account] = pwd.getpwnam,
+    getgrall: Callable[[], Sequence[_Group]] = grp.getgrall,
+) -> DaemonIdentity:
+    """Who the daemon runs as: the installed unit's word, else the packaged one.
+
+    The loaded unit (with any drop-ins) is authoritative, because that is what
+    systemd will actually do; an empty ``User=`` there means root. When the
+    unit is not loaded - CI, or a device not yet provisioned - the packaged
+    defaults above are the best answer.
+    """
+    props = show()
+    user, supplementary = _DAEMON_USER, _DAEMON_GROUPS
+    source = "packaged unit defaults"
+    if props is not None and props.get("LoadState") == "loaded":
+        user = props.get("User") or "root"
+        supplementary = tuple(props.get("SupplementaryGroups", "").split())
+        source = f"installed {_UNIT_NAME}"
+    try:
+        account = getpwnam(user)
+    except KeyError:
+        return DaemonIdentity(user=user, uid=None, groups={}, source=source)
+    all_groups = getgrall()
+    groups = {
+        g.gr_gid: g.gr_name
+        for g in all_groups
+        if g.gr_gid == account.pw_gid or user in g.gr_mem or g.gr_name in supplementary
+    }
+    return DaemonIdentity(user=user, uid=account.pw_uid, groups=groups, source=source)
+
+
+def _group_names(groups: Mapping[int, str]) -> str:
+    return " ".join(sorted(groups.values())) or "none"
+
+
+def check_daemon_user(daemon: DaemonIdentity) -> CheckResult:
+    if daemon.uid is None:
+        return CheckResult(
+            name="daemon_user",
+            severity=BLOCK,
+            ok=False,
+            detail=(
+                f"the account {daemon.user!r} ({daemon.source}) does not exist, so "
+                f"systemd cannot start the daemon - run setup-device.sh, which "
+                f"creates it"
+            ),
+        )
+    return CheckResult(
+        name="daemon_user",
+        severity=BLOCK,
+        ok=True,
+        detail=(
+            f"{daemon.user} (uid {daemon.uid}, {daemon.source}), groups: "
+            f"{_group_names(daemon.groups)}"
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class DeviceRequirement:
+    """Device nodes a part of the daemon opens, and the group that grants them."""
+
+    name: str
+    patterns: tuple[str, ...]
+    group: str
+    severity: str
+    needed_for: str
+
+
+# Raspberry Pi OS's udev rules hand each class to a group with mode 0660:
+# systemd's 50-udev-default.rules gives video4linux and media nodes to video
+# and sound nodes to audio; raspberrypi-sys-mods' 99-com.rules gives spidev to
+# spi, gpiochip and gpiomem to gpio, i2c-dev to i2c and dma_heap to video.
+# libcamera opens the media controller, the video and subdev nodes and the DMA
+# heaps, so all of them are the camera's.
+CAMERA_NODES = DeviceRequirement(
+    name="camera_access",
+    patterns=("/dev/media*", "/dev/video*", "/dev/v4l-subdev*", "/dev/dma_heap/*"),
+    group="video",
+    severity=BLOCK,
+    needed_for="rpicam-vid and rpicam-still (libcamera)",
+)
+LED_NODES = DeviceRequirement(
+    name="spi_access",
+    patterns=(str(_SPI_DEVICE),),
+    group="spi",
+    severity=BLOCK,
+    needed_for="the status LED",
+)
+BUTTON_NODES = DeviceRequirement(
+    name="gpio_access",
+    patterns=("/dev/gpiochip*",),
+    group="gpio",
+    severity=BLOCK,
+    needed_for="the flag button (gpiozero)",
+)
+MIC_NODES = DeviceRequirement(
+    name="audio_access",
+    patterns=("/dev/snd/*",),
+    group="audio",
+    severity=WARN,
+    needed_for="the I2S microphone (video-only recording without it)",
+)
+I2C_NODES = DeviceRequirement(
+    name="i2c_access",
+    patterns=(str(_I2C_DEVICE),),
+    group="i2c",
+    severity=WARN,
+    needed_for="the PiJuice battery HAT",
+)
+
+
+def _grants_read_write(st: os.stat_result, uid: int, gids: set[int]) -> bool:
+    """The kernel's DAC decision for O_RDWR, for an account that is not us."""
+    if uid == 0:
+        return True
+    if st.st_uid == uid:
+        bits = st.st_mode >> 6
+    elif st.st_gid in gids:
+        bits = st.st_mode >> 3
+    else:
+        bits = st.st_mode
+    return bits & 0o6 == 0o6
+
+
+def _group_name(gid: int) -> str:
+    try:
+        return grp.getgrgid(gid).gr_name
+    except KeyError:
+        return str(gid)
+
+
+def _owner_name(uid: int) -> str:
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return str(uid)
+
+
+def check_device_access(
+    requirement: DeviceRequirement,
+    daemon: DaemonIdentity,
+    getuid: Callable[[], int] = os.getuid,
+    getgroups: Callable[[], list[int]] = lambda: [os.getgid(), *os.getgroups()],
+    glob: Callable[[str], list[str]] = globmod.glob,
+    stat_node: Callable[[str], os.stat_result] = os.stat,
+    access: Callable[[str], bool] = lambda path: os.access(path, os.R_OK | os.W_OK),
+    group_name: Callable[[int], str] = _group_name,
+    owner_name: Callable[[int], str] = _owner_name,
+) -> CheckResult:
+    """Whether the daemon's user can open every node ``requirement`` names.
+
+    Answered for the daemon's user whoever runs it. As the daemon itself
+    (the unit's ExecStartPre) the kernel is asked directly, with the process's
+    real groups; for anyone else - an operator, or root under sudo, who could
+    open the nodes themselves - the daemon's account and the unit's
+    ``SupplementaryGroups=`` are checked against each node's owner, group and
+    mode. Either way a refusal names the node, how it is owned, and the group
+    that is missing.
+    """
+    nodes: list[tuple[str, os.stat_result]] = []
+    for pattern in requirement.patterns:
+        for path in sorted(glob(pattern)):
+            try:
+                st = stat_node(path)
+            except OSError:
+                continue
+            if not stat.S_ISDIR(st.st_mode):
+                nodes.append((path, st))
+    wanted = ", ".join(requirement.patterns)
+    if not nodes:
+        return CheckResult(
+            name=requirement.name,
+            severity=requirement.severity,
+            ok=False,
+            detail=(
+                f"no {wanted} on this system, so {requirement.needed_for} has "
+                f"nothing to open - see the matching check above"
+            ),
+        )
+    if daemon.uid is None:
+        return CheckResult(
+            name=requirement.name,
+            severity=requirement.severity,
+            ok=False,
+            detail=f"cannot check: the daemon account {daemon.user!r} does not exist",
+        )
+    is_daemon = getuid() == daemon.uid
+    if is_daemon:
+        groups = {gid: group_name(gid) for gid in getgroups()}
+        how = "this process"
+    else:
+        groups = dict(daemon.groups)
+        how = f"{daemon.user}'s account and the unit's SupplementaryGroups="
+    denied = [
+        (path, st)
+        for path, st in nodes
+        if not (
+            access(path)
+            if is_daemon
+            else _grants_read_write(st, daemon.uid, set(groups))
+        )
+    ]
+    if not denied:
+        return CheckResult(
+            name=requirement.name,
+            severity=requirement.severity,
+            ok=True,
+            detail=(
+                f"{daemon.user} can open {len(nodes)} node(s) for "
+                f"{requirement.needed_for} ({wanted})"
+            ),
+        )
+    described = "; ".join(
+        f"{path} is {owner_name(st.st_uid)}:{group_name(st.st_gid)} "
+        f"{stat.S_IMODE(st.st_mode):04o}"
+        for path, st in denied
+    )
+    node_groups = {group_name(st.st_gid) for _, st in denied}
+    if requirement.group not in groups.values():
+        cause = (
+            f"{daemon.user} is not in the {requirement.group} group (groups per "
+            f"{how}: {_group_names(groups)}) - setup-device.sh adds it to the "
+            f"account and the unit grants it via SupplementaryGroups=; restart "
+            f"visio-recorder afterwards"
+        )
+    elif node_groups != {requirement.group}:
+        cause = (
+            f"expected group {requirement.group} from Raspberry Pi OS's udev rules "
+            f"(raspberrypi-sys-mods' 99-com.rules, systemd's 50-udev-default.rules) "
+            f"- check those rules are installed and reboot"
+        )
+    else:
+        cause = (
+            f"{daemon.user} is in {requirement.group} but the mode does not grant "
+            f"the group read-write"
+        )
+    return CheckResult(
+        name=requirement.name,
+        severity=requirement.severity,
+        ok=False,
+        detail=(
+            f"{daemon.user} cannot open {described}, needed for "
+            f"{requirement.needed_for}: {cause}"
+        ),
+    )
 
 
 def check_binary_on_path(
@@ -204,6 +517,7 @@ def check_data_dir_writable(
     getuid: Callable[[], int] = os.getuid,
     can_write: Callable[[Path], bool] = lambda path: os.access(path, os.W_OK),
     caveat: str = "",
+    daemon: DaemonIdentity | None = None,
 ) -> CheckResult:
     """Existence and writability answer different questions, so they differ.
 
@@ -213,14 +527,17 @@ def check_data_dir_writable(
     before it ever reaches the data-dir step, both on a fresh device and
     whenever the Supabase keys are unfilled. That stays BLOCK for everyone.
 
-    Writability is caller-relative, and only it. The daemon runs as
-    ``_DAEMON_UID`` and cannot function without a writable data dir, so for
-    that caller an existing-but-unwritable directory stays BLOCK - the same
-    gate the unit's ExecStartPre has always applied. For an operator running
-    the diagnostic over SSH it is *expected*: the directory stays root-owned
-    on purpose because it holds recorded video, so reporting BLOCK made a
-    healthy device look mis-provisioned and advised a re-run of
-    setup-device.sh that would change nothing.
+    Writability is caller-relative, and only it. The daemon runs as the
+    unit's user (``daemon``) and cannot function without a writable data dir,
+    so for that caller an existing-but-unwritable directory stays BLOCK - the
+    same gate the unit's ExecStartPre has always applied. ``os.access`` also
+    refuses a path ProtectSystem=strict leaves read-only, so a data dir
+    outside the unit's ReadWritePaths= blocks here rather than at the first
+    segment. For an operator running the diagnostic over SSH it is
+    *expected*: the directory is the daemon's own, mode 0750, because it holds
+    recorded video, so reporting BLOCK made a healthy device look
+    mis-provisioned and advised a re-run of setup-device.sh that would change
+    nothing.
 
     ``caveat`` is appended to whichever detail is reported, for the caller that
     could not confirm which directory is configured (see
@@ -234,13 +551,25 @@ def check_data_dir_writable(
         return CheckResult(
             name="data_dir", severity=BLOCK, ok=True, detail=f"{path} writable{suffix}"
         )
-    uid = getuid()
-    if not exists or uid == _DAEMON_UID:
+    if not exists:
         return CheckResult(
             name="data_dir",
             severity=BLOCK,
             ok=False,
             detail=f"{path} missing or not writable - run setup-device.sh{suffix}",
+        )
+    uid = getuid()
+    daemon = resolve_daemon_identity() if daemon is None else daemon
+    if uid == daemon.uid:
+        return CheckResult(
+            name="data_dir",
+            severity=BLOCK,
+            ok=False,
+            detail=(
+                f"{path} missing or not writable by {daemon.user} - run "
+                f"setup-device.sh, which gives it to {daemon.user} and, for a "
+                f"non-default path, adds it to the unit's ReadWritePaths={suffix}"
+            ),
         )
     return CheckResult(
         name="data_dir",
@@ -249,7 +578,7 @@ def check_data_dir_writable(
         detail=(
             f"{path} exists but is not writable by uid {uid} - expected for a "
             f"diagnostic run as a non-daemon user, not a fault; the daemon runs "
-            f"as uid {_DAEMON_UID}{suffix}"
+            f"as {daemon.user}{suffix}"
         ),
     )
 
@@ -262,6 +591,7 @@ def check_spi_device(
     path: Path = _SPI_DEVICE,
     getuid: Callable[[], int] = os.getuid,
     open_device: Callable[[Path], None] = _open_read_write,
+    daemon: DaemonIdentity | None = None,
 ) -> CheckResult:
     """The LED driver's SPI node exists and opens read-write.
 
@@ -269,7 +599,8 @@ def check_spi_device(
     what a missing ``spi`` group membership refuses. A missing node means SPI0
     is off for everyone; a refusal is caller-relative exactly as the data
     dir's writability is (see ``check_data_dir_writable``), so only the
-    daemon's own uid is blocked by it.
+    daemon's own uid is blocked by it. Whether the daemon's user could open it
+    when someone else is asking is ``spi_access``'s question.
     """
     try:
         open_device(path)
@@ -285,12 +616,16 @@ def check_spi_device(
         )
     except PermissionError:
         uid = getuid()
-        if uid == _DAEMON_UID:
+        daemon = resolve_daemon_identity() if daemon is None else daemon
+        if uid == daemon.uid:
             return CheckResult(
                 name="spidev0.0",
                 severity=BLOCK,
                 ok=False,
-                detail=f"{path} exists but uid {uid} cannot open it read-write",
+                detail=(
+                    f"{path} exists but {daemon.user} (uid {uid}) cannot open it "
+                    f"read-write - see spi_access"
+                ),
             )
         return CheckResult(
             name="spidev0.0",
@@ -298,8 +633,9 @@ def check_spi_device(
             ok=False,
             detail=(
                 f"{path} exists but uid {uid} cannot open it - add this user to the "
-                f"spi group to drive the LED by hand; the daemon runs as uid "
-                f"{_DAEMON_UID}, so this is not a fault"
+                f"spi group to drive the LED by hand; the daemon runs as "
+                f"{daemon.user}, so this is not a fault (spi_access says whether "
+                f"{daemon.user} can)"
             ),
         )
     except OSError as exc:
@@ -458,7 +794,7 @@ def read_env_file(path: Path = _ENV_FILE) -> Mapping[str, str] | None:
     The two outcomes are deliberately distinct. An absent file means nothing
     is configured, so the defaults are the truth. A file that exists but
     cannot be read means the truth is unknown - the normal case for an
-    operator over SSH, since setup-device.sh writes it mode 600 root-owned
+    operator over SSH, since setup-device.sh writes it mode 0640 root:visio
     and that is not relaxed for a diagnostic's benefit.
 
     Parsing matches how systemd reads an EnvironmentFile, and how
@@ -526,8 +862,8 @@ def resolve_reported_data_dir(
             Path(_DEFAULT_DATA_DIR),
             caveat=(
                 f"checked the default: {env_file} could not be read or parsed, so a "
-                f"configured VISIO_DATA_DIR could not be confirmed - it is mode 600 "
-                f"root-owned, so re-run under sudo to check the configured path; if "
+                f"configured VISIO_DATA_DIR could not be confirmed - it is mode 0640 "
+                f"root:visio, so re-run under sudo to check the configured path; if "
                 f"that fails too the file itself is unreadable or malformed"
             ),
         )
@@ -580,13 +916,28 @@ def resolve_audio_device(
     return value("VISIO_AUDIO_DEVICE", AudioSettings().device)
 
 
+def device_requirements(
+    battery_source: str, audio_device: str | None
+) -> list[DeviceRequirement]:
+    """The node classes the daemon will open in this configuration."""
+    requirements = [CAMERA_NODES, LED_NODES, BUTTON_NODES]
+    if audio_device is not None:
+        requirements.append(MIC_NODES)
+    if battery_source == "pijuice":
+        requirements.append(I2C_NODES)
+    return requirements
+
+
 def run_checks(
     battery_source: str,
     data_dir: Path = _DATA_DIR,
     data_dir_caveat: str = "",
     audio_device: str | None = AudioSettings().device,
+    daemon: DaemonIdentity | None = None,
 ) -> list[CheckResult]:
+    daemon = resolve_daemon_identity() if daemon is None else daemon
     results = [
+        check_daemon_user(daemon),
         check_binary_on_path("rpicam-vid"),
         check_binary_on_path("rpicam-still"),
         check_binary_on_path("zbarimg"),
@@ -595,16 +946,20 @@ def run_checks(
         check_importable("spidev"),
         check_importable("gpiozero"),
         check_importable("supabase"),
-        check_spi_device(),
+        check_spi_device(daemon=daemon),
         check_core_freq_fixed(),
         check_camera_detected(),
         check_networkmanager_running(),
-        check_data_dir_writable(path=data_dir, caveat=data_dir_caveat),
+        check_data_dir_writable(path=data_dir, caveat=data_dir_caveat, daemon=daemon),
         check_audio_device(audio_device),
     ]
     if battery_source == "pijuice":
         results.append(check_pijuice_importable())
         results.append(check_i2c_enabled())
+    results += [
+        check_device_access(requirement, daemon)
+        for requirement in device_requirements(battery_source, audio_device)
+    ]
     return results
 
 
