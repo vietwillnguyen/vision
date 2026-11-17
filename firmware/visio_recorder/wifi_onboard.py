@@ -3,7 +3,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-_UNSAFE_CHARS = ('"', "\n", "\r", "\\")
+# A tab is dropped outright and leading or trailing spaces are stripped when a
+# value crosses `nmcli connection edit`'s `set <property> <value>` line, which
+# is how onboarding hands NetworkManager the pre-shared key without putting it
+# on nmcli's argv (see onboarding.NmcliWifiConfigurator). Rejecting them is the
+# alternative to silently storing a key the device cannot connect with.
+_UNSAFE_CHARS = ('"', "\n", "\r", "\\", "\t")
 _PSK_MIN_LENGTH = 8
 _PSK_MAX_LENGTH = 63
 
@@ -50,8 +55,15 @@ def validate_credentials(ssid: str, password: str) -> None:
     for name, value in (("ssid", ssid), ("password", password)):
         if any(ch in value for ch in _UNSAFE_CHARS):
             raise ValueError(
-                f"{name} contains an unsafe character (quote, newline, or backslash); "
-                "rejecting rather than attempting to escape it for wpa_supplicant.conf"
+                f"{name} contains an unsafe character (quote, newline, tab, or "
+                "backslash); rejecting rather than attempting to escape it for "
+                "wpa_supplicant.conf or to carry it through nmcli's connection editor"
+            )
+        if value != value.strip(" "):
+            raise ValueError(
+                f"{name} has a leading or trailing space, which nmcli's connection "
+                "editor strips; rejecting rather than storing a value the device "
+                "cannot connect with"
             )
     if not _PSK_MIN_LENGTH <= len(password) <= _PSK_MAX_LENGTH:
         raise ValueError(

@@ -52,16 +52,40 @@ class WifiConfigurator(ConnectionLookup, Protocol):
 
 
 class NmcliRunner(Protocol):
-    def run(self, args: list[str]) -> str: ...
+    def run(self, args: list[str], *, stdin: str = "") -> str: ...
 
 
 class SubprocessNmcliRunner:
-    """Runs nmcli and returns its stdout; stderr goes to the journal."""
+    """Runs nmcli and returns its stdout; stderr goes to the journal.
 
-    def run(self, args: list[str]) -> str:
+    ``stdin`` is always a pipe this process writes and closes, never the
+    daemon's own stdin: it is how the pre-shared key reaches nmcli without
+    being passed as an argument, and closing it keeps the connection editor
+    from waiting on input the daemon will never send.
+    """
+
+    def run(self, args: list[str], *, stdin: str = "") -> str:
         return subprocess.run(
-            args, check=True, stdout=subprocess.PIPE, text=True, timeout=30
+            args,
+            check=True,
+            input=stdin,
+            stdout=subprocess.PIPE,
+            text=True,
+            timeout=30,
         ).stdout
+
+
+def _editor_script(properties: list[tuple[str, str]]) -> str:
+    """Render the ``nmcli connection edit`` commands for one atomic save.
+
+    The blank line after ``save`` is load-bearing in both directions: the
+    editor asks "That might result in an immediate activation. Do you still
+    want to save?" when the save turns autoconnect on and asks nothing when it
+    is on already, and an empty line both takes that prompt's default (yes)
+    and is a no-op at the editor's own prompt.
+    """
+    sets = "".join(f"set {name} {value}\n" for name, value in properties)
+    return f"{sets}save\n\nquit\n"
 
 
 class NmcliWifiConfigurator:
@@ -75,10 +99,23 @@ class NmcliWifiConfigurator:
     installs (``firmware/polkit/50-visio-recorder.rules``) is what lets the
     ``visio`` user do that without a session.
 
-    The pre-shared key travels on nmcli's argv, the interface NetworkManager
-    documents. Errors are re-raised without that argv, because
-    ``CalledProcessError`` renders the full command line and the daemon logs
-    onboarding failures into journalctl.
+    The pre-shared key never travels on nmcli's argv, which is world-readable
+    through ``/proc/<pid>/cmdline`` for the life of the call. It goes in on
+    nmcli's stdin instead, as a ``set`` command for the connection editor
+    (``nmcli connection edit``), which is the only nmcli form that takes a
+    property value from anywhere but the command line. nmcli's own
+    ``passwd-file`` is not an option here: it is accepted only by
+    ``connection up`` and ``device wifi connect``, where it answers
+    NetworkManager's activation-time secret request, so it cannot put the key
+    into the stored profile - and the profile is where it has to be, because a
+    restart boot reactivates and autoconnects with no QR code to read it from
+    again.
+
+    The editor reports a refused ``save`` on stdout and still exits 0, so
+    ``configure`` reads the key back out of the stored profile rather than
+    trusting the exit status. Errors are re-raised without nmcli's argv,
+    because ``CalledProcessError`` renders the full command line and the
+    daemon logs onboarding failures into journalctl.
     """
 
     def __init__(
@@ -91,9 +128,9 @@ class NmcliWifiConfigurator:
         self._connection_id = connection_id
         self._interface = interface
 
-    def _nmcli(self, verb: str, args: list[str]) -> str:
+    def _nmcli(self, verb: str, args: list[str], stdin: str = "") -> str:
         try:
-            return self._runner.run(args)
+            return self._runner.run(args, stdin=stdin)
         except subprocess.CalledProcessError as exc:
             raise WifiConfigurationError(
                 f"nmcli connection {verb} exited {exc.returncode}"
@@ -109,21 +146,51 @@ class NmcliWifiConfigurator:
 
     def configure(self, ssid: str, password: str) -> None:
         validate_credentials(ssid, password)
-        security = ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password]
-        autoconnect = ["connection.autoconnect", "yes"]
+        properties = [
+            ("802-11-wireless.ssid", ssid),
+            ("802-11-wireless-security.key-mgmt", "wpa-psk"),
+            ("802-11-wireless-security.psk", password),
+            ("connection.autoconnect", "yes"),
+        ]
         if self.exists():
-            self._nmcli(
-                "modify",
-                ["nmcli", "connection", "modify", self._connection_id,
-                 "wifi.ssid", ssid, *security, *autoconnect],
-            )  # fmt: skip
-            return
+            # Also the migration path: the root-era keyfile NetworkManager
+            # already loaded has id "visio", so this rewrites it in place
+            # rather than adding a second profile of the same name.
+            target = ["id", self._connection_id]
+        else:
+            target = ["type", "wifi", "con-name", self._connection_id]
+            properties.insert(0, ("connection.interface-name", self._interface))
         self._nmcli(
-            "add",
-            ["nmcli", "connection", "add", "type", "wifi",
-             "con-name", self._connection_id, "ifname", self._interface,
-             "ssid", ssid, *security, *autoconnect],
+            "edit",
+            ["nmcli", "connection", "edit", *target],
+            stdin=_editor_script(properties),
+        )
+        self._verify_psk_stored(password)
+
+    def _verify_psk_stored(self, password: str) -> None:
+        """Fail loudly when the editor did not commit what it was given.
+
+        ``save`` prints "Insufficient privileges" and exits 0 when polkit
+        refuses it, so the exit status alone would let onboarding report
+        success over an unchanged profile and leave the device offline with
+        nothing in the journal to say why. One ``save`` commits every property
+        at once, so reading the key back settles the whole transaction.
+
+        ``-e no`` is required: nmcli escapes ``:`` in terse output by default,
+        which a key containing a colon would come back with. The key reaches
+        this process on nmcli's stdout, never its argv, and is never logged.
+        """
+        stored = self._nmcli(
+            "show",
+            ["nmcli", "-e", "no", "--show-secrets", "-g",
+             "802-11-wireless-security.psk",
+             "connection", "show", "id", self._connection_id],
         )  # fmt: skip
+        if stored.rstrip("\n") != password:
+            raise WifiConfigurationError(
+                "nmcli connection edit did not store the pre-shared key for "
+                f"connection {self._connection_id!r}"
+            )
 
 
 def run_onboarding(

@@ -1,5 +1,8 @@
 import json
+import os
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -52,19 +55,37 @@ class FakeWifi:
 
 
 class ScriptedNmcli:
-    """An nmcli stand-in: records argv, answers ``connection show``."""
+    """An nmcli stand-in: records argv and stdin, answers the read-backs."""
 
-    def __init__(self, names: list[str] | None = None, fail_on: str | None = None):
+    def __init__(
+        self,
+        names: list[str] | None = None,
+        fail_on: str | None = None,
+        stored_psk: str | None = None,
+    ):
         self.calls: list[list[str]] = []
+        self.stdins: list[str] = []
         self._names = names or []
         self._fail_on = fail_on
+        self._stored_psk = stored_psk
 
-    def run(self, args: list[str]) -> str:
+    def run(self, args: list[str], *, stdin: str = "") -> str:
         self.calls.append(args)
+        self.stdins.append(stdin)
         if self._fail_on is not None and self._fail_on in args:
             raise subprocess.CalledProcessError(4, args, output="", stderr="")
         if args[:4] == ["nmcli", "-g", "NAME", "connection"]:
             return "".join(f"{name}\n" for name in self._names)
+        if "--show-secrets" in args:
+            # Default to the key the editor was just handed, so only a test
+            # that asks for a mismatch sees one.
+            if self._stored_psk is not None:
+                return f"{self._stored_psk}\n"
+            for line in "".join(self.stdins).splitlines():
+                prefix = "set 802-11-wireless-security.psk "
+                if line.startswith(prefix):
+                    return f"{line[len(prefix) :]}\n"
+            return "\n"
         return ""
 
 
@@ -127,20 +148,137 @@ def test_a_networkmanager_refusal_stops_onboarding_without_a_session(tmp_path):
     assert not session.exists()
 
 
+class NmcliStub:
+    """The real ``nmcli`` replaced by a recording executable on ``PATH``.
+
+    Exercises :class:`SubprocessNmcliRunner` for real, so a test can see what
+    onboarding put in the process list and what it kept out of it.
+    """
+
+    def __init__(self, record_dir: Path):
+        self._dir = record_dir
+
+    def seed(self, name: str, **properties: str) -> None:
+        self._dir.joinpath("profiles.json").write_text(json.dumps({name: properties}))
+
+    @property
+    def transcript(self) -> list[dict]:
+        log = self._dir / "transcript.jsonl"
+        if not log.exists():
+            return []
+        return [json.loads(line) for line in log.read_text().splitlines()]
+
+    def argv(self) -> list[list[str]]:
+        return [call["argv"] for call in self.transcript]
+
+    def stdin(self) -> list[str]:
+        return [call["stdin"] for call in self.transcript]
+
+    def stored(self, name: str = "visio") -> dict[str, str]:
+        store = self._dir / "profiles.json"
+        return json.loads(store.read_text()).get(name, {}) if store.exists() else {}
+
+
+@pytest.fixture
+def nmcli_stub(tmp_path, monkeypatch):
+    record_dir = tmp_path / "nmcli"
+    record_dir.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = Path(__file__).parent / "nmcli_stub.py"
+    shim = bin_dir / "nmcli"
+    shim.write_text(f'#!/bin/sh\nexec {sys.executable!r} {str(stub)!r} "$@"\n')
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("NMCLI_STUB_DIR", str(record_dir))
+    return NmcliStub(record_dir)
+
+
+def test_configure_keeps_the_password_off_nmclis_command_line(nmcli_stub):
+    # /proc/<pid>/cmdline is world-readable, so a pre-shared key passed as an
+    # nmcli argument is readable by every local user for the life of the call.
+    NmcliWifiConfigurator().configure("HomeNet", "hunter2secret")
+
+    assert nmcli_stub.argv(), "the real runner never reached the stub"
+    for argv in nmcli_stub.argv():
+        assert "hunter2secret" not in " ".join(argv)
+    assert any("hunter2secret" in handed for handed in nmcli_stub.stdin())
+    assert nmcli_stub.stored()["802-11-wireless-security.psk"] == "hunter2secret"
+
+
+def test_a_failing_nmcli_still_never_sees_the_password_on_its_command_line(
+    nmcli_stub, monkeypatch
+):
+    # The failure path through the real runner: nothing about a refused call
+    # moves the key onto argv, and the error the daemon logs does not carry it.
+    monkeypatch.setenv("NMCLI_STUB_FAIL_ON", "edit")
+
+    with pytest.raises(WifiConfigurationError) as excinfo:
+        NmcliWifiConfigurator().configure("HomeNet", "hunter2secret")
+
+    assert "hunter2secret" not in str(excinfo.value)
+    assert nmcli_stub.argv(), "the real runner never reached the stub"
+    for argv in nmcli_stub.argv():
+        assert "hunter2secret" not in " ".join(argv)
+    assert nmcli_stub.stored() == {}
+
+
+def test_configure_rewrites_an_existing_profile_through_the_editor(nmcli_stub):
+    nmcli_stub.seed("visio", **{"802-11-wireless.ssid": "HomeNet"})
+
+    NmcliWifiConfigurator().configure("OtherNet", "newsecret99")
+
+    assert ["connection", "edit", "id", "visio"] in nmcli_stub.argv()
+    assert nmcli_stub.stored() == {
+        "802-11-wireless.ssid": "OtherNet",
+        "802-11-wireless-security.key-mgmt": "wpa-psk",
+        "802-11-wireless-security.psk": "newsecret99",
+        "connection.autoconnect": "yes",
+    }
+
+
 def test_configure_adds_a_system_connection_when_none_exists():
     nmcli = ScriptedNmcli(names=["lo", "Wired connection 1"])
 
     NmcliWifiConfigurator(nmcli).configure("HomeNet", "hunter2secret")
 
-    assert nmcli.calls == [
+    assert nmcli.calls[:2] == [
         ["nmcli", "-g", "NAME", "connection", "show"],
-        [
-            "nmcli", "connection", "add", "type", "wifi", "con-name", "visio",
-            "ifname", "wlan0", "ssid", "HomeNet",
-            "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", "hunter2secret",
-            "connection.autoconnect", "yes",
-        ],
+        ["nmcli", "connection", "edit", "type", "wifi", "con-name", "visio"],
+    ]
+    assert nmcli.stdins[1] == (
+        "set connection.interface-name wlan0\n"
+        "set 802-11-wireless.ssid HomeNet\n"
+        "set 802-11-wireless-security.key-mgmt wpa-psk\n"
+        "set 802-11-wireless-security.psk hunter2secret\n"
+        "set connection.autoconnect yes\n"
+        "save\n\nquit\n"
+    )
+
+
+def test_configure_reads_the_key_back_rather_than_trusting_the_exit_status():
+    # `nmcli connection edit` prints a refused save on stdout and still exits
+    # 0, so the exit status alone would report success over an unchanged
+    # profile; `-e no` keeps nmcli from escaping a colon in the key it returns.
+    nmcli = ScriptedNmcli(names=["visio"])
+
+    NmcliWifiConfigurator(nmcli).configure("HomeNet", "has:a:colon")
+
+    assert nmcli.calls[-1] == [
+        "nmcli", "-e", "no", "--show-secrets", "-g",
+        "802-11-wireless-security.psk",
+        "connection", "show", "id", "visio",
     ]  # fmt: skip
+
+
+def test_configure_fails_when_the_editor_did_not_commit_the_key():
+    nmcli = ScriptedNmcli(names=["visio"], stored_psk="the-old-key")
+
+    with pytest.raises(WifiConfigurationError) as excinfo:
+        NmcliWifiConfigurator(nmcli).configure("HomeNet", "hunter2secret")
+
+    assert "hunter2secret" not in str(excinfo.value)
+    assert "the-old-key" not in str(excinfo.value)
 
 
 def test_configure_modifies_the_existing_connection_on_re_onboarding():
@@ -151,12 +289,14 @@ def test_configure_modifies_the_existing_connection_on_re_onboarding():
 
     NmcliWifiConfigurator(nmcli).configure("OtherNet", "newsecret99")
 
-    assert nmcli.calls[1] == [
-        "nmcli", "connection", "modify", "visio",
-        "wifi.ssid", "OtherNet",
-        "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", "newsecret99",
-        "connection.autoconnect", "yes",
-    ]  # fmt: skip
+    assert nmcli.calls[1] == ["nmcli", "connection", "edit", "id", "visio"]
+    assert nmcli.stdins[1] == (
+        "set 802-11-wireless.ssid OtherNet\n"
+        "set 802-11-wireless-security.key-mgmt wpa-psk\n"
+        "set 802-11-wireless-security.psk newsecret99\n"
+        "set connection.autoconnect yes\n"
+        "save\n\nquit\n"
+    )
 
 
 def test_configure_rejects_invalid_credentials_before_calling_nmcli():
@@ -171,7 +311,7 @@ def test_configure_rejects_invalid_credentials_before_calling_nmcli():
 def test_a_failed_nmcli_call_never_carries_the_password_in_its_error():
     # CalledProcessError renders the full argv, psk included, and the daemon
     # logs onboarding failures with a traceback into journalctl.
-    nmcli = ScriptedNmcli(fail_on="add")
+    nmcli = ScriptedNmcli(fail_on="edit")
 
     with pytest.raises(WifiConfigurationError) as excinfo:
         NmcliWifiConfigurator(nmcli).configure("HomeNet", "hunter2secret")

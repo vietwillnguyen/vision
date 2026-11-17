@@ -29,6 +29,9 @@ dx() { docker exec -i "${name}" bash -c "$1"; }
 section() { printf '\n=== %s\n' "$*"; }
 
 dx "mkdir -p /boot/firmware /etc/rpi && printf '[Main]\nMechanism=zram+file\n' > /etc/rpi/swap.conf"
+# stubs/nmcli records every nmcli argv in this run before exec'ing the real
+# one; the daemon's calls are unprivileged, so the log has to be world-writable.
+dx ": > /var/log/visio-sim-nmcli-argv.log && chmod 0666 /var/log/visio-sim-nmcli-argv.log"
 docker cp "${here}/stock-config.txt" "${name}:/boot/firmware/config.txt"
 dx "git config --system url./mirror.insteadOf https://github.com/vietwillnguyen/vision.git && git config --system safe.directory '*'"
 dx "su pi -c 'git clone -q /mirror ~/vision'"
@@ -173,6 +176,15 @@ echo "--- without the polkit rule: refused, the error carries no password, the s
 dx "mv /etc/polkit-1/rules.d/50-visio-recorder.rules /root/ && sleep 2"
 onboard HomeNet2 another-secret-1 2>&1 | grep -E 'configure|psk='
 dx "mv /root/50-visio-recorder.rules /etc/polkit-1/rules.d/ && sleep 2"
+
+section "the pre-shared key never reached nmcli's argv, in any call this run made"
+dx "grep -c . /var/log/visio-sim-nmcli-argv.log | sed 's/^/nmcli calls recorded: /'
+    if grep -nE 'hunter2secret|newsecret99|another-secret-1' /var/log/visio-sim-nmcli-argv.log; then
+      echo 'FAIL: an onboarded pre-shared key reached nmcli argv'; exit 1
+    fi
+    echo 'no onboarded key appears in any recorded argv'
+    grep -E 'connection (edit|add|modify|up)' /var/log/visio-sim-nmcli-argv.log | sort -u
+    grep -E '^(ssid|psk)=' /etc/NetworkManager/system-connections/visio.nmconnection"
 
 section "rollback: a drop-in running the daemon as root, which setup leaves alone"
 dx "printf '[Service]\nUser=root\nGroup=root\n' > /etc/systemd/system/visio-recorder.service.d/90-run-as-root.conf"
