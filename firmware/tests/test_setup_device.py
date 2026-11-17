@@ -561,7 +561,11 @@ def test_quoted_supabase_values_satisfy_the_env_file_check(tmp_path):
         'SUPABASE_URL="https://x.supabase.co"\nSUPABASE_ANON_KEY="ey.a.jwt"\n'
     )
 
-    result = _run(_shell_lib(tmp_path, "env_file_value"), _step_block(7), env_file)
+    result = _run(
+        _shell_lib(tmp_path, "env_file_value", "secure_env_file"),
+        _service_account(tmp_path) + "\n" + _step_block(7),
+        env_file,
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "already configured" in result.stdout
@@ -1519,6 +1523,12 @@ def test_the_hardware_libraries_preflight_blocks_on_are_actually_provisioned(
     assert "pijuice-base" in packages
 
 
+def test_polkitd_is_provisioned_for_the_unprivileged_wifi_onboarding(tmp_path):
+    # NetworkManager refuses every non-root change when no polkit authority
+    # answers, so the rule setup installs would have nothing to evaluate it.
+    assert "polkitd" in _apt_installed_packages(tmp_path)
+
+
 def test_nothing_is_compiled_on_the_device_any_more(tmp_path):
     # The SPI LED rewire (#85) retired rpi_ws281x, the one library that had to
     # be built from source - and with it the C toolchain it needed.
@@ -1641,16 +1651,52 @@ def test_a_failed_dev_package_install_does_not_abort_the_run(tmp_path):
 # --------------------------------------------------------------------------
 
 
+def _service_account(tmp_path: Path) -> str:
+    """Shell lines pointing the service-account variables at this test.
+
+    The steps under test chown and chgrp to ${SERVICE_USER}:${SERVICE_GROUP};
+    an unprivileged test can only give files to itself, so those are the
+    current user and their primary group, and the drop-in paths live in
+    tmp_path. Everything else about the steps runs for real.
+    """
+    dropins = tmp_path / "visio-recorder.service.d"
+    return "\n".join(
+        [
+            'SERVICE_USER="$(id -un)"',
+            'SERVICE_GROUP="$(id -gn)"',
+            _extract_assignment("SERVICE_GROUPS"),
+            f'UNIT_DROPIN_DIR="{dropins}"',
+            f'DATA_DIR_DROPIN="{dropins}/10-visio-data-dir.conf"',
+            f'ROLLBACK_DROPIN="{dropins}/90-run-as-root.conf"',
+            "service_user_failed=false",
+            "unit_changed=false",
+        ]
+    )
+
+
+def _systemctl_stub(tmp_path: Path) -> Path:
+    """A systemctl that logs and reports the unit inactive."""
+    stubs = tmp_path / "stubs"
+    stubs.mkdir(exist_ok=True)
+    systemctl = stubs / "systemctl"
+    systemctl.write_text(
+        '#!/bin/sh\necho "SYSTEMCTL $*"\n[ "$1" = is-active ] && exit 3\nexit 0\n'
+    )
+    systemctl.chmod(0o755)
+    return stubs
+
+
 def _run_final_steps(
     tmp_path: Path,
     env_text: str,
     config_txt_failed: str = "false",
     reboot_needed: str = "false",
+    extra: str = "",
 ) -> subprocess.CompletedProcess:
     """Run steps 9 and 10 for real, with DATA_DIR and REBOOT_MARKER redirected."""
     env_file = tmp_path / "visio-recorder.env"
     env_file.write_text(env_text)
-    (tmp_path / "run").mkdir()
+    (tmp_path / "run").mkdir(exist_ok=True)
     block = (
         'log "Step 9/10: data dir"'
         + _script_text().split('log "Step 9/10: data dir"')[1]
@@ -1661,12 +1707,16 @@ def _run_final_steps(
             _extract_function("env_file_value"),
             _reboot_prelude(tmp_path / "run" / "visio-setup-reboot-required"),
             _extract_assignment("PREFLIGHT_BIN"),
+            _service_account(tmp_path),
+            _extract_function("own_data_dir"),
+            _extract_function("write_data_dir_dropin"),
             'CONFIG_TXT="/boot/firmware/config.txt"',
             f'DATA_DIR="{tmp_path}/default-data-dir"',
             'target_sha="deadbee"',
             f"reboot_needed={reboot_needed}",
             "data_dir_failed=false",
             f"config_txt_failed={config_txt_failed}",
+            extra,
             block,
         ]
     )
@@ -1676,11 +1726,80 @@ def _run_final_steps(
         text=True,
         timeout=60,
         check=False,
-        env={"PATH": "/usr/bin:/bin", "ENV_FILE": str(env_file)},
+        env={
+            "PATH": f"{_systemctl_stub(tmp_path)}:/usr/bin:/bin",
+            "ENV_FILE": str(env_file),
+        },
     )
 
 
 _CONFIGURED_ENV = "SUPABASE_URL=u\nSUPABASE_ANON_KEY=k\nVISIO_BATTERY_SOURCE=none\n"
+
+
+def test_the_data_dir_is_given_to_the_daemon_user_with_mode_0750(tmp_path):
+    # A root-era device: the dir and session.json belong to root, mode 0755.
+    data_dir = tmp_path / "default-data-dir"
+    data_dir.mkdir(mode=0o755)
+    (data_dir / "session.json").write_text("{}")
+
+    first = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+    second = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert data_dir.stat().st_mode & 0o777 == 0o750
+    assert "is now mode 0750" in first.stdout
+    assert "0750" not in second.stdout and "now owned" not in second.stdout
+
+
+def test_a_non_default_data_dir_gets_a_read_write_paths_drop_in(tmp_path):
+    configured = tmp_path / "usb-mount"
+    dropin = tmp_path / "visio-recorder.service.d" / "10-visio-data-dir.conf"
+
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={configured}\n"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"ReadWritePaths={configured}" in dropin.read_text()
+    assert "SYSTEMCTL daemon-reload" in result.stdout
+    # The unit changed while possibly running; the stub says it is not.
+    assert "applies the new one" not in result.stdout
+
+    back = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+
+    assert back.returncode == 0
+    assert not dropin.exists(), "the default path needs no drop-in"
+
+
+def test_an_operators_rollback_drop_in_is_reported_and_left_alone(tmp_path):
+    rollback = tmp_path / "visio-recorder.service.d" / "90-run-as-root.conf"
+    rollback.parent.mkdir()
+    rollback.write_text("[Service]\nUser=root\nGroup=root\n")
+
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+
+    assert result.returncode == 0
+    assert "runs as root" in result.stdout
+    assert rollback.read_text() == "[Service]\nUser=root\nGroup=root\n"
+
+
+def test_a_healthy_run_names_the_daemon_user(tmp_path):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV)
+
+    assert "Daemon user:" in result.stdout
+    assert "video gpio i2c spi audio" in result.stdout
+
+
+def test_a_failed_service_user_makes_the_run_incomplete(tmp_path):
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV, extra="service_user_failed=true"
+    )
+
+    assert result.returncode == 1
+    assert (
+        "INCOMPLETE: the" in result.stdout
+        and "cannot start the daemon" in result.stdout
+    )
 
 
 def test_a_config_txt_that_could_not_be_edited_is_repeated_in_the_summary(tmp_path):
@@ -1928,6 +2047,8 @@ def _run_env_step(tmp_path: Path, reboot_needed: str) -> subprocess.CompletedPro
         "\n".join(
             [
                 'CONFIG_TXT="/boot/firmware/config.txt"',
+                _service_account(tmp_path),
+                _extract_function("secure_env_file"),
                 f"reboot_needed={reboot_needed}",
                 _step_block(7),
                 "echo PAST_THE_CHECKPOINT",
@@ -1948,7 +2069,27 @@ def test_the_env_template_checkpoint_keeps_the_reboot_and_still_exits_zero(
     assert "PAST_THE_CHECKPOINT" not in result.stdout
     assert "REBOOT REQUIRED" in result.stdout
     assert (tmp_path / "run" / "visio-setup-reboot-required").exists()
-    assert (tmp_path / "visio-recorder.env").stat().st_mode & 0o777 == 0o600
+    # Secret, but readable by the daemon's group: root:visio 0640 on a device.
+    env = (tmp_path / "visio-recorder.env").stat()
+    assert env.st_mode & 0o777 == 0o640
+    assert env.st_gid == os.getgid()
+
+
+def test_an_existing_root_only_env_file_is_migrated_to_the_daemons_group(tmp_path):
+    # A device provisioned while the daemon ran as root has a 0600 env file;
+    # the unprivileged daemon's preflight could not read it.
+    env_file = tmp_path / "visio-recorder.env"
+    env_file.write_text("SUPABASE_URL=u\nSUPABASE_ANON_KEY=k\n")
+    env_file.chmod(0o600)
+    lib = _shell_lib(tmp_path, "env_file_value", "secure_env_file")
+
+    first = _run(lib, _service_account(tmp_path) + "\n" + _step_block(7), env_file)
+    second = _run(lib, _service_account(tmp_path) + "\n" + _step_block(7), env_file)
+
+    assert first.returncode == 0, first.stderr
+    assert env_file.stat().st_mode & 0o777 == 0o640
+    assert "mode 0640" in first.stdout
+    assert "mode 0640" not in second.stdout, "a converged file is left alone"
 
 
 def test_the_env_template_checkpoint_owes_no_reboot_it_was_not_asked_for(tmp_path):
@@ -2271,45 +2412,195 @@ def test_an_operators_own_asound_conf_is_kept_aside(tmp_path):
     )
 
 
-def test_step_6_installs_the_alsa_config_from_the_provisioned_checkout(tmp_path):
+_ACCOUNT_STUBS = {
+    # A tiny account database in $ACCOUNTS: users/<name> holds its groups.
+    "getent": """#!/bin/sh
+case "$1" in
+  passwd) [ -e "$ACCOUNTS/users/$2" ] ;;
+  group) [ -e "$ACCOUNTS/groups/$2" ] ;;
+esac
+""",
+    "groupadd": """#!/bin/sh
+echo "GROUPADD $*"
+eval "name=\\${$#}"
+touch "$ACCOUNTS/groups/$name"
+""",
+    "useradd": """#!/bin/sh
+echo "USERADD $*"
+eval "name=\\${$#}"
+echo "$name" > "$ACCOUNTS/users/$name"
+touch "$ACCOUNTS/groups/$name"
+""",
+    "usermod": """#!/bin/sh
+echo "USERMOD $*"
+printf ' %s' "$(echo "$3" | tr ',' ' ')" >> "$ACCOUNTS/users/$4"
+""",
+    "id": """#!/bin/sh
+[ "$1" = -nG ] && tr -s ' ' < "$ACCOUNTS/users/$2"
+""",
+}
+
+
+def _run_step_6(
+    tmp_path: Path,
+    users: Mapping[str, str],
+    groups: list[str],
+    stub_overrides: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     firmware = Path(__file__).resolve().parent.parent
     install_dir = tmp_path / "opt"
-    for relative in ("alsa/visio-mic.conf", "systemd/visio-recorder.service"):
+    for relative in (
+        "alsa/visio-mic.conf",
+        "systemd/visio-recorder.service",
+        "polkit/50-visio-recorder.rules",
+    ):
         target = install_dir / "firmware" / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(firmware / relative, target)
     etc = tmp_path / "etc"
-    etc.mkdir()
-    stubs = tmp_path / "stubs"
-    stubs.mkdir()
-    systemctl = stubs / "systemctl"
-    systemctl.write_text('#!/bin/sh\necho "SYSTEMCTL $*"\n')
-    systemctl.chmod(0o755)
+    etc.mkdir(exist_ok=True)
+    accounts = tmp_path / "accounts"
+    (accounts / "users").mkdir(parents=True, exist_ok=True)
+    (accounts / "groups").mkdir(exist_ok=True)
+    for name, member_of in users.items():
+        (accounts / "users" / name).write_text(member_of)
+    for name in groups:
+        (accounts / "groups" / name).touch()
+    stubs = _systemctl_stub(tmp_path)
+    for name, body in {**_ACCOUNT_STUBS, **(stub_overrides or {})}.items():
+        (stubs / name).write_text(body)
+        (stubs / name).chmod(0o755)
     snippet = "\n".join(
         [
             _extract_function("log"),
             _extract_function("install_alsa_config"),
+            _extract_function("ensure_service_user"),
+            _extract_function("install_managed_file"),
             _extract_assignment("SYSTEMD_UNIT_SRC"),
+            _extract_assignment("POLKIT_RULE_SRC"),
+            _extract_assignment("SERVICE_USER"),
+            _extract_assignment("SERVICE_GROUPS"),
+            _extract_assignment("DATA_DIR"),
+            "service_user_failed=false",
             f'INSTALL_DIR="{install_dir}"',
             f'SYSTEMD_UNIT_DST="{etc}/visio-recorder.service"',
+            f'POLKIT_RULE_DST="{etc}/polkit-1/rules.d/50-visio-recorder.rules"',
             f'ALSA_CONF_DST="{etc}/asound.conf"',
             _step_block(6),
+            'echo "SERVICE_USER_FAILED=${service_user_failed}"',
+            'echo "UNIT_CHANGED=${unit_changed}"',
         ]
     )
-
-    result = subprocess.run(
+    return subprocess.run(
         ["bash", "-c", f"set -euo pipefail\n{snippet}"],
         capture_output=True,
         text=True,
         timeout=60,
-        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+        env={"PATH": f"{stubs}:/usr/bin:/bin", "ACCOUNTS": str(accounts)},
     )
 
+
+_RPI_OS_GROUPS = ["video", "gpio", "i2c", "spi", "audio"]
+
+
+def test_step_6_installs_the_alsa_config_from_the_provisioned_checkout(tmp_path):
+    firmware = Path(__file__).resolve().parent.parent
+
+    result = _run_step_6(tmp_path, users={}, groups=_RPI_OS_GROUPS)
+
     assert result.returncode == 0, result.stderr
+    etc = tmp_path / "etc"
     assert (etc / "asound.conf").read_bytes() == (
         firmware / "alsa" / "visio-mic.conf"
     ).read_bytes()
     assert "SYSTEMCTL enable visio-recorder" in result.stdout
+
+
+def test_step_6_installs_the_unit_and_the_polkit_rule(tmp_path):
+    firmware = Path(__file__).resolve().parent.parent
+
+    result = _run_step_6(tmp_path, users={}, groups=_RPI_OS_GROUPS)
+
+    rule = tmp_path / "etc" / "polkit-1" / "rules.d" / "50-visio-recorder.rules"
+    assert result.returncode == 0, result.stderr
+    assert (
+        rule.read_bytes() == (firmware / "polkit/50-visio-recorder.rules").read_bytes()
+    )
+    assert rule.stat().st_mode & 0o777 == 0o644
+    assert "UNIT_CHANGED=true" in result.stdout
+
+
+def test_a_fresh_device_gets_a_nologin_system_user_in_every_device_group(tmp_path):
+    result = _run_step_6(tmp_path, users={}, groups=_RPI_OS_GROUPS)
+
+    assert result.returncode == 0, result.stderr
+    useradd = next(line for line in result.stdout.splitlines() if "USERADD" in line)
+    assert "--system" in useradd and "/usr/sbin/nologin" in useradd
+    assert "--home-dir /var/lib/visio-recorder" in useradd
+    assert useradd.endswith(" visio")
+    assert "USERMOD --append --groups video,gpio,i2c,spi,audio visio" in result.stdout
+    assert "GROUPADD" not in result.stdout
+    assert "SERVICE_USER_FAILED=false" in result.stdout
+
+
+def test_a_second_pass_changes_no_account_and_no_file(tmp_path):
+    _run_step_6(tmp_path, users={}, groups=_RPI_OS_GROUPS)
+
+    again = _run_step_6(tmp_path, users={}, groups=_RPI_OS_GROUPS)
+
+    assert again.returncode == 0, again.stderr
+    for verb in ("USERADD", "USERMOD", "GROUPADD", "Installed /"):
+        assert verb not in again.stdout
+    assert "visio already in video gpio i2c spi audio" in again.stdout
+    assert "UNIT_CHANGED=false" in again.stdout
+
+
+def test_an_existing_account_missing_a_group_only_gains_that_group(tmp_path):
+    result = _run_step_6(
+        tmp_path, users={"visio": "visio video gpio spi audio"}, groups=_RPI_OS_GROUPS
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "USERADD" not in result.stdout
+    assert "USERMOD --append --groups i2c visio" in result.stdout
+
+
+def test_a_group_the_image_lacks_is_created_so_the_unit_can_start(tmp_path):
+    # systemd refuses a SupplementaryGroups= entry that does not exist
+    # (216/GROUP), before preflight could say anything.
+    result = _run_step_6(tmp_path, users={}, groups=["video", "gpio", "i2c", "audio"])
+
+    assert result.returncode == 0, result.stderr
+    assert "GROUPADD --system spi" in result.stdout
+    assert "Created missing system group spi" in result.stdout
+
+
+def test_a_failed_account_step_is_reported_rather_than_aborting(tmp_path):
+    result = _run_step_6(
+        tmp_path,
+        users={},
+        groups=_RPI_OS_GROUPS,
+        stub_overrides={"useradd": "#!/bin/sh\nexit 9\n"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ERROR: cannot create the visio system user" in result.stdout
+    assert "SERVICE_USER_FAILED=true" in result.stdout
+    assert "SYSTEMCTL enable visio-recorder" in result.stdout
+
+
+def test_the_script_and_the_unit_agree_on_the_account_and_its_groups():
+    unit = (
+        Path(__file__).resolve().parent.parent / "systemd" / "visio-recorder.service"
+    ).read_text()
+    script = _script_text()
+
+    assert re.search(r"^User=visio$", unit, re.MULTILINE)
+    assert 'SERVICE_USER="visio"' in script
+    match = re.search(r"^SERVICE_GROUPS=\((.*)\)$", script, re.MULTILINE)
+    assert match, "SERVICE_GROUPS=(...) not found in setup-device.sh"
+    groups = match.group(1)
+    assert f"SupplementaryGroups={groups}\n" in unit
 
 
 # --------------------------------------------------------------------------
