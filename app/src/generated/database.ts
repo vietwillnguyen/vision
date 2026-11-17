@@ -17,6 +17,7 @@ export type Database = {
     Tables: {
       device_status: {
         Row: {
+          audio_active: boolean
           battery_pct: number
           device_id: string
           recording_active: boolean
@@ -28,6 +29,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          audio_active?: boolean
           battery_pct?: number
           device_id: string
           recording_active?: boolean
@@ -39,6 +41,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          audio_active?: boolean
           battery_pct?: number
           device_id?: string
           recording_active?: boolean

@@ -99,6 +99,7 @@ def test_on_segment_complete_happy_path(tmp_path):
         "segments_uploaded_today": 42,
         "recording_active": True,
         "segments_rejected": 0,
+        "audio_active": False,
     }
 
 
@@ -170,6 +171,7 @@ def test_on_segment_complete_reports_real_disk_stats(tmp_path, monkeypatch):
         "segments_uploaded_today": 42,
         "recording_active": True,
         "segments_rejected": 0,
+        "audio_active": False,
     }
 
 
@@ -222,6 +224,7 @@ def test_failed_upload_restores_led_keeps_queued_file_and_reports_failure(tmp_pa
         "segments_uploaded_today": 0,
         "recording_active": True,
         "segments_rejected": 0,
+        "audio_active": False,
     }
 
 
@@ -586,3 +589,51 @@ def test_flush_pending_splits_an_oversized_queued_segment(tmp_path):
         "device-abc/20261116_090030.mp4",
     ]
     assert list_pending(queue_dir) == []
+
+
+def test_on_segment_complete_muxes_an_audio_capture_and_reports_audio_active(
+    tmp_path,
+):
+    ts_path = tmp_path / "raw" / "20261116_090000.ts"
+    ts_path.parent.mkdir()
+    ts_path.write_bytes(b"ts")
+    runner = FakeCommandRunner()
+    storage = FakeStorageClient()
+    status_client = FakeStatusClient()
+
+    on_segment_complete(
+        h264_path=ts_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=runner,
+        storage_client=storage,
+        status_client=status_client,
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+    )
+
+    assert "-framerate" not in runner.calls[0]
+    assert storage.uploaded == ["device-abc/20261116_090000.mp4"]
+    assert not ts_path.exists()
+    assert status_client.upserts[-1]["audio_active"] is True
+
+
+def test_recover_orphaned_segments_remuxes_a_leftover_transport_stream(tmp_path):
+    # An audio+video capture killed mid-segment leaves a .ts, which (unlike a
+    # half-written MP4) is still readable and remuxes like a raw .h264.
+    data_dir = tmp_path / "data"
+    queue_dir = data_dir / "queue"
+    data_dir.mkdir()
+    (data_dir / "20261116_090000.ts").write_bytes(b"partial ts")
+
+    recovered = recover_orphaned_segments(
+        data_dir, queue_dir, FakeCommandRunner(), framerate=30
+    )
+
+    assert [p.name for p in recovered] == ["20261116_090000.mp4"]
+    assert not (data_dir / "20261116_090000.ts").exists()

@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 02a084e8aee518fb62087d4fd4d80b8886a18e3983e5132614a8a6ba488b0033  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: ac815080f60e4e606c772ef90ac2a430fba246bd896c17bc2ad50927a8d52fd9  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-17 (merge of main: LED over SPI + 50 MB segment contract) -->
+<!-- regenerated-at: 2026-11-17 (merge of main: LED over SPI + 50 MB segment contract + I2S audio) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -74,8 +74,8 @@
     <div class="stats stats-vertical sm:stats-horizontal shadow bg-base-100 w-full">
       <div class="stat">
         <div class="stat-title">Hardware BOM</div>
-        <div class="stat-value text-primary text-2xl">~$91.50</div>
-        <div class="stat-desc">standard camera; ~$74.50 vintage variant</div>
+        <div class="stat-value text-primary text-2xl">~$94.50</div>
+        <div class="stat-desc">standard camera with INMP441 microphone; ~$77.50 vintage variant</div>
       </div>
       <div class="stat">
         <div class="stat-title">Recording window</div>
@@ -235,7 +235,7 @@ flowchart TD
             <tr><td class="font-mono">7, 8, 9, 11</td><td>SPI0 CE1/CE0/MISO/SCLK</td><td>claimed by <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, nothing connected</td></tr>
             <tr><td class="font-mono font-semibold">10 (19)</td><td class="font-semibold">SPI0 MOSI - WS2812B data</td><td>moved from GPIO 18 (PWM0) in the LED SPI rewire</td></tr>
             <tr><td class="font-mono">17 (11)</td><td>Flag button</td><td>to ground, internal pull-up</td></tr>
-            <tr><td class="font-mono font-semibold">18, 19, 20 (12, 35, 38)</td><td class="font-semibold">Reserved: I2S microphone</td><td>PCM_CLK, PCM_FS, PCM_DIN; GPIO 21 (PCM_DOUT) is claimed by the same pin group. Never enable SPI1 (CE0/CE1 = GPIO 18/17).</td></tr>
+            <tr><td class="font-mono font-semibold">18, 19, 20 (12, 35, 38)</td><td class="font-semibold">I2S microphone (INMP441)</td><td>PCM_CLK, PCM_FS, PCM_DIN; GPIO 21 (PCM_DOUT) is claimed by the same pin group. Never enable SPI1 (CE0/CE1 = GPIO 18/17).</td></tr>
           </tbody>
         </table>
       </div>
@@ -269,6 +269,23 @@ flowchart TD
         </table>
       </div>
     </div>
+
+    <div class="card bg-base-100 shadow p-4 space-y-2">
+      <h3 class="font-semibold text-sm">Audio capture</h3>
+      <p class="text-xs text-base-content/70">An INMP441 I2S MEMS microphone (handoff option A, decided 2026-11-16). With a microphone, each segment is one <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid --codec libav --libav-format mpegts --libav-audio --audio-source alsa --audio-device visio_mic</span> run: hardware H.264 plus 64 kbps mono AAC on one clock, written as MPEG-TS so a killed capture is still recoverable, then remuxed to MP4. Without one the pendant records video only.</p>
+      <div class="overflow-x-auto rounded-box border border-base-content/10">
+        <table class="table table-xs">
+          <thead><tr><th>Concern</th><th>As-built</th></tr></thead>
+          <tbody>
+            <tr><td>Fallback</td><td>startup <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg -f alsa</span> probe of <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_AUDIO_DEVICE</span>; no device &rarr; warning, video only. An audio capture failing mid-run &rarr; video only for the rest of the run. <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.audio_active</span> reports which.</td></tr>
+            <tr><td>Wiring</td><td>SCK GPIO 18 (pin 12), WS GPIO 19 (pin 35), SD GPIO 20 (pin 38), L/R to GND; <span class="font-mono text-xs bg-base-200 rounded px-1">dtoverlay=adau7002-simple</span>; <span class="font-mono text-xs bg-base-200 rounded px-1">firmware/alsa/visio-mic.conf</span> as <span class="font-mono text-xs bg-base-200 rounded px-1">/etc/asound.conf</span> keeps the left slot</td></tr>
+            <tr><td>GPIO 18</td><td>the WS2812B LED's old PWM pin: the LED now runs on SPI0 MOSI (GPIO 10, PR #85), so move that wire before fitting the microphone</td></tr>
+            <tr><td>Pipeline</td><td>audio weight back to 0.3; video-only segments score as silence; a reel mixing both gives every clip an audio track so concat keeps it in sync</td></tr>
+            <tr><td>Bench before soldering</td><td>CPU, RSS and dropped frames of libav audio+video at 720p30 on the Zero 2W; A/V sync; mic level; real size with audio</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <section id="gaps" class="space-y-4">
@@ -295,7 +312,7 @@ flowchart TD
         <thead><tr><th>Table</th><th>Key columns</th></tr></thead>
         <tbody>
           <tr><td class="font-mono">devices</td><td>device_id, user_id, name, created_at</td></tr>
-          <tr><td class="font-mono">device_status</td><td>device_id, battery_pct, storage_used_gb, storage_free_gb, segments_pending, segments_uploaded_today, recording_active, segments_rejected, updated_at</td></tr>
+          <tr><td class="font-mono">device_status</td><td>device_id, battery_pct, storage_used_gb, storage_free_gb, segments_pending, segments_uploaded_today, recording_active, segments_rejected, audio_active, updated_at</td></tr>
           <tr><td class="font-mono">segments</td><td>id, device_id, recorded_at, duration_sec, s3_key, motion_score, audio_score, scene_score, composite_score, manually_flagged, user_feedback</td></tr>
           <tr><td class="font-mono">reels</td><td>id, device_id, date, s3_key, duration_sec, style, created_at; unique (device_id, date) so same-day pipeline re-runs upsert</td></tr>
           <tr><td class="font-mono">score_weights</td><td>user_id, scene_weight, audio_weight, motion_weight (default 0.4/0.3/0.2)</td></tr>
@@ -350,7 +367,7 @@ score = base_score * 1.5  (if manually flagged)
       </div>
     </div>
     <div class="alert alert-success alert-soft text-sm" role="alert">
-      <span><strong>Silent segments scored, not failed.</strong> The pendant records video only and <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg</span> refuses to extract audio from a file with no audio stream, which failed every real device day in Stage 1. A segment with no audio stream now scores as silence without a Whisper call.</span>
+      <span><strong>Silent segments scored, not failed.</strong> A pendant without a working microphone records video only and <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg</span> refuses to extract audio from a file with no audio stream, which failed every real device day in Stage 1. A segment with no audio stream now scores as silence without a Whisper call.</span>
     </div>
   </section>
 

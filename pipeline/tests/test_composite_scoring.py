@@ -12,8 +12,8 @@ def test_default_weights_unflagged():
         weights=ScoreWeights(),
         manually_flagged=False,
     )
-    # 0.6, not 0.9: audio_weight is 0 until vision-audio-capture.
-    assert score == pytest.approx(0.6)
+    # The spec's 0.4 + 0.3 + 0.2.
+    assert score == pytest.approx(0.9)
 
 
 def test_flagged_segment_gets_1_5x_multiplier():
@@ -24,12 +24,12 @@ def test_flagged_segment_gets_1_5x_multiplier():
         weights=ScoreWeights(),
         manually_flagged=True,
     )
-    assert score == pytest.approx(0.9)
+    assert score == pytest.approx(1.35)
 
 
-def test_default_weights_ignore_audio_activity():
-    # audio_weight is 0 until the pendant records audio (vision-audio-capture);
-    # a hallucinated transcript must not be able to move the score.
+def test_default_weights_count_audio_activity_at_the_spec_weight():
+    # A video-only segment is scored as silence (activity 0), so the audio
+    # term only lifts segments whose microphone track has activity.
     silent = compute_composite_score(
         scene_novelty=0.5,
         audio_activity=0.0,
@@ -37,7 +37,7 @@ def test_default_weights_ignore_audio_activity():
         weights=ScoreWeights(),
         manually_flagged=False,
     )
-    hallucinated_speech = compute_composite_score(
+    speech = compute_composite_score(
         scene_novelty=0.5,
         audio_activity=1.0,
         motion_intensity=0.5,
@@ -45,8 +45,8 @@ def test_default_weights_ignore_audio_activity():
         manually_flagged=False,
     )
 
-    assert silent == pytest.approx(hallucinated_speech)
     assert silent == pytest.approx(0.4 * 0.5 + 0.2 * 0.5)
+    assert speech - silent == pytest.approx(0.3)
 
 
 def test_custom_weights_are_respected():

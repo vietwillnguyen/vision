@@ -1,9 +1,12 @@
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 from visio_recorder.capture import (
+    AudioSettings,
     VideoSettings,
     build_rpicam_command,
+    probe_audio_device,
     record_segment,
     segment_filename,
 )
@@ -71,3 +74,100 @@ def test_record_segment_runs_rpicam_and_returns_the_timestamped_path(tmp_path):
 
     assert path == tmp_path / "20260709_080530.h264"
     assert runner.calls == [build_rpicam_command(path, 60000, VIDEO)]
+
+
+AUDIO = AudioSettings(device="visio_mic", bitrate_bps=64_000, samplerate=48_000)
+
+
+def test_build_rpicam_command_records_audio_and_video_in_one_libav_pass():
+    # Flags from rpicam-apps v1.15.0 core/video_options.hpp: --audio-source
+    # defaults to "pulse", which Raspberry Pi OS Lite does not run, so ALSA is
+    # named explicitly. MPEG-TS, unlike MP4, stays readable when rpicam-vid is
+    # killed mid-capture, so an orphaned capture can still be remuxed.
+    cmd = build_rpicam_command(
+        Path("/data/20260709_080530.ts"), 60000, VIDEO, audio=AUDIO
+    )
+    assert cmd == [
+        "rpicam-vid",
+        "-t",
+        "60000",
+        "--width",
+        "1280",
+        "--height",
+        "720",
+        "--framerate",
+        "30",
+        "--bitrate",
+        "4000000",
+        "--codec",
+        "libav",
+        "--libav-format",
+        "mpegts",
+        "--libav-audio",
+        "--audio-source",
+        "alsa",
+        "--audio-device",
+        "visio_mic",
+        "--audio-channels",
+        "1",
+        "--audio-samplerate",
+        "48000",
+        "--audio-codec",
+        "aac",
+        "--audio-bitrate",
+        "64000",
+        "-n",
+        "-o",
+        "/data/20260709_080530.ts",
+    ]
+
+
+def test_record_segment_with_audio_writes_a_transport_stream(tmp_path):
+    runner = FakeRunner()
+    started_at = datetime(2026, 7, 9, 8, 5, 30)
+
+    path = record_segment(runner, tmp_path, started_at, 60000, VIDEO, audio=AUDIO)
+
+    assert path == tmp_path / "20260709_080530.ts"
+    assert runner.calls == [build_rpicam_command(path, 60000, VIDEO, audio=AUDIO)]
+
+
+def test_default_audio_settings_are_mono_48_khz_aac_at_64_kbps_from_visio_mic():
+    assert AudioSettings() == AudioSettings(
+        device="visio_mic", bitrate_bps=64_000, samplerate=48_000
+    )
+
+
+def test_audio_probe_opens_the_alsa_device_the_way_rpicam_vid_will():
+    runner = FakeRunner()
+
+    assert probe_audio_device(runner, AUDIO) is True
+    assert runner.calls == [
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "alsa",
+            "-channels",
+            "1",
+            "-sample_rate",
+            "48000",
+            "-i",
+            "visio_mic",
+            "-t",
+            "0.2",
+            "-f",
+            "null",
+            "-",
+        ]
+    ]
+
+
+def test_audio_probe_reports_a_missing_device_as_unavailable():
+    class Failing(FakeRunner):
+        def run(self, args: list[str]) -> None:
+            raise subprocess.CalledProcessError(251, args)
+
+    assert probe_audio_device(Failing(), AUDIO) is False

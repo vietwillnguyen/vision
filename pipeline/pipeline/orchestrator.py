@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Protocol
 
 from pipeline.assembly.ffmpeg_assembler import (
+    ClipAudio,
     build_assembly_command,
     build_trim_command,
     compute_clip_duration_sec,
@@ -356,6 +357,7 @@ def _score_one(
     workdir: Path,
 ) -> Segment:
     audio_path = deps.media.extract_audio(video_path, workdir)
+    segment.has_audio = audio_path is not None
     transcription = (
         SILENT_TRANSCRIPTION
         if audio_path is None
@@ -393,12 +395,24 @@ def _assemble_reel(
     day: date,
 ) -> Path:
     clip_paths: list[Path] = []
+    # A day where the microphone worked only part of the time mixes segments
+    # with and without audio; see ClipAudio for why every clip then needs a
+    # track.
+    reel_has_audio = any(s.has_audio for s in selected)
     for index, segment in enumerate(selected):
         clip = workdir / f"clip_{index:03d}.mp4"
         clip_sec = compute_clip_duration_sec(segment.duration_sec, CLIP_DURATION_SEC)
         offset = compute_clip_offset_sec(segment.duration_sec, clip_sec)
+        if segment.has_audio:
+            audio = ClipAudio.SOURCE
+        elif reel_has_audio:
+            audio = ClipAudio.SILENCE
+        else:
+            audio = ClipAudio.NONE
         deps.runner.run(
-            build_trim_command(local_paths[segment.s3_key], clip, offset, clip_sec)
+            build_trim_command(
+                local_paths[segment.s3_key], clip, offset, clip_sec, audio
+            )
         )
         clip_paths.append(clip)
 
