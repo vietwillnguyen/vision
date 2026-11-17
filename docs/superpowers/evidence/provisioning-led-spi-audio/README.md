@@ -45,6 +45,7 @@ Not simulated: the camera, NetworkManager, `vcgencmd` and an actual I2S card, wh
 
 ```bash
 docs/superpowers/evidence/provisioning-led-spi-audio/sim/run.sh . "$(mktemp -d)"
+docs/superpowers/evidence/provisioning-led-spi-audio/sim/failure-paths.sh . "$(mktemp -d)"
 ```
 
 Needs Docker, network access for the image build and `uv sync`, and `uv` on the host's PATH (it is bind-mounted into the container).

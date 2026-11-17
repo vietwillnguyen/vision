@@ -39,10 +39,10 @@ docker exec "${simA}" bash -c 'ls -l /etc/visio-recorder.env; ls -l /run/visio-s
 echo "--- config.txt spi/i2c lines (must still be commented: nothing enabled them)"
 docker exec "${simA}" grep -nE 'dtparam=(spi|i2c_arm)' /boot/firmware/config.txt
 echo "--- A2) operator fills the env file and re-runs, still without raspi-config"
-docker exec "${simA}" sed -i 's|^SUPABASE_URL=$|SUPABASE_URL=https://example.supabase.co|; s|^SUPABASE_ANON_KEY=$|SUPABASE_ANON_KEY="sim-anon-key"|' /etc/visio-recorder.env
+docker exec "${simA}" sed -i 's|^SUPABASE_URL=$|SUPABASE_URL=https://example.supabase.co|; s|^SUPABASE_ANON_KEY=$|SUPABASE_ANON_KEY="sim-anon-key"|' /etc/visio-recorder.env || exit 1
 rc=0; out="$(provision "${simA}")" || rc=$?; show "$out"; echo "exit=${rc}"
 echo "--- A3) raspi-config installed again, re-run converges"
-docker exec "${simA}" mv /usr/bin/raspi-config.hidden /usr/bin/raspi-config
+docker exec "${simA}" mv /usr/bin/raspi-config.hidden /usr/bin/raspi-config || exit 1
 rc=0; out="$(provision "${simA}")" || rc=$?; show "$out"; echo "exit=${rc}"
 docker exec "${simA}" bash -c 'for f in get_spi get_i2c; do echo "$f=$(raspi-config nonint $f)"; done'
 
