@@ -11,7 +11,9 @@ No physical device was used; everything below is simulated, and the hardware che
 - `03-e2e-simulation.log` - `sim/run.sh` output: the real script, three runs in a row, on a Debian trixie container standing in for a fresh Raspberry Pi OS trixie Pi Zero 2W, a fourth run with `raspi-config` removed, then `visio-preflight` from the provisioned venv.
 - `04-firmware-suite.txt` - the whole firmware suite after the change.
 - `05-raspi-config-interfaces-before-after.txt` - the step 3 tests for enabling SPI and I2C through `raspi-config nonint`, failing against the previous step 3 (our own `dtparam=spi=on` edit, and an unverified `do_i2c`) and passing after.
-- `sim/` - the harness: `Dockerfile` (which also installs the real upstream `raspi-config`, pinned and checksum-verified), `stubs/` (apt-get, apt-cache, dpkg, dtparam, modprobe, systemctl, update-alternatives), `stock-config.txt` (Raspberry Pi OS trixie's stock `/boot/firmware/config.txt`) and `run.sh`.
+- `06-step-3-failure-paths.log` - `sim/failure-paths.sh` output: step 3's failure paths live on the same image, each on a fresh container.
+- `sim/` - the harness: `Dockerfile` (which also installs the real upstream `raspi-config`, pinned and checksum-verified), `stubs/` (apt-get, apt-cache, dpkg, dtparam, modprobe, systemctl, update-alternatives), `stock-config.txt` (Raspberry Pi OS trixie's stock `/boot/firmware/config.txt`), `run.sh` and `failure-paths.sh`.
+  Both logs were recorded at `6db4c89`, which includes the env-file checkpoint's exit 1 on a step 3 failure (`e6f5473`).
 
 ## What the simulation is and is not
 
@@ -28,6 +30,11 @@ Not simulated: the camera, NetworkManager, `vcgencmd` and an actual I2S card, wh
   This was found by the simulation and fixed test-first in its own commit.
 - Run 3, after a simulated reboot with `SwapTotal: 1048572 kB`, prints `No reboot required.` and `Setup complete.`, and every managed file is byte-identical to run 2 (checksums in the log): config.txt, `/etc/modules`, asound.conf, swap drop-in, unit, env file, `~/.bashrc`, nvim config.
 - Run 4, with `raspi-config` removed, logs `ERROR: raspi-config is not installed, so SPI and I2C were NOT enabled`, repeats it as an `INCOMPLETE` line, ends `Setup incomplete` and exits 1 - no silent fallback.
+- Failure paths (`06`):
+  - A fresh device without `raspi-config` stops at the env-file checkpoint with the `ERROR`, an `INCOMPLETE` line, `Setup incomplete` and exit 1, and still writes the template and the owed-reboot marker; `config.txt`'s SPI and I2C lines stay commented.
+    Re-run with the env file filled in, it exits 1 again; once `raspi-config` is back, the next run enables SPI and I2C, ends `Setup complete.` and `get_spi`/`get_i2c` print `0`.
+  - With `config.txt` on a read-only mount, the real upstream `raspi-config nonint do_spi 0` exits 0 while `get_spi` still prints `1`; the script's re-check reports `left SPI disabled` (and I2C), both `config.txt` failures, two `INCOMPLETE` lines and exit 1.
+  - Control: a healthy fresh device's checkpoint still exits 0.
 - `config.txt`: `raspi-config` uncomments the stock `#dtparam=i2c_arm=on` and `#dtparam=spi=on` in place, and our own edit adds `core_freq_fixed=1` and `dtoverlay=adau7002-simple` under the stock file's final `[all]`; nothing else changes.
   `raspi-config` also added `i2c-dev` to `/etc/modules` and called `dtparam spi=on`, `dtparam i2c_arm=on` and `modprobe i2c-dev` (stubbed, logged).
 - The provisioned venv imports `spidev` and `gpiozero` from `/usr/lib/python3/dist-packages` and has no `rpi_ws281x`.
@@ -38,6 +45,7 @@ Not simulated: the camera, NetworkManager, `vcgencmd` and an actual I2S card, wh
 
 ```bash
 docs/superpowers/evidence/provisioning-led-spi-audio/sim/run.sh . "$(mktemp -d)"
+docs/superpowers/evidence/provisioning-led-spi-audio/sim/failure-paths.sh . "$(mktemp -d)"
 ```
 
 Needs Docker, network access for the image build and `uv sync`, and `uv` on the host's PATH (it is bind-mounted into the container).
