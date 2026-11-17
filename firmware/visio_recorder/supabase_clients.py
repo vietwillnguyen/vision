@@ -40,7 +40,7 @@ class SupabaseStorage:
         which are empty files whose name is their whole content - so a retried
         segment is never sent over WiFi again just to be rejected. An
         existing object of another size raises ``FileExistsError``, and a failed
-        lookup or upload raises too, so the file stays queued for the next boot.
+        lookup or upload raises too, so the file stays queued for the next retry.
         Checking first also avoids the duplicate path entirely: storage answers
         a large duplicate before reading its body, which leaves the gateway
         connection stalled for the next request.

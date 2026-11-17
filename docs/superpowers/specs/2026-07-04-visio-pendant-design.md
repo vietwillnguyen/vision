@@ -162,7 +162,8 @@ A single Python systemd service manages the full device lifecycle.
 - On segment completion the daemon wraps it into MP4 (`ffmpeg -c copy`), moves it to the upload queue, and hands it to a single background worker thread.
 - The worker thread is the sole owner of upload state (segment count, consecutive-failure count) and every upload-related LED transition; the main thread only records and enqueues.
 - The worker attempts the upload once per segment as it arrives, and also retries whatever is still queued while the daemon runs, so a failed upload no longer waits for the next process start.
-  The retry belongs to the worker rather than to a second thread or a scheduler: the worker already blocks on its work queue, so it blocks with a timeout instead, and a round of retries runs whenever that timeout elapses with no new segment waiting.
+  The retry belongs to the worker rather than to a second thread or a scheduler: the worker already blocks on its work queue, so it blocks with a timeout instead, counting down to a retry deadline that is armed when the queue becomes non-empty and again after each round.
+  A new segment shortens the remaining wait rather than restarting it, so segments arriving more often than the backoff cannot postpone a round indefinitely.
   A new segment or the shutdown sentinel still wakes it at once, so the retry never delays either.
   The wait between rounds doubles per consecutive failure from 30 s and is capped at 480 s, driven by the same consecutive-failure counter as the Critical LED, so the wait is reset by exactly what clears the red.
   A brief WiFi drop is therefore recovered inside one segment period, while an outage lasting hours settles into one attempt every eight minutes rather than spending radio power on a dead network.
@@ -256,7 +257,7 @@ What each side guarantees:
   Before upload, a segment over `VISIO_MAX_UPLOAD_BYTES` is split losslessly with `ffmpeg -c copy -f segment` into parts targeting 80 % of the limit, each named after its own start time so the pipeline sees ordinary consecutive segments.
   A part storage still answers 413 for (a server limit below the configured one) is split again under half its size.
   A segment that cannot be split under the limit (ffprobe cannot read its duration, ffmpeg fails with at least twice its size free, fewer than two parts, a part still too large, or parts that would share a name) is moved to `rejected/` beside the queue, logged as an error, counted in `device_status.segments_rejected`, and never retried; it is kept on the SD card for manual recovery.
-  A split that fails for a passing reason (any `OSError` such as a full SD card, or ffmpeg failing while the queue's filesystem has less than twice the file's size free, measured after the failure with the partial parts still on disk) leaves the segment queued and counts it as failed, so the next boot's flush retries it.
+  A split that fails for a passing reason (any `OSError` such as a full SD card, or ffmpeg failing while the queue's filesystem has less than twice the file's size free, measured after the failure with the partial parts still on disk) leaves the segment queued and counts it as failed, so the worker's next in-process retry round, or failing that the next boot's flush, retries it.
   Splitting is crash-safe: parts are built in a hidden scratch directory in the queue and the original is replaced last, so a power cut leaves it to be split again.
 
 To measure the real size on a Pi, record one default segment and list it: `rpicam-vid -t 60000 --width 1280 --height 720 --framerate 30 --bitrate 4000000 --codec h264 -n -o /tmp/size-test.h264 && ls -l /tmp/size-test.h264` (the MP4 mux adds well under 1 %).
@@ -270,7 +271,8 @@ Flagged moments are always included in the highlight reel.
 **As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler only debounces, writes the marker, and hands the path to a dedicated flag-upload worker thread, keeping gpiozero's callback thread off the network so later presses are never delayed by a slow upload.
 The worker uploads each marker immediately as it arrives, so it reaches the pipeline before that night's run.
 Presses within a 2-second cooldown of the last accepted press are dropped (switch bounce and accidental double-taps).
-If the immediate upload fails, the marker stays in the upload queue and the next boot's flush retries it - the same retry contract as segments.
+If the immediate upload fails, the marker stays in the upload queue and the next boot's flush retries it.
+Unlike a segment it gets no in-process retry, since the upload worker's retry rounds skip markers so they never race the flag-upload worker.
 
 **LED state machine:**
 

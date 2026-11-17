@@ -358,9 +358,9 @@ def retry_pending_segments(
 ) -> UploadOutcome:
     """One in-process retry round over the segments still queued.
 
-    Called by the upload worker when its backoff elapses with nothing new to
-    do, so a segment whose upload failed is retried during the same run rather
-    than waiting for the next boot's ``flush_pending``. It is the same upload
+    Called by the upload worker when its retry deadline passes, so a segment
+    whose upload failed is retried during the same run rather than waiting for
+    the next boot's ``flush_pending``. It is the same upload
     path ``on_segment_complete`` uses, so the 50 MB limit is handled the same
     way: an oversized segment is split and its parts uploaded, and one that
     cannot be split is moved to ``rejected/`` and so leaves the queue for

@@ -140,6 +140,7 @@ def _make_deps(
     status_client=None,
     audio=None,
     retry_backoff=None,
+    monotonic=None,
 ) -> LoopDeps:
     return LoopDeps(
         command_runner=command_runner,
@@ -156,6 +157,7 @@ def _make_deps(
         upload_limit=unlimited_upload_limit(),
         audio=audio,
         **({} if retry_backoff is None else {"retry_backoff": retry_backoff}),
+        **({} if monotonic is None else {"monotonic": monotonic}),
     )
 
 
@@ -983,6 +985,58 @@ def test_a_failed_segment_is_retried_in_process_without_a_restart(tmp_path):
         "device-abc/20260704_120001.mp4",
     ]
     assert list_pending(queue_dir) == []
+
+
+def test_a_retry_round_still_runs_while_segments_arrive_faster_than_the_backoff(
+    tmp_path,
+):
+    # The production schedule (30 s doubling to 480 s) against the production
+    # segment period (60 s), on a fake monotonic clock: from the second
+    # consecutive failure on, every backoff delay is at least one segment
+    # period, so a wait that restarted on each new segment would never elapse.
+    now = [0.0]
+    first = "device-abc/20260704_120000.mp4"
+    attempted = threading.Condition()
+    stop = threading.Event()
+
+    class AlwaysDown(FailingStorageClient):
+        def __init__(self) -> None:
+            self.attempts: list[str] = []
+
+        def upload(self, bucket, object_path, local_path):
+            with attempted:
+                self.attempts.append(object_path)
+                attempted.notify_all()
+            raise RuntimeError("network down")
+
+    storage = AlwaysDown()
+
+    def on_record(count: int) -> None:
+        # Keep the fake clock in step with the worker: segment count - 1 has
+        # had its own upload attempt before one more segment period passes.
+        with attempted:
+            assert attempted.wait_for(
+                lambda: len(set(storage.attempts)) >= count - 1, timeout=5
+            )
+            if storage.attempts.count(first) >= 3 or count >= 40:
+                stop.set()
+        now[0] += 60.0
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=on_record),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        retry_backoff=RetryBackoff(),
+        monotonic=lambda: now[0],
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    # Its own upload, then two retry rounds while recording carried on - the
+    # second one after far more than two consecutive failures had accrued.
+    assert storage.attempts.count(first) >= 3
 
 
 @dataclass(frozen=True)

@@ -210,6 +210,8 @@ class LoopDeps:
     audio: AudioSettings | None = None
     # How long the upload worker waits between in-process retries of the queue.
     retry_backoff: RetryBackoff = field(default_factory=RetryBackoff)
+    # The clock the upload worker measures its retry deadline against.
+    monotonic: Callable[[], float] = time.monotonic
 
 
 def _push_recording_status(
@@ -267,16 +269,20 @@ def run_recording_loop(
     upload succeeds and resets the counter.
 
     The worker also owns the in-process retry, which is why it waits on its
-    work queue with a timeout rather than indefinitely: when the timeout
-    elapses with no new segment, it runs ``retry_pending_segments`` over
-    whatever is still queued, so a failed upload reaches storage during this
-    run instead of waiting for the next boot's ``flush_pending``. The wait
-    comes from ``deps.retry_backoff``, indexed by the same ``UploadHealth``
-    counter, so it grows while uploads keep failing and is reset by the
-    success that also clears the red. A new segment or the sentinel still
-    returns from ``work.get`` immediately, so the retry delays neither; and
-    ``stopping`` is set before the sentinel is queued so a round already
-    draining a backlog gives up rather than uploading through a halt.
+    work queue with a timeout rather than indefinitely. Whenever segments are
+    queued it keeps a retry deadline on ``deps.monotonic``, and once that
+    deadline passes it runs ``retry_pending_segments`` over whatever is still
+    queued, so a failed upload reaches storage during this run instead of
+    waiting for the next boot's ``flush_pending``. The deadline is armed from
+    ``deps.retry_backoff``, indexed by the same ``UploadHealth`` counter, so
+    it grows while uploads keep failing and is reset by the success that also
+    clears the red. It is armed when the queue becomes non-empty and again
+    after each round, never by a new segment, so segments arriving more often
+    than the backoff cannot postpone the retry indefinitely. A new segment or
+    the sentinel still returns from ``work.get`` immediately, so the retry
+    delays neither; and ``stopping`` is set before the sentinel is queued so a
+    round already draining a backlog gives up rather than uploading through a
+    halt.
 
     ``device_status.recording_active`` is pushed True before the first capture
     and False once the loop has exited for any reason (stop, halt, or a
@@ -303,34 +309,45 @@ def run_recording_loop(
     def worker() -> None:
         segments_uploaded_today = 0
         upload_health = UploadHealth()
+        retry_at: float | None = None
+
+        def retry_round() -> None:
+            nonlocal segments_uploaded_today
+            try:
+                outcome = retry_pending_segments(
+                    queue_dir=deps.queue_dir,
+                    storage_client=deps.storage_client,
+                    led_driver=deps.led_driver,
+                    battery_reader=deps.battery_reader,
+                    device_id=deps.device_id,
+                    upload_limit=deps.upload_limit,
+                    upload_health=upload_health,
+                    cancel=stopping.is_set,
+                )
+            except Exception:
+                _logger.exception("queue retry round failed; worker continuing")
+                return
+            segments_uploaded_today += outcome.uploaded
+            uploaded_today[0] = segments_uploaded_today
+
         while True:
+            if not pending_segments(deps.queue_dir):
+                retry_at = None
+            elif retry_at is None:
+                retry_at = deps.monotonic() + deps.retry_backoff.delay_sec(
+                    upload_health.consecutive_failures
+                )
+            timeout = None if retry_at is None else retry_at - deps.monotonic()
             # Waiting with a timeout is what makes the retry in-process: the
             # worker owns it, so there is no second thread and no scheduler,
             # and a new segment or the sentinel still wakes it immediately.
-            timeout = (
-                deps.retry_backoff.delay_sec(upload_health.consecutive_failures)
-                if pending_segments(deps.queue_dir)
-                else None
-            )
             try:
+                if timeout is not None and timeout <= 0:
+                    raise queue.Empty
                 item = work.get(timeout=timeout)
             except queue.Empty:
-                try:
-                    outcome = retry_pending_segments(
-                        queue_dir=deps.queue_dir,
-                        storage_client=deps.storage_client,
-                        led_driver=deps.led_driver,
-                        battery_reader=deps.battery_reader,
-                        device_id=deps.device_id,
-                        upload_limit=deps.upload_limit,
-                        upload_health=upload_health,
-                        cancel=stopping.is_set,
-                    )
-                except Exception:
-                    _logger.exception("queue retry round failed; worker continuing")
-                    continue
-                segments_uploaded_today += outcome.uploaded
-                uploaded_today[0] = segments_uploaded_today
+                retry_round()
+                retry_at = None
                 continue
             if item is None:
                 return
