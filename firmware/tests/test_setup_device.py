@@ -1646,6 +1646,7 @@ def _run_final_steps(
     env_text: str,
     config_txt_failed: str = "false",
     reboot_needed: str = "false",
+    interfaces_failed: str = "false",
 ) -> subprocess.CompletedProcess:
     """Run steps 9 and 10 for real, with DATA_DIR and REBOOT_MARKER redirected."""
     env_file = tmp_path / "visio-recorder.env"
@@ -1667,6 +1668,7 @@ def _run_final_steps(
             f"reboot_needed={reboot_needed}",
             "data_dir_failed=false",
             f"config_txt_failed={config_txt_failed}",
+            f"interfaces_failed={interfaces_failed}",
             block,
         ]
     )
@@ -1688,7 +1690,7 @@ def test_a_config_txt_that_could_not_be_edited_is_repeated_in_the_summary(tmp_pa
 
     assert "INCOMPLETE" in result.stdout
     assert "config.txt" in result.stdout
-    assert "LED" in result.stdout
+    assert "core_freq_fixed=1" in result.stdout
     # Still non-fatal where it happened: the data dir and the rest of the
     # summary happen anyway. Only the very end reports the outcome.
     assert (tmp_path / "default-data-dir").is_dir()
@@ -1697,6 +1699,19 @@ def test_a_config_txt_that_could_not_be_edited_is_repeated_in_the_summary(tmp_pa
     assert result.returncode == 1, (
         "a device whose LED cannot be driven is not a successful run"
     )
+
+
+def test_interfaces_raspi_config_could_not_enable_are_repeated_in_the_summary(
+    tmp_path,
+):
+    result = _run_final_steps(tmp_path, _CONFIGURED_ENV, interfaces_failed="true")
+
+    assert "INCOMPLETE" in result.stdout
+    assert "raspi-config" in result.stdout
+    assert "spidev0.0" in result.stdout
+    assert "Setup complete." not in result.stdout
+    assert "Setup incomplete" in result.stdout
+    assert result.returncode == 1, "a device with SPI off cannot drive its LED"
 
 
 def test_a_successful_run_says_nothing_about_config_txt(tmp_path):
@@ -1993,13 +2008,15 @@ def test_an_indented_data_dir_is_provisioned_rather_than_missed(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Step 3's /boot/firmware/config.txt edits. The SPI LED needs SPI0 on and the
-# core clock held fixed (spi-bcm2835 caches the core clock at probe, so a
-# scaling clock skews the WS2812B bit timing), and the INMP441 needs the
-# adau7002-simple overlay. config.txt is the file a bad edit can stop the Pi
-# booting from, so the edits are pinned against a real stock file: added once
-# in a section that applies to the Zero 2W, a conflicting value replaced in
-# place rather than shadowed, and a second run byte-for-byte identical.
+# Step 3's own /boot/firmware/config.txt edits, for the two settings
+# raspi-config has no option for. The SPI LED needs the core clock held fixed
+# (spi-bcm2835 caches the core clock at probe, so a scaling clock skews the
+# WS2812B bit timing), and the INMP441 needs the adau7002-simple overlay.
+# config.txt is the file a bad edit can stop the Pi booting from, so the edits
+# are pinned against a real stock file: added once in a section that applies
+# to the Zero 2W, a conflicting value replaced in place rather than shadowed,
+# and a second run byte-for-byte identical. SPI and I2C themselves are enabled
+# through raspi-config, tested further down against its upstream functions.
 # --------------------------------------------------------------------------
 
 # Raspberry Pi OS trixie's stock /boot/firmware/config.txt (abridged comments).
@@ -2055,7 +2072,6 @@ dtoverlay=dwc2,dr_mode=host
 """
 
 _CONFIG_TXT_EDITS = """\
-ensure_config_txt_setting "${CONFIG_TXT}" dtparam=spi on
 ensure_config_txt_setting "${CONFIG_TXT}" core_freq_fixed 1
 ensure_config_txt_line "${CONFIG_TXT}" dtoverlay=adau7002-simple
 echo "CHANGED=${config_txt_changed} FAILED=${config_txt_failed}"
@@ -2100,9 +2116,8 @@ def test_a_stock_config_txt_gains_the_led_and_microphone_settings(tmp_path):
     text = config.read_text()
     assert text.startswith(_STOCK_CONFIG_TXT), "nothing above is rewritten"
     effective = _effective_all_scope(text)
-    for line in ("dtparam=spi=on", "core_freq_fixed=1", "dtoverlay=adau7002-simple"):
+    for line in ("core_freq_fixed=1", "dtoverlay=adau7002-simple"):
         assert effective.count(line) == 1, f"{line} must apply exactly once"
-    assert "#dtparam=spi=on" in text, "the stock comment is left alone"
 
 
 def test_a_second_config_txt_pass_changes_nothing(tmp_path):
@@ -2118,16 +2133,15 @@ def test_a_second_config_txt_pass_changes_nothing(tmp_path):
     assert config.read_bytes() == after_first
 
 
-def test_spi_turned_off_is_switched_on_in_place_not_shadowed(tmp_path):
+def test_a_conflicting_core_clock_is_fixed_in_place_not_shadowed(tmp_path):
     config = tmp_path / "config.txt"
-    config.write_text("dtparam=audio=on\ndtparam=spi=off\ncore_freq_fixed=0\n")
+    config.write_text("dtparam=audio=on\ncore_freq_fixed=0\narm_64bit=1\n")
 
     result = _run_config_txt(tmp_path, config)
 
     assert result.returncode == 0, result.stderr
     assert config.read_text() == (
-        "dtparam=audio=on\ndtparam=spi=on\ncore_freq_fixed=1\n"
-        "dtoverlay=adau7002-simple\n"
+        "dtparam=audio=on\ncore_freq_fixed=1\narm_64bit=1\ndtoverlay=adau7002-simple\n"
     )
 
 
@@ -2135,14 +2149,16 @@ def test_a_setting_under_another_boards_filter_does_not_count(tmp_path):
     # [pi4] lines never reach a Zero 2W, so they neither satisfy the check nor
     # get edited - and a file ending in a board filter gets an [all] first.
     config = tmp_path / "config.txt"
-    config.write_text("arm_64bit=1\n[pi4]\ndtparam=spi=on\ncore_freq_fixed=1\n")
+    config.write_text(
+        "arm_64bit=1\n[pi4]\ncore_freq_fixed=1\ndtoverlay=adau7002-simple\n"
+    )
 
     result = _run_config_txt(tmp_path, config)
 
     assert result.returncode == 0, result.stderr
     assert config.read_text() == (
-        "arm_64bit=1\n[pi4]\ndtparam=spi=on\ncore_freq_fixed=1\n"
-        "[all]\ndtparam=spi=on\ncore_freq_fixed=1\ndtoverlay=adau7002-simple\n"
+        "arm_64bit=1\n[pi4]\ncore_freq_fixed=1\ndtoverlay=adau7002-simple\n"
+        "[all]\ncore_freq_fixed=1\ndtoverlay=adau7002-simple\n"
     )
 
 
@@ -2152,7 +2168,7 @@ def test_a_config_txt_without_a_final_newline_is_not_glued_together(tmp_path):
 
     assert _run_config_txt(tmp_path, config).returncode == 0
 
-    assert config.read_text().splitlines()[:2] == ["arm_64bit=1", "dtparam=spi=on"]
+    assert config.read_text().splitlines()[:2] == ["arm_64bit=1", "core_freq_fixed=1"]
 
 
 def test_an_unwritable_config_txt_is_reported_without_aborting(tmp_path):
@@ -2182,13 +2198,36 @@ def test_a_missing_config_txt_is_a_failure_not_a_crash(tmp_path):
     assert "FAILED=true" in result.stdout
 
 
-def _run_interfaces_step(tmp_path: Path, config: Path) -> subprocess.CompletedProcess:
-    """Run the real step 3 with I2C and the camera already on."""
-    stubs = tmp_path / "stubs"
-    stubs.mkdir(parents=True)
-    raspi_config = stubs / "raspi-config"
-    raspi_config.write_text('#!/bin/sh\ncase "$2" in get_*) echo 0 ;; esac\n')
-    raspi_config.chmod(0o755)
+# --------------------------------------------------------------------------
+# Step 3's interfaces go through raspi-config nonint. tests/fixtures/raspi-config
+# carries upstream's get_/do_ functions byte-for-byte (checked against
+# upstream below), editing a temp config.txt instead of the boot partition, so
+# these tests exercise the real enable path, including the parts of its
+# contract that make it easy to misuse: get_* answers on stdout rather than in
+# its exit status, and do_* exits 0 even when it changed nothing.
+# --------------------------------------------------------------------------
+
+_FAKE_RASPI_CONFIG = Path(__file__).resolve().parent / "fixtures" / "raspi-config"
+
+
+def _raspi_config_bin(tmp_path: Path, script: str | None = None) -> Path:
+    """A PATH directory whose raspi-config is the fake, or ``script`` if given."""
+    bin_dir = tmp_path / "raspi-bin"
+    bin_dir.mkdir(parents=True)
+    target = bin_dir / "raspi-config"
+    if script is None:
+        shutil.copyfile(_FAKE_RASPI_CONFIG, target)
+    else:
+        target.write_text(script)
+    target.chmod(0o755)
+    return bin_dir
+
+
+def _run_interfaces_step(
+    tmp_path: Path, config: Path, raspi_bin: Path | None = None
+) -> subprocess.CompletedProcess:
+    """Run the real step 3 against ``config``, with ``raspi_bin`` on PATH."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     snippet = "\n".join(
         [
             _extract_function("log"),
@@ -2196,35 +2235,202 @@ def _run_interfaces_step(tmp_path: Path, config: Path) -> subprocess.CompletedPr
             "reboot_needed=false",
             "config_txt_changed=false",
             "config_txt_failed=false",
+            "interfaces_failed=false",
             _step_block(3),
-            'echo "REBOOT_NEEDED=${reboot_needed} FAILED=${config_txt_failed}"',
+            'echo "REBOOT_NEEDED=${reboot_needed} FAILED=${config_txt_failed}'
+            ' INTERFACES_FAILED=${interfaces_failed}"',
         ]
     )
+    path = "/usr/bin:/bin" if raspi_bin is None else f"{raspi_bin}:/usr/bin:/bin"
     return subprocess.run(
         ["bash", "-c", f"set -euo pipefail\n{snippet}"],
         capture_output=True,
         text=True,
         timeout=60,
-        env={"PATH": f"{stubs}:/usr/bin:/bin"},
+        env={
+            "PATH": path,
+            "RASPI_CONFIG_CONFIG_TXT": str(config),
+            "RASPI_CONFIG_BLACKLIST": str(tmp_path / "raspi-blacklist.conf"),
+            "RASPI_CONFIG_MODULES": str(config.parent / "modules"),
+            "RASPI_CONFIG_LOG": str(tmp_path / "raspi-config.log"),
+        },
     )
 
 
-def test_step_3_makes_the_config_txt_edits_and_asks_for_a_reboot(tmp_path):
-    config = tmp_path / "config.txt"
+def _raspi_config_calls(tmp_path: Path) -> list[str]:
+    log = tmp_path / "raspi-config.log"
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_step_3_enables_spi_and_i2c_through_raspi_config(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
     config.write_text(_STOCK_CONFIG_TXT)
 
-    first = _run_interfaces_step(tmp_path / "a", config)
+    result = _run_interfaces_step(tmp_path / "run", config, _raspi_config_bin(tmp_path))
 
-    assert first.returncode == 0, first.stderr
-    assert "REBOOT_NEEDED=true FAILED=false" in first.stdout
-    effective = _effective_all_scope(config.read_text())
-    for line in ("dtparam=spi=on", "core_freq_fixed=1", "dtoverlay=adau7002-simple"):
+    assert result.returncode == 0, result.stderr
+    assert "REBOOT_NEEDED=true FAILED=false INTERFACES_FAILED=false" in result.stdout
+    assert "SPI was disabled - enabled now via raspi-config" in result.stdout
+    assert "I2C was disabled - enabled now via raspi-config" in result.stdout
+    assert "Camera already enabled" in result.stdout, "stock camera_auto_detect=1"
+    calls = _raspi_config_calls(tmp_path / "run")
+    assert "raspi-config nonint do_spi 0" in calls
+    assert "raspi-config nonint do_i2c 0" in calls
+    assert "raspi-config nonint do_camera 0" not in calls
+    text = config.read_text()
+    # raspi-config uncomments the stock file's own lines in place.
+    assert "#dtparam=spi=on" not in text
+    assert "#dtparam=i2c_arm=on" not in text
+    effective = _effective_all_scope(text)
+    for line in (
+        "dtparam=spi=on",
+        "dtparam=i2c_arm=on",
+        "core_freq_fixed=1",
+        "dtoverlay=adau7002-simple",
+    ):
         assert effective.count(line) == 1, f"{line} must apply exactly once"
+    assert (config.parent / "modules").read_text() == "i2c-dev\n"
 
-    second = _run_interfaces_step(tmp_path / "b", config)
+
+def test_a_second_step_3_changes_nothing_and_asks_for_no_reboot(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+    raspi_bin = _raspi_config_bin(tmp_path)
+    assert _run_interfaces_step(tmp_path / "a", config, raspi_bin).returncode == 0
+    after_first = config.read_bytes()
+
+    second = _run_interfaces_step(tmp_path / "b", config, raspi_bin)
 
     assert second.returncode == 0, second.stderr
-    assert "REBOOT_NEEDED=false FAILED=false" in second.stdout
+    assert "REBOOT_NEEDED=false FAILED=false INTERFACES_FAILED=false" in second.stdout
+    assert "SPI already enabled" in second.stdout
+    assert "I2C already enabled" in second.stdout
+    assert config.read_bytes() == after_first
+    assert not [c for c in _raspi_config_calls(tmp_path / "b") if " do_" in c], (
+        "an enabled interface must not be re-enabled"
+    )
+
+
+def test_a_disabled_camera_is_enabled_through_raspi_config(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(
+        _STOCK_CONFIG_TXT.replace("camera_auto_detect=1", "camera_auto_detect=0")
+    )
+
+    result = _run_interfaces_step(tmp_path / "run", config, _raspi_config_bin(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert "Camera was disabled - enabled now via raspi-config" in result.stdout
+    assert "camera_auto_detect=1" in _effective_all_scope(config.read_text())
+
+
+def test_without_raspi_config_step_3_fails_loudly_instead_of_falling_back(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+
+    result = _run_interfaces_step(tmp_path / "run", config, raspi_bin=None)
+
+    assert result.returncode == 0, result.stderr
+    assert "INTERFACES_FAILED=true" in result.stdout
+    assert "ERROR: raspi-config is not installed" in result.stdout
+    effective = _effective_all_scope(config.read_text())
+    assert "dtparam=spi=on" not in effective, "no silent fallback edit of SPI"
+    assert "dtparam=i2c_arm=on" not in effective
+    # The settings raspi-config does not cover are still ours to make.
+    assert "core_freq_fixed=1" in effective
+    assert "dtoverlay=adau7002-simple" in effective
+
+
+def test_a_do_spi_that_changes_nothing_is_caught_by_asking_again(tmp_path):
+    # Upstream's do_spi exits 0 even when its config.txt write failed, so its
+    # exit status says nothing. One that "succeeds" without writing must still
+    # be reported, and must not claim a reboot would fix it.
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+    stub = '#!/bin/sh\ncase "$2" in get_*) echo 1 ;; esac\nexit 0\n'
+
+    result = _run_interfaces_step(
+        tmp_path / "run", config, _raspi_config_bin(tmp_path, stub)
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INTERFACES_FAILED=true" in result.stdout
+    assert "'raspi-config nonint do_spi 0' left SPI disabled" in result.stdout
+    assert "'raspi-config nonint do_i2c 0' left I2C disabled" in result.stdout
+
+
+def test_a_raspi_config_without_the_spi_function_is_a_failure(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+    stub = '#!/bin/sh\ncase "$2" in get_i2c|get_camera) echo 0 ;; *) exit 127 ;; esac\n'
+
+    result = _run_interfaces_step(
+        tmp_path / "run", config, _raspi_config_bin(tmp_path, stub)
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INTERFACES_FAILED=true" in result.stdout
+    assert "'raspi-config nonint get_spi' failed" in result.stdout
+    assert "I2C already enabled" in result.stdout
+
+
+def test_a_raspi_config_without_a_camera_toggle_is_skipped_not_failed(tmp_path):
+    config = tmp_path / "boot" / "config.txt"
+    config.parent.mkdir()
+    config.write_text(_STOCK_CONFIG_TXT)
+    stub = '#!/bin/sh\ncase "$2" in get_spi|get_i2c) echo 0 ;; *) exit 127 ;; esac\n'
+
+    result = _run_interfaces_step(
+        tmp_path / "run", config, _raspi_config_bin(tmp_path, stub)
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "INTERFACES_FAILED=false" in result.stdout
+    assert "no get_camera - skipping the Camera toggle" in result.stdout
+
+
+_UPSTREAM_FUNCTION = re.compile(r"^(\w+)\(\) ?\{\n.*?^\}$", re.MULTILINE | re.DOTALL)
+
+
+def _shell_functions(text: str) -> dict[str, str]:
+    return {m.group(1): m.group(0) for m in _UPSTREAM_FUNCTION.finditer(text)}
+
+
+def test_the_fake_raspi_config_matches_upstream():
+    # The interface tests above are only as good as the fake's fidelity, so
+    # every function it copies is compared with the pinned upstream revision
+    # it names. A mismatch means the copy was edited, or the pin moved without
+    # the copy being refreshed from it.
+    fake = _FAKE_RASPI_CONFIG.read_text()
+    pin = re.search(r"^#\s+RASPI_CONFIG_UPSTREAM=(\S+)$", fake, re.MULTILINE)
+    assert pin is not None, "the fake raspi-config names no upstream revision"
+    url = pin.group(1).replace(
+        "https://github.com/RPi-Distro/raspi-config/blob/",
+        "https://raw.githubusercontent.com/RPi-Distro/raspi-config/",
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            upstream = _shell_functions(response.read().decode())
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        pytest.skip(f"cannot reach {url} ({exc}) - the fake was not verified")
+    copied = _shell_functions(
+        fake.split("# BEGIN upstream functions\n")[1].split(
+            "# END upstream functions\n"
+        )[0]
+    )
+
+    assert {"get_spi", "do_spi", "get_i2c", "do_i2c", "set_config_var"} <= set(copied)
+    for name, body in copied.items():
+        assert name in upstream, f"{name} is not an upstream function"
+        assert body == upstream[name].replace("/etc/modules", "$MODULES"), (
+            f"the fake's {name} differs from upstream"
+        )
 
 
 # --------------------------------------------------------------------------
