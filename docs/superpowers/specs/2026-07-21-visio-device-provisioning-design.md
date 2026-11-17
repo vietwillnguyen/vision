@@ -259,7 +259,8 @@ sudo mkdir -p /etc/systemd/system/visio-recorder.service.d && printf '[Service]\
 
 Nothing else needs undoing: root can open every node, `StateDirectory=` re-owns the data dir to root at start, and onboarding works for root through the same `nmcli` calls.
 `setup-device.sh` leaves that drop-in alone and warns about it in its summary, and preflight reports `daemon_user: root`.
-Removing it (`sudo rm` the file, `daemon-reload`, restart) returns to `visio`, and `StateDirectory=` hands the data dir back.
+Removing it (`sudo rm` the file, `daemon-reload`, restart) returns to `visio`, and `StateDirectory=` hands the default data dir back.
+A non-default `VISIO_DATA_DIR` is outside `StateDirectory=`, so after removing the drop-in re-run `setup-device.sh` before the restart: it re-owns the dir whenever anything in it is not `visio`'s, including the files the root daemon wrote.
 
 ### Needs the physical device
 

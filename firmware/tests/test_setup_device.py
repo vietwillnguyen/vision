@@ -1754,6 +1754,35 @@ def test_the_data_dir_is_given_to_the_daemon_user_with_mode_0750(tmp_path):
     assert "0750" not in second.stdout and "now owned" not in second.stdout
 
 
+def test_files_a_root_rollback_left_in_a_non_default_data_dir_are_handed_back(
+    tmp_path,
+):
+    # Under 90-run-as-root.conf the root daemon writes new files into a dir
+    # whose top level is still the service account's; StateDirectory= only
+    # re-owns the default path, so the re-run after removing the drop-in must.
+    # Unprivileged, "another owner" can only be another group of this user.
+    primary = os.getgid()
+    other = next((gid for gid in os.getgroups() if gid != primary), None)
+    if other is None:
+        pytest.skip("needs a supplementary group to stand in for root")
+    configured = tmp_path / "usb-mount"
+    configured.mkdir(mode=0o750)
+    segment = configured / "queue" / "segment-0001.mp4"
+    segment.parent.mkdir()
+    segment.write_bytes(b"recorded as root")
+    os.chown(segment, -1, other)
+    os.chown(segment.parent, -1, other)
+
+    result = _run_final_steps(
+        tmp_path, _CONFIGURED_ENV + f"VISIO_DATA_DIR={configured}\n"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert segment.stat().st_gid == primary
+    assert segment.parent.stat().st_gid == primary
+    assert "now owned by" in result.stdout
+
+
 def test_a_non_default_data_dir_gets_a_read_write_paths_drop_in(tmp_path):
     configured = tmp_path / "usb-mount"
     dropin = tmp_path / "visio-recorder.service.d" / "10-visio-data-dir.conf"
@@ -1901,7 +1930,7 @@ def test_an_uncreatable_data_dir_is_reported_in_the_summary_instead_of_aborting(
     assert "cannot create" in result.stdout
     assert "VISIO_DATA_DIR" in result.stdout
     assert "INCOMPLETE" in result.stdout
-    assert "was NOT created" in result.stdout
+    assert "could not be set up for" in result.stdout
     # What aborting at step 9 would have swallowed: the run still reaches the
     # end and prints everything the operator needs.
     assert "Provisioned revision: deadbee" in result.stdout
@@ -2862,18 +2891,25 @@ def test_a_failed_account_step_is_reported_rather_than_aborting(tmp_path):
     assert "SYSTEMCTL enable visio-recorder" in result.stdout
 
 
-def test_the_script_and_the_unit_agree_on_the_account_and_its_groups():
-    unit = (
-        Path(__file__).resolve().parent.parent / "systemd" / "visio-recorder.service"
-    ).read_text()
-    script = _script_text()
+def _unit_directive(key: str) -> list[str]:
+    unit = Path(__file__).resolve().parent.parent / "systemd" / "visio-recorder.service"
+    return [
+        line.strip().split("=", 1)[1]
+        for line in unit.read_text().splitlines()
+        if line.strip().startswith(f"{key}=")
+    ]
 
-    assert re.search(r"^User=visio$", unit, re.MULTILINE)
-    assert 'SERVICE_USER="visio"' in script
-    match = re.search(r"^SERVICE_GROUPS=\((.*)\)$", script, re.MULTILINE)
-    assert match, "SERVICE_GROUPS=(...) not found in setup-device.sh"
-    groups = match.group(1)
-    assert f"SupplementaryGroups={groups}\n" in unit
+
+def test_step_6_creates_the_account_and_groups_the_unit_runs_as(tmp_path):
+    result = _run_step_6(tmp_path, users={}, groups=_RPI_OS_GROUPS)
+
+    assert result.returncode == 0, result.stderr
+    useradd = next(line for line in result.stdout.splitlines() if "USERADD" in line)
+    usermod = next(line for line in result.stdout.splitlines() if "USERMOD" in line)
+    _, _, groups, user = usermod.split()[-4:]
+    assert [useradd.split()[-1]] == _unit_directive("User")
+    assert [user] == _unit_directive("User")
+    assert groups.split(",") == _unit_directive("SupplementaryGroups")[0].split()
 
 
 # --------------------------------------------------------------------------

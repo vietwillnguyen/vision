@@ -1118,16 +1118,16 @@ fi
 
 # The data dir is the daemon's: owned by ${SERVICE_USER}, mode 0750, holding
 # recorded video, the session tokens and the upload queue. Re-owned recursively
-# only when the directory itself has the wrong owner - which is what a device
-# provisioned while the daemon ran as root has, session.json included - the
-# same rule the unit's StateDirectory= applies to the default path at start.
+# whenever anything in it has another owner - a device provisioned while the
+# daemon ran as root, or files a root rollback wrote into a non-default dir
+# that StateDirectory= never re-owns.
 own_data_dir() {
   local dir="$1"
   if ! getent passwd "${SERVICE_USER}" >/dev/null; then
     log "ERROR: no ${SERVICE_USER} user to own ${dir} - see the step 6 error"
     return 1
   fi
-  if [[ "$(stat -c '%U:%G' "${dir}")" != "${SERVICE_USER}:${SERVICE_GROUP}" ]]; then
+  if [[ -n "$(find "${dir}" \( ! -user "${SERVICE_USER}" -o ! -group "${SERVICE_GROUP}" \) -print -quit)" ]]; then
     chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${dir}" || return 1
     log "${dir} (and everything in it) now owned by ${SERVICE_USER}"
   fi
@@ -1205,7 +1205,7 @@ log "Provisioned revision: ${target_sha}"
 log "VISIO_BATTERY_SOURCE=${battery_source}"
 log "Data dir: ${data_dir}"
 if [[ -f "${ROLLBACK_DROPIN}" ]]; then
-  log "WARNING: ${ROLLBACK_DROPIN} is present, so the daemon runs as root, not ${SERVICE_USER}. Left in place; remove it and restart visio-recorder to run unprivileged."
+  log "WARNING: ${ROLLBACK_DROPIN} is present, so the daemon runs as root, not ${SERVICE_USER}. Left in place; remove it, re-run this script (which hands the data dir back to ${SERVICE_USER}) and restart visio-recorder to run unprivileged."
 else
   log "Daemon user: ${SERVICE_USER} (groups ${SERVICE_GROUPS[*]})"
 fi
@@ -1216,7 +1216,7 @@ if [[ "${battery_source}" == "none" ]]; then
   log "Bring-up mode: running without a PiJuice HAT (USB power bank). Not a failure - expected for now."
 fi
 if [[ "${data_dir_failed}" == "true" ]]; then
-  log "INCOMPLETE: ${data_dir} was NOT created (see the step 9 error above), so the daemon has nowhere to record and '${PREFLIGHT_BIN}' will report data_dir as a blocking failure."
+  log "INCOMPLETE: the data dir ${data_dir} could not be set up for ${SERVICE_USER} (see the step 9 error above), so the daemon cannot record into it and '${PREFLIGHT_BIN}' will report data_dir as a blocking failure."
 fi
 if [[ "${service_user_failed}" == "true" ]]; then
   log "INCOMPLETE: the ${SERVICE_USER} user or its groups could not be set up (see the step 6 error above), so systemd cannot start the daemon."
