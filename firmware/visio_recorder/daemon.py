@@ -40,8 +40,10 @@ from visio_recorder.recording_loop import (
     ShutilDiskStatsReader,
     StatusClient,
     UploadHealth,
+    WorkerAction,
     build_device_status,
     flush_pending,
+    next_worker_step,
     on_segment_complete,
     pending_segments,
     recover_orphaned_segments,
@@ -268,21 +270,22 @@ def run_recording_loop(
     held for every following segment - including while it uploads - until an
     upload succeeds and resets the counter.
 
-    The worker also owns the in-process retry, which is why it waits on its
-    work queue with a timeout rather than indefinitely. Whenever segments are
-    queued it keeps a retry deadline on ``deps.monotonic``, and once that
-    deadline passes it runs ``retry_pending_segments`` over whatever is still
-    queued, so a failed upload reaches storage during this run instead of
-    waiting for the next boot's ``flush_pending``. The deadline is armed from
-    ``deps.retry_backoff``, indexed by the same ``UploadHealth`` counter, so
-    it grows while uploads keep failing and is reset by the success that also
-    clears the red. It is armed when the queue becomes non-empty and again
-    after each round, never by a new segment, so segments arriving more often
-    than the backoff cannot postpone the retry indefinitely. A new segment or
-    the sentinel still returns from ``work.get`` immediately, so the retry
-    delays neither; and ``stopping`` is set before the sentinel is queued so a
-    round already draining a backlog gives up rather than uploading through a
-    halt.
+    The worker also owns the in-process retry, which is why, while segments
+    are queued, it waits on its work queue only until a retry deadline kept on
+    ``deps.monotonic``. Once that deadline passes it runs
+    ``retry_pending_segments`` over whatever is still queued, so a failed
+    upload reaches storage during this run instead of waiting for the next
+    boot's ``flush_pending``. ``next_worker_step`` makes that decision: the
+    deadline is armed from ``deps.retry_backoff``, indexed by the same
+    ``UploadHealth`` counter, so it grows while uploads keep failing and the
+    success that clears the red brings the next one back to the base delay.
+    It is armed when the queue becomes non-empty and again after each round,
+    never by a new segment, so segments arriving more often than the backoff
+    cannot postpone the retry. A new segment or the sentinel still returns
+    from ``work.get`` immediately, so the retry delays neither. ``stopping``
+    is set before the sentinel is queued: a stopping worker starts no round,
+    and a round already draining a backlog gives up rather than uploading
+    through a halt.
 
     ``device_status.recording_active`` is pushed True before the first capture
     and False once the loop has exited for any reason (stop, halt, or a
@@ -331,20 +334,23 @@ def run_recording_loop(
             uploaded_today[0] = segments_uploaded_today
 
         while True:
-            if stopping.is_set() or not pending_segments(deps.queue_dir):
-                retry_at = None
-            elif retry_at is None:
-                retry_at = deps.monotonic() + deps.retry_backoff.delay_sec(
-                    upload_health.consecutive_failures
-                )
-            timeout = None if retry_at is None else retry_at - deps.monotonic()
+            now = deps.monotonic()
+            step = next_worker_step(
+                segments_pending=bool(pending_segments(deps.queue_dir)),
+                stopping=stopping.is_set(),
+                retry_at=retry_at,
+                now=now,
+                retry_backoff=deps.retry_backoff,
+                consecutive_failures=upload_health.consecutive_failures,
+            )
+            retry_at = step.retry_at
             # Waiting with a timeout is what makes the retry in-process: the
             # worker owns it, so there is no second thread and no scheduler,
             # and a new segment or the sentinel still wakes it immediately.
             try:
-                if timeout is not None and timeout <= 0:
+                if step.action is WorkerAction.RETRY_NOW:
                     raise queue.Empty
-                item = work.get(timeout=timeout)
+                item = work.get(timeout=None if retry_at is None else retry_at - now)
             except queue.Empty:
                 retry_round()
                 retry_at = None

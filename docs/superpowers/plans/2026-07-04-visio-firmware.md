@@ -1527,7 +1527,9 @@ git commit -m "feat: add visio-recorder systemd unit"
   On failure the queued file is left in place.
   Three consecutive failures escalate to the CRITICAL LED.
   **Amended (in-process upload retry):** the startup queue flush is no longer the *only* retry mechanism, just the backstop.
-  The upload worker blocks on its work queue with a timeout rather than indefinitely, and when that timeout elapses with no new segment it retries everything still queued, with a wait that doubles per consecutive failure from 30 s to a 480 s cap.
+  While segments are queued, the upload worker blocks on its work queue only until a retry deadline rather than indefinitely, and once that deadline passes it retries everything still queued, whether or not new segments have arrived meanwhile.
+  The deadline is armed when the queue becomes non-empty and after each round, never restarted by a segment, from a backoff that doubles per consecutive failure from 30 s to a 480 s cap.
+  A stopping worker starts no round, and a round that tries no file leaves the consecutive-failure counter and the LED untouched.
   A failed segment therefore reaches storage during the same run instead of waiting for a power cycle, which on a pendant worn all day could be hours.
   Flag markers are excluded from those rounds and keep the next-boot contract, because `FlagUploadWorker` owns them while the daemon runs and two threads uploading the same marker would manufacture a duplicate-object failure.
   **Amended (Critical LED latch):** the LED is restored to a normal state only while the run is *below* the escalation threshold.

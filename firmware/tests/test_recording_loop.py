@@ -31,8 +31,11 @@ from visio_recorder.recording_loop import (
     RetryBackoff,
     ShutilDiskStatsReader,
     UploadHealth,
+    WorkerAction,
+    WorkerStep,
     flush_pending,
     next_led_state,
+    next_worker_step,
     on_segment_complete,
     pending_segments,
     recover_orphaned_segments,
@@ -786,6 +789,51 @@ def test_pending_segments_excludes_flag_markers(tmp_path):
         "FLAG_20260704_120005.marker",
     ]
     assert [p.name for p in pending_segments(queue_dir)] == ["20260704_120000.mp4"]
+
+
+def _step(*, pending=True, stopping=False, retry_at=None, now=100.0, failures=0):
+    return next_worker_step(
+        segments_pending=pending,
+        stopping=stopping,
+        retry_at=retry_at,
+        now=now,
+        retry_backoff=RetryBackoff(base_sec=30.0, max_sec=480.0),
+        consecutive_failures=failures,
+    )
+
+
+def test_the_worker_waits_for_a_segment_with_nothing_queued():
+    assert _step(pending=False, retry_at=50.0) == WorkerStep(
+        WorkerAction.WAIT_FOR_SEGMENT, retry_at=None
+    )
+
+
+def test_a_stopping_worker_never_starts_a_retry_round_even_with_a_lapsed_deadline():
+    # The round would be cancelled before its first file; the worker goes
+    # straight to collecting the shutdown sentinel instead.
+    assert _step(stopping=True, retry_at=50.0, now=100.0) == WorkerStep(
+        WorkerAction.WAIT_FOR_SEGMENT, retry_at=None
+    )
+
+
+def test_a_newly_queued_backlog_arms_the_deadline_from_the_live_failure_count():
+    assert _step(retry_at=None, now=100.0, failures=3) == WorkerStep(
+        WorkerAction.WAIT_UNTIL_RETRY, retry_at=220.0
+    )
+
+
+def test_an_armed_deadline_is_kept_rather_than_restarted():
+    # A segment arriving wakes the worker before the deadline; the next step
+    # keeps the same deadline, whatever the failure count has grown to, so
+    # the wait shrinks instead of starting over.
+    assert _step(retry_at=150.0, now=120.0, failures=5) == WorkerStep(
+        WorkerAction.WAIT_UNTIL_RETRY, retry_at=150.0
+    )
+
+
+def test_a_passed_deadline_retries_now():
+    assert _step(retry_at=150.0, now=150.0).action is WorkerAction.RETRY_NOW
+    assert _step(retry_at=150.0, now=999.0).action is WorkerAction.RETRY_NOW
 
 
 def _queued(queue_dir: Path, *names: str) -> None:

@@ -3,6 +3,7 @@ import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
@@ -150,6 +151,50 @@ def next_led_state(
     if is_uploading:
         return LedState.UPLOADING
     return LedState.RECORDING
+
+
+class WorkerAction(Enum):
+    WAIT_FOR_SEGMENT = "wait_for_segment"
+    WAIT_UNTIL_RETRY = "wait_until_retry"
+    RETRY_NOW = "retry_now"
+
+
+@dataclass(frozen=True)
+class WorkerStep:
+    action: WorkerAction
+    retry_at: float | None
+
+
+def next_worker_step(
+    *,
+    segments_pending: bool,
+    stopping: bool,
+    retry_at: float | None,
+    now: float,
+    retry_backoff: RetryBackoff,
+    consecutive_failures: int,
+) -> WorkerStep:
+    """What the upload worker does next, and the retry deadline it keeps.
+
+    Pulled out of the worker thread for the same reason as ``next_led_state``:
+    the decision is the part worth pinning, and here it needs no threads.
+
+    With nothing queued, or the loop stopping, there is no deadline and the
+    worker waits for its next segment or the shutdown sentinel; a stopping
+    worker never starts a round, since ``cancel`` would end it before its
+    first file. Otherwise the deadline is armed once, ``retry_backoff`` after
+    ``now`` for the live ``consecutive_failures``, and kept as it is until the
+    round it schedules has run: a segment arriving consumes the remaining wait
+    rather than restarting it, so segments arriving more often than the
+    backoff cannot postpone the retry. Once it has passed, retry now.
+    """
+    if stopping or not segments_pending:
+        return WorkerStep(WorkerAction.WAIT_FOR_SEGMENT, retry_at=None)
+    if retry_at is None:
+        retry_at = now + retry_backoff.delay_sec(consecutive_failures)
+    if retry_at <= now:
+        return WorkerStep(WorkerAction.RETRY_NOW, retry_at=retry_at)
+    return WorkerStep(WorkerAction.WAIT_UNTIL_RETRY, retry_at=retry_at)
 
 
 def build_device_status(
