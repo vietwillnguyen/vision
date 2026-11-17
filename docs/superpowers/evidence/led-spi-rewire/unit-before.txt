@@ -1,0 +1,6 @@
+    from visio_recorder.ws2812_spi import SPI_SPEED_HZ, encode_frame
+E   ModuleNotFoundError: No module named 'visio_recorder.ws2812_spi'
+=========================== short test summary info ============================
+ERROR tests/test_ws2812_spi.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.97s

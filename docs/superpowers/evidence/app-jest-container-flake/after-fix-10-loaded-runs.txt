@@ -1,0 +1,12 @@
+host: 16 cpus, 16 busy-loop hogs, jest maxWorkers default (cpus-1), extra jest args: none
+run 1: PASS | Tests:       129 passed, 129 total | slowest test 3611 ms
+run 2: PASS | Tests:       129 passed, 129 total | slowest test 2114 ms
+run 3: PASS | Tests:       129 passed, 129 total | slowest test 2366 ms
+run 4: PASS | Tests:       129 passed, 129 total | slowest test 1803 ms
+run 5: PASS | Tests:       129 passed, 129 total | slowest test 1305 ms
+run 6: PASS | Tests:       129 passed, 129 total | slowest test 2356 ms
+run 7: PASS | Tests:       129 passed, 129 total | slowest test 2249 ms
+run 8: PASS | Tests:       129 passed, 129 total | slowest test 1863 ms
+run 9: PASS | Tests:       129 passed, 129 total | slowest test 2009 ms
+run 10: PASS | Tests:       129 passed, 129 total | slowest test 2122 ms
+result: 10/10 runs passed

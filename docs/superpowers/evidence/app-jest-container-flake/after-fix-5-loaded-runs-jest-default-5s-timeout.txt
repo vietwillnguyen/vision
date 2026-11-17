@@ -1,0 +1,7 @@
+host: 16 cpus, 16 busy-loop hogs, jest maxWorkers default (cpus-1), extra jest args: --testTimeout=5000
+run 1: PASS | Tests:       129 passed, 129 total | slowest test 2653 ms
+run 2: PASS | Tests:       129 passed, 129 total | slowest test 1799 ms
+run 3: PASS | Tests:       129 passed, 129 total | slowest test 2519 ms
+run 4: PASS | Tests:       129 passed, 129 total | slowest test 2800 ms
+run 5: PASS | Tests:       129 passed, 129 total | slowest test 2733 ms
+result: 5/5 runs passed

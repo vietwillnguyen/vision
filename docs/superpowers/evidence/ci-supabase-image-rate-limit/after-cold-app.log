@@ -1,0 +1,41 @@
+# PR #88 tests run 43942898507 attempt 1 (cold image cache), job app (133564805841)
+# https://github.com/vietwillnguyen/vision/actions/runs/43942898507/attempts/1
+2026-11-16T19:47:17.2824717Z Cache restored from key: node-cache-Linux-x64-npm-8ee5a24aa349a5e2d6bf4efb77df18b833b2a58f37e2bab1a1093bd3e0936dda
+2026-11-16T19:47:17.3259897Z ##[group]Run supabase/setup-cli@v3
+2026-11-16T19:47:25.2275156Z ##[group]Run ./.github/actions/supabase-images
+2026-11-16T19:47:25.2819153Z ##[group]Run actions/cache/restore@v6
+2026-11-16T19:47:25.5570191Z Cache not found for input keys: supabase-images-Linux-X64-cli2.109.0-e6e884d3cf3806d4fa986fccee572c99c656ccf90a5947987c2ee3f6e765f107
+2026-11-16T19:47:26.2196029Z Login Succeeded
+2026-11-16T19:47:26.3097401Z ##[group]Run time scripts/ci/supabase-images.sh seed
+2026-11-16T19:47:26.4512626Z supabase-images: seeding public.ecr.aws/supabase/postgres:17.6.1.140 from ghcr.io/supabase/postgres:17.6.1.140
+2026-11-16T19:47:50.4459777Z supabase-images: seeding public.ecr.aws/supabase/kong:2.8.1 from ghcr.io/supabase/kong:2.8.1
+2026-11-16T19:47:54.2570787Z supabase-images: seeding public.ecr.aws/supabase/postgrest:v14.14 from ghcr.io/supabase/postgrest:v14.14
+2026-11-16T19:47:55.6625585Z supabase-images: seeding public.ecr.aws/supabase/gotrue:v2.192.0 from ghcr.io/supabase/gotrue:v2.192.0
+2026-11-16T19:47:57.8800122Z supabase-images: seeding public.ecr.aws/supabase/realtime:v2.112.1 from ghcr.io/supabase/realtime:v2.112.1
+2026-11-16T19:48:06.5932043Z supabase-images: seeding public.ecr.aws/supabase/storage-api:v1.61.7 from ghcr.io/supabase/storage-api:v1.61.7
+2026-11-16T19:48:35.3934476Z supabase-images: seeding public.ecr.aws/supabase/mailpit:v1.30.2 from ghcr.io/supabase/mailpit:v1.30.2
+2026-11-16T19:48:37.0534073Z supabase-images: seeding public.ecr.aws/supabase/pg_prove:3.36 from ghcr.io/supabase/pg_prove:3.36
+2026-11-16T19:48:39.2609075Z supabase-images: seeding public.ecr.aws/supabase/postgres-meta:v0.96.1 from ghcr.io/supabase/postgres-meta:v0.96.1
+2026-11-16T19:48:46.4379253Z supabase-images: seed done: 0 already present, 9 pulled from ghcr.io
+2026-11-16T19:48:46.4381950Z real	1m20.036s
+2026-11-16T19:48:46.4607934Z ##[group]Run time scripts/ci/supabase-images.sh save "$RUNNER_TEMP/supabase-images/images.tar"
+2026-11-16T19:49:24.9897804Z real	0m38.524s
+2026-11-16T19:49:25.0133066Z ##[group]Run actions/cache/save@v6
+2026-11-16T19:49:30.9182368Z Failed to save: Unable to reserve cache with key supabase-images-Linux-X64-cli2.109.0-e6e884d3cf3806d4fa986fccee572c99c656ccf90a5947987c2ee3f6e765f107, another job may be creating this cache.
+2026-11-16T19:49:30.9950931Z   echo "probe: $out"
+2026-11-16T19:49:30.9951452Z     *"connection refused"*|*"0.0.0.0"*|*"[::]"*) echo "$registry blocked for this job" ;;
+2026-11-16T19:49:31.9420276Z probe: Error response from daemon: Get "https://public.ecr.aws/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:49:31.9420866Z public.ecr.aws blocked for this job
+2026-11-16T19:49:31.9567514Z probe: Error response from daemon: Get "https://ghcr.io/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:49:31.9568038Z ghcr.io blocked for this job
+2026-11-16T19:49:31.9709388Z probe: Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp 0.0.0.0:443: connect: connection refused
+2026-11-16T19:49:31.9709941Z docker.io blocked for this job
+2026-11-16T19:49:31.9755470Z ##[group]Run supabase start -x imgproxy
+2026-11-16T19:49:32.4078205Z  realtime Skipped - Image is already present locally 
+2026-11-16T19:49:59.9306328Z Started supabase local development setup.
+2026-11-16T19:50:00.5881115Z ##[group]Run scripts/ci/supabase-images.sh verify
+2026-11-16T19:50:00.6241842Z supabase-images: all 7 running container images are in the manifest
+2026-11-16T19:50:38.3430504Z ##[group]Run scripts/gen-db-types.sh
+2026-11-16T19:50:39.3029879Z gen-db-types: reusing running local Supabase, applying pending migrations
+2026-11-16T19:50:44.2228624Z gen-db-types: wrote app/src/generated/database.ts and integration/tests/fixtures/public_schema.json
+2026-11-16T19:51:00.2516437Z ##[group]Run supabase stop

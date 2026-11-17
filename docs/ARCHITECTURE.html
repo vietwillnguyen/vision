@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 27f34bdd5fb58a02c079710a885606386d81371f32958ae1b2081b9d65d2a69a  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: ac815080f60e4e606c772ef90ac2a430fba246bd896c17bc2ad50927a8d52fd9  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
-<!-- source-sha256: 4c56b6f08f289c7ce8177e7c65a87f27fedb418ff4416e5673bcc6ab43f40b84  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-16 (merge of main: trixie OS reconcile + segment duration contract + recording lifecycle) -->
+<!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
+<!-- regenerated-at: 2026-11-17 (merge of main: LED over SPI + 50 MB segment contract + I2S audio) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -105,7 +105,7 @@ flowchart TD
     direction TB
     HW1["RPi Zero 2W + Camera Module 3 Wide<br/>PiJuice pHAT + 3000mAh LiPo"]
     HW2["rolling 5-min H.264 segments to SD card"]
-    HW3["LED: recording / uploading / low-battery / critical"]
+    HW3["WS2812B LED on SPI0 MOSI (GPIO 10):<br/>recording / uploading / low-battery / critical"]
   end
   subgraph CLOUD["Cloud Storage + AI Pipeline"]
     direction TB
@@ -226,6 +226,23 @@ flowchart TD
     </div>
 
     <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">Status LED and GPIO pin map</h3>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>GPIO (header pin)</th><th>Function</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td class="font-mono">2, 3 (3, 5)</td><td>I2C1 SDA/SCL</td><td>PiJuice or replacement fuel gauge</td></tr>
+            <tr><td class="font-mono">7, 8, 9, 11</td><td>SPI0 CE1/CE0/MISO/SCLK</td><td>claimed by <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, nothing connected</td></tr>
+            <tr><td class="font-mono font-semibold">10 (19)</td><td class="font-semibold">SPI0 MOSI - WS2812B data</td><td>moved from GPIO 18 (PWM0) in the LED SPI rewire</td></tr>
+            <tr><td class="font-mono">17 (11)</td><td>Flag button</td><td>to ground, internal pull-up</td></tr>
+            <tr><td class="font-mono font-semibold">18, 19, 20 (12, 35, 38)</td><td class="font-semibold">I2S microphone (INMP441)</td><td>PCM_CLK, PCM_FS, PCM_DIN; GPIO 21 (PCM_DOUT) is claimed by the same pin group. Never enable SPI1 (CE0/CE1 = GPIO 18/17).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-sm text-base-content/80 mt-2"><span class="font-mono text-xs bg-base-200 rounded px-1">Ws2812LedDriver</span> writes one SPI transfer per colour to <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/spidev0.0</span> through py-spidev (<span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>: no root, no <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span>, nothing compiled on the device). Each WS2812B bit is one byte at a 6.4 MHz request - <span class="font-mono text-xs bg-base-200 rounded px-1">0xC0</span> for a 0, <span class="font-mono text-xs bg-base-200 rounded px-1">0xF0</span> for a 1 - sent green, red, blue, MSB first, between two 240-byte zero resets (300 us latch). Both Zero 2W core clocks divide to a real 6.25 MHz, giving 320/960 ns and 640/640 ns pulses, at least 40 ns inside the WS2812B-V5 datasheet windows (legacy pre-V5 parts fall 10-40 ns outside theirs, a bench check). Pulsing and flashing render solid on the single pixel. The device needs <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> (the kernel caches the core clock at probe, so a scaling core clock would skew the SPI rate) and the daemon user in the <span class="font-mono text-xs bg-base-200 rounded px-1">spi</span> group.</p>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4">
       <h3 class="font-semibold mb-2">Key as-built decisions</h3>
       <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
@@ -262,7 +279,7 @@ flowchart TD
           <tbody>
             <tr><td>Fallback</td><td>startup <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg -f alsa</span> probe of <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_AUDIO_DEVICE</span>; no device &rarr; warning, video only. An audio capture failing mid-run &rarr; video only for the rest of the run. <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.audio_active</span> reports which.</td></tr>
             <tr><td>Wiring</td><td>SCK GPIO 18 (pin 12), WS GPIO 19 (pin 35), SD GPIO 20 (pin 38), L/R to GND; <span class="font-mono text-xs bg-base-200 rounded px-1">dtoverlay=adau7002-simple</span>; <span class="font-mono text-xs bg-base-200 rounded px-1">firmware/alsa/visio-mic.conf</span> as <span class="font-mono text-xs bg-base-200 rounded px-1">/etc/asound.conf</span> keeps the left slot</td></tr>
-            <tr><td>GPIO 18</td><td>today the WS2812B LED's PWM pin: the LED moves to SPI0 MOSI (GPIO 10) in PR #85, so the two changes ship together</td></tr>
+            <tr><td>GPIO 18</td><td>the WS2812B LED's old PWM pin: the LED now runs on SPI0 MOSI (GPIO 10, PR #85), so move that wire before fitting the microphone</td></tr>
             <tr><td>Pipeline</td><td>audio weight back to 0.3; video-only segments score as silence; a reel mixing both gives every clip an audio track so concat keeps it in sync</td></tr>
             <tr><td>Bench before soldering</td><td>CPU, RSS and dropped frames of libav audio+video at 720p30 on the Zero 2W; A/V sync; mic level; real size with audio</td></tr>
           </tbody>
@@ -273,12 +290,15 @@ flowchart TD
 
   <section id="gaps" class="space-y-4">
     <h2 class="text-2xl font-bold">As-built gaps</h2>
-    <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed. Both previously tracked firmware gaps are closed; one hardware substitution is open:</p>
+    <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed. Both previously tracked firmware gaps are closed; one hardware substitution and the LED SPI rewire's follow-ups are open:</p>
     <div class="alert alert-success alert-soft" role="alert">
       <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, and hands it to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread never touches the network); a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for next-boot flush - the same retry contract as segments.</span>
     </div>
     <div class="alert alert-success alert-soft" role="alert">
       <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
+    </div>
+    <div class="alert alert-warning alert-soft" role="alert">
+      <span><strong>LED SPI rewire: provisioning follow-ups and bench checks open (2026-11).</strong> The firmware now drives the LED over SPI0 MOSI, freeing GPIO 18 for I2S audio and removing the <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span> need that kept the daemon on root. Draft PR #26 still installs and checks <span class="font-mono text-xs bg-base-200 rounded px-1">rpi_ws281x</span>; it needs <span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>, SPI and <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> enabled, and a <span class="font-mono text-xs bg-base-200 rounded px-1">spidev</span> preflight check. Dropping root additionally needs onboarding to create the WiFi profile with <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection add</span> instead of writing a keyfile (NetworkManager rejects non-root-owned keyfiles, and its D-Bus policy denies <span class="font-mono text-xs bg-base-200 rounded px-1">ReloadConnections</span> to non-root callers), a <span class="font-mono text-xs bg-base-200 rounded px-1">visio</span> user in <span class="font-mono text-xs bg-base-200 rounded px-1">video gpio i2c spi</span> and a polkit rule for <span class="font-mono text-xs bg-base-200 rounded px-1">settings.modify.system</span> + <span class="font-mono text-xs bg-base-200 rounded px-1">network-control</span>. On the bench: move the data wire to header pin 19, check each colour, confirm a 3.3 V data line drives the WS2812B reliably, and confirm the fitted part is a WS2812B-V5. Full list: <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26">provisioning spec, LED SPI rewire follow-ups</a>.</span>
     </div>
     <div class="alert alert-warning alert-soft" role="alert">
       <span><strong>PiJuice deferred to a USB power bank (2026-07-21).</strong> The spec's PiJuice Zero pHAT is currently blocked on availability; bring-up and integration testing run on a generic USB power bank into the Pi's power input instead — no HAT, no I2C battery telemetry. Firmware handles this via a new <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_BATTERY_SOURCE</span> config (<span class="font-mono text-xs bg-base-200 rounded px-1">pijuice</span> default, or <span class="font-mono text-xs bg-base-200 rounded px-1">none</span> → a new <span class="font-mono text-xs bg-base-200 rounded px-1">UnmeteredPowerReader</span> that reports a fixed 100% so the halt/low-battery thresholds never false-trigger while mains-equivalent powered), and the preflight check treats missing PiJuice hardware as a warning, not a startup-blocking failure. See <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">the provisioning &amp; preflight spec</a>. <span class="font-mono text-xs bg-base-200 rounded px-1">BatteryReader</span> is a <span class="font-mono text-xs bg-base-200 rounded px-1">Protocol</span>, so a real replacement (PiSugar 2/3, a generic I2C-fuel-gauge UPS HAT, or a hand-built TP4056/IP5306 + MAX17048 combo) is a contained future swap, not a firmware rewrite.</span>
