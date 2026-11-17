@@ -1,0 +1,21 @@
+#!/bin/sh
+# systemd is not PID 1 in the container. Logs every call; answers `show` the
+# way systemd would for the installed unit plus its drop-ins (last wins), so
+# preflight's resolve_daemon_identity reads the installed configuration.
+echo "STUB systemctl $*" >> /var/log/visio-sim-stubs.log
+case "$1" in
+  is-active) exit 3 ;;
+  show)
+    unit=/etc/systemd/system/visio-recorder.service
+    [ -f "$unit" ] || { printf 'LoadState=not-found\nUser=\nSupplementaryGroups=\n'; exit 0; }
+    # Word-split on purpose: the unit, then each drop-in, in systemd's order.
+    # shellcheck disable=SC2086
+    files="$unit $(ls /etc/systemd/system/visio-recorder.service.d/*.conf 2>/dev/null)"
+    # shellcheck disable=SC2086
+    user="$(cat $files | sed -n 's/^User=//p' | tail -n1)"
+    # shellcheck disable=SC2086
+    groups="$(cat $files | sed -n 's/^SupplementaryGroups=//p' | tail -n1)"
+    printf 'LoadState=loaded\nUser=%s\nSupplementaryGroups=%s\n' "$user" "$groups"
+    ;;
+esac
+exit 0

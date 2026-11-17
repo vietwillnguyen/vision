@@ -1,0 +1,8 @@
+#!/bin/sh
+# pijuice-base is absent on trixie, as on the real device; everything else
+# has a candidate.
+echo "STUB apt-cache $*" >> /var/log/visio-sim-stubs.log
+case "$2" in
+  pijuice-base) printf '%s:\n  Installed: (none)\n  Candidate: (none)\n' "$2" ;;
+  *) printf '%s:\n  Installed: (none)\n  Candidate: 1.0-1\n' "$2" ;;
+esac
