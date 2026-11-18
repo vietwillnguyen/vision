@@ -117,7 +117,7 @@
         <td><ul><li>Today tab plays the reel</li><li>Archive heat-map shows the day and opens it</li><li>Share exports to camera roll or the share sheet</li></ul></td>
         <td><span class="ok">Done</span></td><td><span class="ok">Yes</span></td></tr>
       <tr><td class="id">J6</td><td><b>Check the device</b><br><span class="muted">Device tab, live status</span></td><td><span class="pill p1">P1</span></td>
-        <td><ul><li>Storage, pending and uploaded counts update live via Realtime</li><li>Recording indicator matches reality</li><li>Battery shown when a meter is fitted</li></ul></td>
+        <td><ul><li>Storage, pending and uploaded counts update live via Realtime</li><li>Recording indicator matches reality</li><li>Shows how much footage is waiting to upload and since when; a push notification if it has waited over 24 h</li><li>Battery shown when a meter is fitted</li></ul></td>
         <td><span class="ok">Done</span></td><td><span class="warn">Yes, no battery reading</span></td></tr>
       <tr><td class="id">J7</td><td><b>Flag a moment</b><br><span class="muted">Something good just happened: press the pendant's physical button so that moment is far more likely to make tonight's reel</span></td><td><span class="pill p1">P1</span></td>
         <td><ul><li>A press writes a <code>FLAG_*.marker</code> that uploads</li><li>The matching segment is <code>manually_flagged</code> and boosted 1.5x</li><li>LED acknowledges the press</li></ul></td>
@@ -146,7 +146,7 @@
       <tr><td>1 (wins)</td><td><b>Halted</b></td><td><span class="no">Red, solid</span></td><td>Stopped because of a problem: battery under 10%, onboarding gave up, Wi-Fi activation failed, or capture failed; not recording, held 30 s, then off</td><td><span class="no">Missing</span>: battery halt and Wi-Fi activation failure show Critical today; the others leave the last colour lit</td></tr>
       <tr><td>2</td><td><b>Scanning for QR</b></td><td>Cyan, pulsing</td><td>Waiting for a Wi-Fi QR code; not recording (the camera is busy)</td><td><span class="no">Missing</span>: onboarding shows Recording green today</td></tr>
       <tr><td>3</td><td><b>Starting up</b></td><td>Dim white, solid</td><td>Booting and running preflight, not recording yet</td><td><span class="no">Missing</span>: startup shows Recording green today</td></tr>
-      <tr><td>4</td><td><b>Critical</b></td><td><span class="no">Red, flashing</span></td><td>Needs you: 3+ uploads failed in a row; still recording</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>4</td><td><b>Critical</b></td><td><span class="no">Red, flashing</span></td><td>Needs you now, or recording will stop: SD card under 1 GB free, or on Wi-Fi yet 3+ uploads failed in a row. Still recording. Being offline on a walk never turns it red; footage just waits to upload.</td><td><span class="warn">Partly built</span>: today offline failures also turn it red, and there is no free-space check</td></tr>
       <tr><td>5</td><td><b>Low battery</b></td><td><span class="warn">Yellow, pulsing</span></td><td>Under 20%, still recording</td><td><span class="ok">Built</span></td></tr>
       <tr><td>6</td><td><b>Uploading</b></td><td style="color:var(--accent)">Blue, pulsing</td><td>Recording and sending footage over Wi-Fi</td><td><span class="ok">Built</span></td></tr>
       <tr><td>7</td><td><b>Recording</b></td><td><span class="ok">Green, solid</span></td><td>Recording; offline is normal, footage queues for later</td><td><span class="ok">Built</span></td></tr>

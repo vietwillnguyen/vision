@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 95fb6488039a11086a8acb29f7a8acc47a3d4acc38dd07663e0d9701daea258b  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 5f8d163280c014b690a4fcd2ac4d3410f9a3c1b49accdbaa1ba63ffd5854868a  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-18 (LED state machine design) -->
+<!-- regenerated-at: 2026-11-18 (LED state machine design; Critical means needs you now) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -256,7 +256,7 @@ flowchart TD
             <tr><td>Halted</td><td>red, solid</td><td>no</td><td>battery halt, onboarding gave up, Wi-Fi activation failed, capture error; held 30 s, then exit</td><td>new (today battery halt and Wi-Fi activation failure show Critical; onboarding giving up or a capture error leaves the last colour, usually Recording green)</td></tr>
             <tr><td>Scanning</td><td>cyan, pulsing</td><td>no</td><td>looking for an onboarding QR code</td><td>new (shows green today)</td></tr>
             <tr><td>Starting</td><td>white, dim</td><td>no</td><td>boot steps before the first capture</td><td>new (shows green today)</td></tr>
-            <tr><td>Critical</td><td>red, flashing</td><td>yes</td><td>3+ consecutive upload failures, latched</td><td>built</td></tr>
+            <tr><td>Critical</td><td>red, flashing</td><td>yes</td><td>needs you now: SD card under 1 GB free, or online yet 3+ consecutive upload failures (latched); offline failures never count</td><td>partly built (today offline failures count; no free-space check)</td></tr>
             <tr><td>Low battery</td><td>yellow, pulsing</td><td>yes</td><td>battery under 20%</td><td>built</td></tr>
             <tr><td>Uploading</td><td>blue, pulsing</td><td>yes</td><td>upload or retry round in flight</td><td>built</td></tr>
             <tr><td>Recording</td><td>green, solid</td><td>yes</td><td>capturing (offline is normal)</td><td>built</td></tr>
@@ -279,7 +279,8 @@ stateDiagram-v2
         Recording --> Uploading: upload starts
         Uploading --> Recording
         Recording --> LowBattery: battery under 20%
-        Uploading --> Critical: 3rd consecutive failure
+        Uploading --> Critical: 3rd failure while online
+        Recording --> Critical: under 1 GB free
         Critical --> Recording: any upload success
     }
     RecordingFamily --> Scanning: long-press or visio-reonboard
@@ -288,7 +289,7 @@ stateDiagram-v2
     Halted --> Off: exit after 30 s hold
     Off --> Starting: systemd restart on failure
       </pre>
-      <p class="text-xs text-base-content/70 mt-2">Pulsing and flashing need a new LED renderer thread that owns the driver; today every pattern renders solid, so red flashing and red solid would look the same. Re-onboarding never strands the device: on timeout it returns to recording on the old network. Inside the recording family the drawn edges are illustrative: the state is resolved by priority, not by the edges.</p>
+      <p class="text-xs text-base-content/70 mt-2">Pulsing and flashing need a new LED renderer thread that owns the driver; today every pattern renders solid, so red flashing and red solid would look the same. Re-onboarding never strands the device: on timeout it returns to recording on the old network. Offline is normal: with no connection up, a segment just stays queued and the failure counter is untouched, so a walk never turns the LED red. Backup problems that can wait go to the phone instead: <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.oldest_pending_at</span> feeds the Device tab, and the nightly pipeline pushes a notification after 24 h of unuploaded footage. Inside the recording family the drawn edges are illustrative: the state is resolved by priority, not by the edges.</p>
     </div>
 
     <div class="card bg-base-100 shadow p-4">

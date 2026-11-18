@@ -178,6 +178,7 @@ A single Python systemd service manages the full device lifecycle.
   Critical is a latched condition rather than a momentary one, so it is derived from the consecutive-failure counter (`UploadHealth`) instead of being applied once at the moment of escalation.
   That makes the red survive the following segments: while the counter is at or past the threshold, the segment's own upload shows red too, not the Uploading blue and the restored Recording green, and only the resetting success returns the LED to green or yellow.
   Critical outranks both low battery and uploading in `next_led_state`, matching the battery-halt path, which already applies Critical last so it cannot be overwritten.
+  Planned change (LED state machine below): failures while the pendant is offline will stop counting, and a nearly full SD card will also raise Critical.
 - On successful upload, local file is deleted to free SD space.
 
 ### Audio Capture (as-built)
@@ -289,7 +290,7 @@ The one exception is the flag acknowledgement, a short overlay that plays over w
 | Halted | Red, solid | No | Battery under the 10% halt threshold, QR onboarding gave up, Wi-Fi activation failed, or the capture loop stopped on an error | New (today the battery halt and a Wi-Fi activation failure show Critical, while onboarding giving up or a capture error leaves the last colour lit, usually Recording green) |
 | Scanning | Cyan, pulsing | No | Looking for an onboarding QR code (first boot, or re-onboarding triggered by a long-press or `visio-reonboard`) | New (today onboarding shows Recording green) |
 | Starting | White, dim solid | No | Daemon started, preflight and boot steps running, first capture not yet begun | New (today startup shows Recording green before onboarding) |
-| Critical | Red, flashing | Yes | 3+ consecutive upload failures (latched by `UploadHealth`) | Built |
+| Critical | Red, flashing | Yes | Needs you now, or recording will stop: the SD card has under 1 GB free (about 30 minutes left), or the pendant is online yet 3+ consecutive uploads failed (latched by `UploadHealth`) | Partly built: today every failure counts, offline included, and there is no free-space check |
 | Low battery | Yellow, pulsing | Yes | Battery under 20% | Built |
 | Uploading | Blue, pulsing | Yes | A segment upload or retry round is in flight | Built |
 | Recording | Green, solid | Yes | Capturing; offline is normal and footage queues for later | Built |
@@ -313,7 +314,8 @@ stateDiagram-v2
         Recording --> Uploading: upload starts
         Uploading --> Recording
         Recording --> LowBattery: battery under 20%
-        Uploading --> Critical: 3rd consecutive failure
+        Uploading --> Critical: 3rd failure while online
+        Recording --> Critical: under 1 GB free
         Critical --> Recording: any upload success
     }
     RecordingFamily --> Scanning: long-press or visio-reonboard
@@ -330,6 +332,11 @@ Transition rules:
 - Re-onboarding never strands the device: if no QR code is read within the attempt limit, the pendant goes back to recording on its existing network rather than halting; only first boot, which has no network to fall back to, halts.
 - Halted holds solid red for 30 s before the daemon exits, so the reason is visible, then the LED goes off.
 - Every exit, clean or not, ends with the LED off: the systemd unit gains an `ExecStopPost=` helper that writes an all-off frame, which also covers crashes and `SIGKILL` (only power loss bypasses it, and that turns the LED off anyway).
+- Offline is normal, not a failure: the pendant records away from Wi-Fi for most of the day.
+  Before each upload attempt or retry round the worker checks whether NetworkManager has a connection up; if not, the segment stays queued and `UploadHealth` is left untouched, so a walk never turns the LED red.
+  Only failures while a connection is up count towards Critical, because those mean something is wrong that the wearer must fix (for example an expired login or a full storage bucket).
+- Backup problems that do not need action right now go to the phone, not the LED.
+  The pendant adds `oldest_pending_at` to its `device_status` row, the app's Device tab shows how much footage is waiting and since when, and the nightly pipeline sends a push notification when footage has been waiting more than 24 hours.
 - The flag overlay never changes the underlying state; if the state changes during the blinks, the new state shows when they end.
 
 Animation: pulsing (about 1 s breathe) and flashing (2 Hz on/off) need a small LED renderer thread that owns the driver, takes the resolved state from a queue, and animates it.
@@ -378,6 +385,7 @@ segments_pending, segments_uploaded_today, recording_active,
 segments_rejected, audio_active, updated_at
 ```
 
+Planned: `oldest_pending_at`, the capture time of the oldest segment still waiting to upload, so the app and the nightly pipeline can tell a stale backup from a normal offline walk (see the LED state machine).
 `audio_active` says whether the pendant is recording its microphone (see Audio Capture).
 `segments_rejected` is the number of segments the firmware gave up uploading because they are over the storage size limit and could not be split (see Segment Size Contract).
 
