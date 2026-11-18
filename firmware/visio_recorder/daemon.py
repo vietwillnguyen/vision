@@ -518,7 +518,12 @@ def run_recording_loop(
         recording_active=True,
         audio_active=audio is not None,
     )
-    worker_thread = threading.Thread(target=worker)
+    # A daemon thread only because of the halt path's bounded join: once that
+    # bound has elapsed the loop has already decided to stop waiting for a
+    # wedged upload, and a non-daemon thread would then hold the process open
+    # at interpreter exit anyway. Every other path joins it outright, so
+    # nothing else changes.
+    worker_thread = threading.Thread(target=worker, daemon=True)
     worker_thread.start()
     halt_verdict: BatteryVerdict | None = None
     not_before: datetime | None = None
