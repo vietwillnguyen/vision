@@ -1,0 +1,8 @@
+$ systemd-analyze --version | head -1
+systemd 255 (255.4-1ubuntu8.18)
+
+$ systemd-analyze verify ./systemd/visio-recorder.service
+exit=0
+
+$ node --check 10-visio-recorder-poweroff.rules (copied to .js; polkit rules are JavaScript)
+exit=0
