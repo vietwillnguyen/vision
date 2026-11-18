@@ -9,6 +9,7 @@ from tests.fakes import (
     FailingSplitRunner,
     FailingStorageClient,
     FakeBatteryReader,
+    FakeCaptureRunner,
     FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
@@ -20,7 +21,7 @@ from tests.fakes import (
     SizeCheckedStorageClient,
     unlimited_upload_limit,
 )
-from visio_recorder.capture import VideoSettings
+from visio_recorder.capture import CaptureExit, VideoSettings
 from visio_recorder.daemon import LoopDeps, run_recording_loop
 from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
@@ -541,17 +542,18 @@ def test_capture_killed_mid_segment_is_uploaded_on_the_next_boot(tmp_path):
     data_dir = tmp_path / "data"
     queue_dir = data_dir / "queue"
 
-    class KilledOnSecondCapture(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and self.record_count == 1:
+    class KilledOnSecondCapture(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if self.record_count == 1:
                 output = Path(args[args.index("-o") + 1])
                 output.write_bytes(b"partial frames")
                 raise subprocess.CalledProcessError(-15, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     storage = FakeStorageClient()
     deps = LoopDeps(
-        command_runner=KilledOnSecondCapture(),
+        command_runner=FakeCommandRunner(),
+        capture_runner=KilledOnSecondCapture(),
         storage_client=storage,
         status_client=FakeStatusClient(),
         led_driver=FakeLedDriver(),

@@ -1,5 +1,8 @@
+import os
+import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +12,7 @@ import pytest
 from tests.fakes import (
     FailingStorageClient,
     FakeBatteryReader,
+    FakeCaptureRunner,
     FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
@@ -22,7 +26,7 @@ from tests.fakes import (
     unlimited_upload_limit,
 )
 from tests.ws2812_waveform import decode_frame
-from visio_recorder.capture import AudioSettings, VideoSettings
+from visio_recorder.capture import AudioSettings, CaptureExit, VideoSettings
 from visio_recorder.daemon import (
     LoopDeps,
     load_config,
@@ -133,7 +137,8 @@ def test_load_config_missing_supabase_anon_key_raises_value_error_naming_it():
 def _make_deps(
     tmp_path,
     *,
-    command_runner,
+    capture_runner=None,
+    command_runner=None,
     battery_reader,
     led_driver,
     storage_client=None,
@@ -143,7 +148,8 @@ def _make_deps(
     monotonic=None,
 ) -> LoopDeps:
     return LoopDeps(
-        command_runner=command_runner,
+        command_runner=command_runner or FakeCommandRunner(),
+        capture_runner=capture_runner or FakeCaptureRunner(),
         storage_client=storage_client or FakeStorageClient(),
         status_client=status_client or FakeStatusClient(),
         led_driver=led_driver,
@@ -167,12 +173,12 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
     storage = FakeStorageClient()
     status = FakeStatusClient()
 
-    runner = FakeCommandRunner(
+    runner = FakeCaptureRunner(
         on_record=lambda count: stop.set() if count >= 3 else None
     )
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=FakeBatteryReader(85),
         led_driver=led,
         storage_client=storage,
@@ -207,10 +213,11 @@ def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
             battery.trigger_halt()
             gate.set()
 
-    runner = FakeCommandRunner(on_record=on_record, mux_gate=gate)
+    runner = FakeCaptureRunner(on_record=on_record)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
+        command_runner=FakeCommandRunner(mux_gate=gate),
         battery_reader=battery,
         led_driver=led,
         storage_client=storage,
@@ -258,10 +265,10 @@ def test_halt_join_waits_for_slow_worker_before_applying_critical_led(tmp_path):
         if count >= 1:
             battery.trigger_halt()
 
-    runner = FakeCommandRunner(on_record=on_record)
+    runner = FakeCaptureRunner(on_record=on_record)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=battery,
         led_driver=led,
         storage_client=storage,
@@ -297,12 +304,12 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
     # (counter climbs back to the threshold at 8).
     storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 4, 6, 7, 8})
 
-    runner = FakeCommandRunner(
+    runner = FakeCaptureRunner(
         on_record=lambda count: stop.set() if count >= 8 else None
     )
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=FakeBatteryReader(85),
         led_driver=led,
         storage_client=storage,
@@ -344,12 +351,12 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
     # reported.
     status = ScriptedStatusClient(fail_on_attempts={2})
 
-    runner = FakeCommandRunner(
+    runner = FakeCaptureRunner(
         on_record=lambda count: stop.set() if count >= 3 else None
     )
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=FakeBatteryReader(85),
         led_driver=led,
         storage_client=storage,
@@ -383,12 +390,12 @@ def test_setting_stop_exits_after_in_flight_cycle_and_joins_worker(tmp_path):
     led = FakeLedDriver()
     storage = FakeStorageClient()
 
-    runner = FakeCommandRunner(
+    runner = FakeCaptureRunner(
         on_record=lambda count: stop.set() if count >= 2 else None
     )
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=FakeBatteryReader(85),
         led_driver=led,
         storage_client=storage,
@@ -438,6 +445,128 @@ def test_critical_battery_halts_and_shows_critical_led():
     assert led.calls == [((255, 0, 0), LedPattern.FLASHING)]
 
 
+STOP_SEGMENT_SEC = 5.0
+
+
+def test_sigterm_during_a_capture_cuts_it_short_instead_of_waiting_for_the_segment(
+    tmp_path,
+):
+    # The loop observes ``stop`` only between segments, so a SIGTERM landing
+    # just after a capture starts waits out the whole segment: 300 s measured
+    # on the device with the old five-minute segments, and a full minute with
+    # today's 60 s default. systemd's stop timeout fires long before that and
+    # SIGKILLs the daemon, which is what loses the in-flight segment. The
+    # capture must be cut short cleanly instead.
+    stop = threading.Event()
+    capturing = threading.Event()
+    storage = FakeStorageClient()
+    runner = FakeCaptureRunner(
+        duration_sec=STOP_SEGMENT_SEC, on_capture_start=capturing.set
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+    )
+
+    signalled_at: list[float] = []
+
+    def sigterm_mid_capture() -> None:
+        assert capturing.wait(timeout=10), "the capture never started"
+        signalled_at.append(time.monotonic())
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    # The daemon's own handler shape: SIGTERM sets stop, and the loop is on
+    # the main thread, so the handler runs there exactly as it does in main().
+    previous_handler = signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    killer = threading.Thread(target=sigterm_mid_capture)
+    try:
+        killer.start()
+        run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+    finally:
+        killer.join(timeout=10)
+        signal.signal(signal.SIGTERM, previous_handler)
+
+    stop_latency_sec = time.monotonic() - signalled_at[0]
+    assert runner.record_count == 1
+    assert runner.cancelled_captures == 1
+    # The cut-short segment is muxed, queued and uploaded like a full one.
+    assert storage.uploaded == ["device-abc/20261118_090000.mp4"]
+    assert stop_latency_sec < STOP_SEGMENT_SEC / 2, (
+        f"stop took {stop_latency_sec:.1f}s of a {STOP_SEGMENT_SEC:.0f}s segment"
+    )
+
+
+def test_a_cancelled_capture_exiting_non_zero_still_uploads_its_segment(tmp_path):
+    # BENCH-1 again, this time through the loop: if rpicam-vid -s turns out to
+    # exit non-zero on SIGUSR2, the footage it finalised is still footage. It
+    # must be muxed, queued and uploaded, not dropped as a failed capture.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    runner = FakeCaptureRunner(
+        duration_sec=STOP_SEGMENT_SEC,
+        exit_code_after_cancel=1,
+        on_capture_start=stop.set,
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert runner.cancelled_captures == 1
+    assert storage.uploaded == ["device-abc/20261118_090000.mp4"]
+    assert list(deps.data_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("leaves_a_file", [True, False])
+def test_a_capture_cancelled_before_its_first_frame_is_discarded(
+    tmp_path, leaves_a_file
+):
+    # A stop landing in the first moments of a segment leaves an empty file,
+    # or no file at all when the capture was signalled before it opened its
+    # output. There is nothing to mux either way, so it is dropped here rather
+    # than queued - and neither case may raise, because this is the ordinary
+    # stop path, not a failure.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+
+    class CancelledBeforeTheFirstFrame(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            capture_exit = super().run(args, cancel)
+            if capture_exit.cancelled:
+                output_path = Path(args[args.index("-o") + 1])
+                if leaves_a_file:
+                    output_path.write_bytes(b"")
+                else:
+                    output_path.unlink()
+            return capture_exit
+
+    runner = CancelledBeforeTheFirstFrame(
+        duration_sec=STOP_SEGMENT_SEC, on_capture_start=stop.set
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert runner.cancelled_captures == 1
+    assert storage.uploaded == []
+    # Nothing left behind for the next boot to recover either.
+    assert list(deps.data_dir.iterdir()) == []
+
+
 def test_loop_reports_recording_active_before_the_first_segment(tmp_path):
     # Without this the app keeps whatever the last run left (after a halt or
     # stop: Paused) for a whole segment after recording has resumed.
@@ -452,7 +581,7 @@ def test_loop_reports_recording_active_before_the_first_segment(tmp_path):
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         status_client=status,
@@ -472,7 +601,7 @@ def test_stop_reports_recording_inactive_as_the_final_status(tmp_path):
     status = FakeStatusClient()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(
+        capture_runner=FakeCaptureRunner(
             on_record=lambda count: stop.set() if count >= 2 else None
         ),
         battery_reader=FakeBatteryReader(85),
@@ -502,7 +631,7 @@ def test_battery_halt_reports_recording_inactive_after_the_drain(tmp_path):
     battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(
+        capture_runner=FakeCaptureRunner(
             on_record=lambda count: battery.trigger_halt() if count >= 1 else None
         ),
         battery_reader=battery,
@@ -518,16 +647,14 @@ def test_battery_halt_reports_recording_inactive_after_the_drain(tmp_path):
 
 
 def test_capture_failure_reports_recording_inactive_and_still_raises(tmp_path):
-    class FailingCapture(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid":
-                raise RuntimeError("camera not detected")
-            super().run(args)
+    class FailingCapture(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            raise RuntimeError("camera not detected")
 
     status = FakeStatusClient()
     deps = _make_deps(
         tmp_path,
-        command_runner=FailingCapture(),
+        capture_runner=FailingCapture(),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         status_client=status,
@@ -551,7 +678,7 @@ def test_status_push_failures_at_start_and_exit_never_stop_the_daemon(tmp_path):
     storage = FakeStorageClient()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=lambda count: stop.set()),
+        capture_runner=FakeCaptureRunner(on_record=lambda count: stop.set()),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -633,10 +760,10 @@ def test_loop_records_audio_segments_and_reports_audio_active(tmp_path):
     stop = threading.Event()
     storage = FakeStorageClient()
     status = FakeStatusClient()
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 2 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 2 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -646,7 +773,7 @@ def test_loop_records_audio_segments_and_reports_audio_active(tmp_path):
 
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 16, 9, 0, 0)))
 
-    captures = [c for c in runner.calls if c[0] == "rpicam-vid"]
+    captures = runner.calls
     assert all(c[c.index("-o") + 1].endswith(".ts") for c in captures)
     assert storage.uploaded == [
         "device-abc/20261116_090000.mp4",
@@ -664,19 +791,18 @@ def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
     storage = FakeStorageClient()
     status = FakeStatusClient()
 
-    class MicGoneOnSecondCapture(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            mic_gone = "--libav-audio" in args and self.record_count == 1
-            if args[0] == "rpicam-vid" and mic_gone:
+    class MicGoneOnSecondCapture(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if "--libav-audio" in args and self.record_count == 1:
                 with self._lock:
                     self.calls.append(args)
                 raise subprocess.CalledProcessError(1, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     runner = MicGoneOnSecondCapture(on_record=lambda n: stop.set() if n >= 3 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -686,9 +812,7 @@ def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
 
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 16, 9, 0, 0)))
 
-    outputs = [
-        Path(c[c.index("-o") + 1]).name for c in runner.calls if c[0] == "rpicam-vid"
-    ]
+    outputs = [Path(c[c.index("-o") + 1]).name for c in runner.calls]
     assert outputs == [
         "20261116_090000.ts",
         "20261116_090001.ts",
@@ -716,17 +840,17 @@ def test_a_failed_audio_capture_uploads_its_partial_ts_the_same_run(
     stop = threading.Event()
     storage = FakeStorageClient()
 
-    class DiesMidSegment(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+    class DiesMidSegment(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if "--libav-audio" in args:
                 Path(args[args.index("-o") + 1]).write_bytes(partial_bytes)
                 raise subprocess.CalledProcessError(1, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     runner = DiesMidSegment(on_record=lambda n: stop.set() if n >= 1 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -748,16 +872,16 @@ def test_the_capture_after_a_failed_audio_one_waits_for_a_new_second(tmp_path):
     storage = FakeStorageClient()
     slept: list[float] = []
 
-    class DiesAtOnce(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+    class DiesAtOnce(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if "--libav-audio" in args:
                 Path(args[args.index("-o") + 1]).write_bytes(b"ts-data")
                 raise subprocess.CalledProcessError(1, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     deps = _make_deps(
         tmp_path,
-        command_runner=DiesAtOnce(on_record=lambda n: stop.set()),
+        capture_runner=DiesAtOnce(on_record=lambda n: stop.set()),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -793,16 +917,16 @@ def test_a_clock_stepping_back_after_the_fallback_never_stalls_recording(tmp_pat
         ]
     )
 
-    class DiesOnce(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+    class DiesOnce(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if "--libav-audio" in args:
                 Path(args[args.index("-o") + 1]).write_bytes(b"ts-data")
                 raise subprocess.CalledProcessError(1, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     deps = _make_deps(
         tmp_path,
-        command_runner=DiesOnce(on_record=lambda n: stop.set() if n >= 2 else None),
+        capture_runner=DiesOnce(on_record=lambda n: stop.set() if n >= 2 else None),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -820,15 +944,13 @@ def test_a_clock_stepping_back_after_the_fallback_never_stalls_recording(tmp_pat
 
 
 def test_a_failing_video_only_capture_still_escapes_the_loop(tmp_path):
-    class Killed(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid":
-                raise subprocess.CalledProcessError(-15, args)
-            super().run(args)
+    class Killed(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            raise subprocess.CalledProcessError(-15, args)
 
     deps = _make_deps(
         tmp_path,
-        command_runner=Killed(),
+        capture_runner=Killed(),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
     )
@@ -861,12 +983,12 @@ def test_startup_and_loop_drive_the_spi_led_through_every_colour(tmp_path):
 
     storage = OutageThenLowBattery(fail_on_attempts={2, 3, 4})
     stop = threading.Event()
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 6 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 6 else None)
 
     assert run_startup_sequence(battery, led).proceed
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=battery,
         led_driver=led,
         storage_client=storage,
@@ -904,10 +1026,10 @@ def test_critical_red_survives_the_next_segments_upload_colours(tmp_path):
     # Segments 1-4 fail (CRITICAL from 3 on), segment 5 succeeds and clears it.
     storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 4})
     stop = threading.Event()
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 5 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 5 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery_reader=FakeBatteryReader(85),
         led_driver=led,
         storage_client=storage,
@@ -970,7 +1092,7 @@ def test_a_failed_segment_is_retried_in_process_without_a_restart(tmp_path):
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1024,7 +1146,7 @@ def test_a_retry_round_still_runs_while_segments_arrive_faster_than_the_backoff(
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1070,7 +1192,7 @@ def test_a_stop_with_a_lapsed_retry_deadline_leaves_the_critical_led_red(tmp_pat
     storage = SlowAndDown()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery_reader=FakeBatteryReader(85),
         led_driver=led,
         storage_client=storage,
@@ -1127,7 +1249,7 @@ def test_the_worker_waits_longer_after_each_failed_retry_round(tmp_path):
     storage = CountingFailure()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1166,7 +1288,7 @@ def test_retry_rounds_escalate_to_the_critical_led_without_a_new_segment(tmp_pat
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery_reader=FakeBatteryReader(85),
         led_driver=led,
         storage_client=FailUntilRed(),
@@ -1209,7 +1331,7 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery_reader=FakeBatteryReader(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,

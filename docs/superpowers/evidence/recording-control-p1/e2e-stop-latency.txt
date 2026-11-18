@@ -1,0 +1,20 @@
+# End to end: how long a SIGTERM takes to stop a recording
+#
+# Simulated hardware, real everything else: a child process standing in
+# for rpicam-vid (real H.264 through ffmpeg, finalises on SIGUSR2), real
+# POSIX signals, the daemon's SIGTERM handler, run_recording_loop on the
+# main thread, and the real ffmpeg mux of what the cut-short capture left.
+#
+$ uv run --locked --extra dev python \
+      ../docs/superpowers/evidence/recording-control-p1/e2e_stop_latency.py
+
+segment length 8s; SIGTERM sent 1.5s into the first capture
+
+runner                              stop latency  segment kept
+before: blocking subprocess.run            6.16s         8.00s
+after: interruptible runner                0.27s         2.10s
+
+before: blocking subprocess.run: uploaded 20261118_174205.mp4, nothing left in the data dir: True
+after: interruptible runner: uploaded 20261118_174213.mp4, nothing left in the data dir: True
+
+stop latency fell from 6.16s to 0.27s, and the footage recorded before the stop (2.10s) still muxed, queued and uploaded.

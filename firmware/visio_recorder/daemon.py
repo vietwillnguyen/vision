@@ -13,6 +13,8 @@ from pathlib import Path
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import (
     AudioSettings,
+    InterruptibleCommandRunner,
+    SubprocessInterruptibleRunner,
     VideoSettings,
     probe_audio_device,
     record_segment,
@@ -197,6 +199,10 @@ def run_startup_sequence(
 @dataclass
 class LoopDeps:
     command_runner: CommandRunner
+    # The capture is the one command a stop has to be able to cut short, so it
+    # runs through its own interruptible runner; ``command_runner`` keeps the
+    # mux, the split and the ALSA probe.
+    capture_runner: InterruptibleCommandRunner
     storage_client: StorageClient
     status_client: StatusClient
     led_driver: LedDriver
@@ -248,6 +254,20 @@ def _push_recording_status(
         )
 
 
+def _has_footage(capture_path: Path) -> bool:
+    """Whether a capture left anything worth muxing.
+
+    A capture cut short before its first frame leaves an empty file, or no
+    file at all when it was signalled before it opened the output. Either way
+    there is nothing to mux, and the loop must not turn that into an
+    exception: it happens on the ordinary stop path.
+    """
+    try:
+        return capture_path.stat().st_size > 0
+    except FileNotFoundError:
+        return False
+
+
 def run_recording_loop(
     deps: LoopDeps,
     stop: threading.Event,
@@ -286,6 +306,16 @@ def run_recording_loop(
     is set before the sentinel is queued: a stopping worker starts no round,
     and a round already draining a backlog gives up rather than uploading
     through a halt.
+
+    ``stop`` is also the in-flight capture's cancel event, so a SIGTERM or
+    SIGINT landing mid-segment cuts the capture short instead of being
+    observed only when it ends - the wait that used to cost a whole segment
+    (60 s by default, 300 s at the hard cap) and ran into systemd's stop
+    timeout. The cut-short file is a complete, shorter segment and is handed
+    to the worker like any other; only a cancel that lands before the first
+    frame leaves nothing to mux - an empty file, or none at all - and that is
+    discarded rather than queued, exactly as the audio-failure path treats an
+    empty partial.
 
     ``device_status.recording_active`` is pushed True before the first capture
     and False once the loop has exited for any reason (stop, halt, or a
@@ -411,12 +441,13 @@ def run_recording_loop(
                 not_before = None
             try:
                 h264_path = record_segment(
-                    deps.command_runner,
+                    deps.capture_runner,
                     deps.data_dir,
                     started_at,
                     deps.segment_duration_ms,
                     deps.video,
                     audio,
+                    cancel=stop,
                 )
             except subprocess.CalledProcessError:
                 if audio is None or stop.is_set():
@@ -433,6 +464,13 @@ def run_recording_loop(
                         work.put(partial)
                     else:
                         partial.unlink()
+                continue
+            if not _has_footage(h264_path):
+                _logger.info(
+                    "the capture of %s wrote no footage; discarding it",
+                    h264_path.name,
+                )
+                h264_path.unlink(missing_ok=True)
                 continue
             work.put(h264_path)
     finally:
@@ -503,6 +541,7 @@ def main() -> int:
         registered_marker_path.touch()
 
     command_runner = SubprocessCommandRunner()
+    capture_runner = SubprocessInterruptibleRunner()
     audio = resolve_audio(command_runner, config.audio)
     upload_limit = UploadLimit(
         max_bytes=config.max_upload_bytes,
@@ -527,6 +566,10 @@ def main() -> int:
     stop = threading.Event()
 
     def _handle_signal(signum: int, frame: object) -> None:
+        # ``stop`` is also the capture's cancel event, so this ends the
+        # in-flight capture as well as the loop: a systemctl stop or a
+        # poweroff finishes within the unit's TimeoutStopSec instead of
+        # waiting out the segment and being SIGKILLed.
         stop.set()
 
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -545,6 +588,7 @@ def main() -> int:
 
     deps = LoopDeps(
         command_runner=command_runner,
+        capture_runner=capture_runner,
         storage_client=clients.storage,
         status_client=clients.status,
         led_driver=led_driver,

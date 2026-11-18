@@ -1,9 +1,26 @@
+import logging
+import signal
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 from visio_recorder.muxer import CommandRunner
+
+_logger = logging.getLogger(__name__)
+
+# How often a running capture is checked on, which is also how long a stop
+# can wait before it is acted on. Short enough to be invisible next to the
+# shutdown budget, long enough not to spin on a battery.
+CAPTURE_POLL_SEC = 0.2
+
+# How long a cancelled capture is given to finalise its file after each
+# signal before the next, harsher one. The whole escalation is bounded by
+# twice this plus the poll, which has to fit inside the unit's
+# TimeoutStopSec=30 alongside the mux, the enqueue and the status push.
+CAPTURE_SIGNAL_GRACE_SEC = 5.0
 
 
 @dataclass(frozen=True)
@@ -52,6 +69,11 @@ def build_rpicam_command(
 ) -> list[str]:
     """The ``rpicam-vid`` invocation for one segment.
 
+    ``-s`` (``--signal``) is what makes a capture interruptible: with it,
+    SIGUSR1 toggles the output and SIGUSR2 quits, and the documented starting
+    state is recording, so a segment left alone behaves exactly as it did
+    before. ``SubprocessInterruptibleRunner`` is the other half.
+
     Video only: the hardware H.264 encoder writes a raw elementary stream.
     With audio: the libav backend (rpicam-apps' ``--codec libav``, which still
     encodes video in hardware via ``h264_v4l2m2m``) muxes the ALSA microphone
@@ -95,7 +117,7 @@ def build_rpicam_command(
             "--audio-bitrate",
             str(audio.bitrate_bps),
         ]
-    return command + ["-n", "-o", str(output_path)]
+    return command + ["-s", "-n", "-o", str(output_path)]
 
 
 def probe_audio_device(runner: CommandRunner, audio: AudioSettings) -> bool:
@@ -133,6 +155,91 @@ def probe_audio_device(runner: CommandRunner, audio: AudioSettings) -> bool:
     return True
 
 
+@dataclass(frozen=True)
+class CaptureExit:
+    """How one ``rpicam-vid`` run ended.
+
+    ``cancelled`` is what separates a capture the daemon cut short from one
+    that ran out its ``-t``. A runner raises for a failure nobody asked for,
+    so a non-zero ``returncode`` reaching a caller always belongs to a
+    cancelled capture: whether ``rpicam-vid -s`` exits 0 on SIGUSR2 is still
+    unverified on the device (BENCH-1 in the recording-control design spec),
+    and dropping a segment over its exit code would be worse than tolerating
+    one.
+    """
+
+    returncode: int
+    cancelled: bool
+
+
+class InterruptibleCommandRunner(Protocol):
+    """A command the caller can cut short; used only for the capture.
+
+    It sits beside ``CommandRunner`` rather than replacing it because only
+    the capture needs it. The mux (``ffmpeg -c copy``) and the ALSA probe are
+    both short and end on their own, while one capture runs for a whole
+    segment and is the thing a stop has to interrupt.
+    """
+
+    def run(self, args: list[str], cancel: threading.Event) -> CaptureExit: ...
+
+
+class SubprocessInterruptibleRunner:
+    """Runs ``rpicam-vid`` so that a stop ends the capture in seconds.
+
+    ``--signal`` documents SIGUSR2 as "quit", which finalises the output
+    file, so a cancel sends that first and escalates only if the process does
+    not go away: SIGTERM after ``grace_sec``, then SIGKILL. A killed capture
+    still leaves a usable file - a raw ``.h264`` has no trailer and MPEG-TS
+    stays readable when truncated - but that is the last resort, not the plan.
+
+    ``wait`` is polled instead of being waited on outright for two reasons:
+    ``cancel`` is observed between polls, and a Python signal handler runs
+    only on the main thread between bytecodes, so returning there regularly
+    is what lets the daemon's own SIGTERM handler run while a capture is in
+    flight.
+
+    A capture that was not cancelled keeps ``subprocess.run(check=True)``'s
+    contract and raises ``CalledProcessError`` on a non-zero exit, which is
+    what the recording loop's audio fallback detects. A cancelled one never
+    raises, however it exited.
+    """
+
+    def __init__(
+        self,
+        poll_sec: float = CAPTURE_POLL_SEC,
+        grace_sec: float = CAPTURE_SIGNAL_GRACE_SEC,
+    ) -> None:
+        self._poll_sec = poll_sec
+        self._grace_sec = grace_sec
+
+    def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+        with subprocess.Popen(args) as process:
+            while not cancel.is_set():
+                try:
+                    returncode = process.wait(timeout=self._poll_sec)
+                except subprocess.TimeoutExpired:
+                    continue
+                if returncode != 0:
+                    raise subprocess.CalledProcessError(returncode, args)
+                return CaptureExit(returncode=returncode, cancelled=False)
+            return CaptureExit(returncode=self._cut_short(process), cancelled=True)
+
+    def _cut_short(self, process: "subprocess.Popen[bytes]") -> int:
+        for sig in (signal.SIGUSR2, signal.SIGTERM):
+            process.send_signal(sig)
+            try:
+                return process.wait(timeout=self._grace_sec)
+            except subprocess.TimeoutExpired:
+                _logger.warning(
+                    "the capture is still running %.0fs after %s; escalating",
+                    self._grace_sec,
+                    sig.name,
+                )
+        process.kill()
+        return process.wait()
+
+
 def segment_path(
     output_dir: Path, started_at: "datetime", audio: AudioSettings | None
 ) -> Path:
@@ -141,14 +248,32 @@ def segment_path(
 
 
 def record_segment(
-    runner: CommandRunner,
+    runner: InterruptibleCommandRunner,
     output_dir: Path,
     started_at: "datetime",
     duration_ms: int,
     video: VideoSettings,
     audio: AudioSettings | None = None,
+    *,
+    cancel: threading.Event,
 ) -> Path:
+    """Record one segment, returning its path whether or not it was cut short.
+
+    Setting ``cancel`` ends the capture in seconds instead of letting it run
+    out ``duration_ms``, and what it leaves behind is an ordinary, shorter
+    segment: the caller muxes, queues and uploads it with no special case.
+    The file can still be empty when the cancel lands before the first frame,
+    which is the one case a caller has to handle.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = segment_path(output_dir, started_at, audio)
-    runner.run(build_rpicam_command(output_path, duration_ms, video, audio))
+    capture_exit = runner.run(
+        build_rpicam_command(output_path, duration_ms, video, audio), cancel
+    )
+    if capture_exit.cancelled:
+        _logger.info(
+            "cut the capture of %s short; rpicam-vid exited %d",
+            output_path.name,
+            capture_exit.returncode,
+        )
     return output_path
