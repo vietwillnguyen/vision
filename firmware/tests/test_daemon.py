@@ -31,7 +31,13 @@ from visio_recorder.daemon import (
     run_startup_sequence,
 )
 from visio_recorder.drivers import Ws2812LedDriver
-from visio_recorder.led import LedPattern
+from visio_recorder.flag_button import (
+    FLAG_UPLOAD_THREAD_NAME,
+    FlagUploadWorker,
+    make_flag_press_handler,
+    write_flag_marker,
+)
+from visio_recorder.led import LedController, LedPattern, LedState, apply_led_state
 from visio_recorder.recording_loop import DiskStats, RetryBackoff
 from visio_recorder.upload_queue import list_pending
 
@@ -141,6 +147,7 @@ def _make_deps(
     audio=None,
     retry_backoff=None,
     monotonic=None,
+    flush_markers=None,
 ) -> LoopDeps:
     return LoopDeps(
         command_runner=command_runner,
@@ -156,6 +163,7 @@ def _make_deps(
         video=VideoSettings(),
         upload_limit=unlimited_upload_limit(),
         audio=audio,
+        flush_markers=flush_markers,
         **({} if retry_backoff is None else {"retry_backoff": retry_backoff}),
         **({} if monotonic is None else {"monotonic": monotonic}),
     )
@@ -1219,4 +1227,146 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
     assert "device-abc/20260703_235900.mp4" in storage.uploaded
+    assert list_pending(queue_dir) == []
+
+
+MAGENTA = (255, 0, 255)
+
+
+class _HeldBlink:
+    """Holds a blink open until the test releases it."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, seconds: float) -> None:
+        self.started.set()
+        assert self.release.wait(timeout=5), "the blink was never released"
+
+
+def _colours(spi: SimulatedSpiDevice) -> list[tuple[int, int, int]]:
+    return [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+
+
+def test_a_press_blinks_magenta_on_the_wire_and_puts_the_state_back(tmp_path):
+    # The real led.py, the real SPI driver and the real press handler, with
+    # only /dev/spidev0.0 simulated: the colours a WS2812B would latch,
+    # decoded from the wire bytes by the datasheet-timing receiver. Storage
+    # is never reached, which is the point - the acknowledgement is what the
+    # wearer gets while WiFi is down.
+    spi = SimulatedSpiDevice()
+    blink = _HeldBlink()
+    led = LedController(Ws2812LedDriver(spi=spi), sleep=blink)
+    battery = FakeBatteryReader(85)
+    assert run_startup_sequence(battery, led).proceed
+
+    press = make_flag_press_handler(
+        queue_dir=tmp_path / "queue",
+        submit=lambda path: None,
+        ack=led.ack_flag,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 3, 45)),
+    )
+    press()
+
+    assert blink.started.wait(timeout=5)
+    assert _colours(spi) == [(0, 255, 0), MAGENTA]
+    blink.release.set()
+    led.close()
+
+    assert _colours(spi) == [(0, 255, 0), MAGENTA, (0, 255, 0)]
+    assert spi.overlapping_writes == 0
+
+
+def test_a_press_blinks_over_a_latched_critical_and_restores_the_red(tmp_path):
+    # WiFi has been down for hours, so the LED is red: exactly the case the
+    # local-first acknowledgement exists for. The latch has to come back.
+    spi = SimulatedSpiDevice()
+    blink = _HeldBlink()
+    led = LedController(Ws2812LedDriver(spi=spi), sleep=blink)
+    apply_led_state(led, LedState.CRITICAL)
+
+    press = make_flag_press_handler(
+        queue_dir=tmp_path / "queue",
+        submit=lambda path: None,
+        ack=led.ack_flag,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 3, 45)),
+    )
+    press()
+
+    assert blink.started.wait(timeout=5)
+    blink.release.set()
+    led.close()
+
+    red = (255, 0, 0)
+    assert _colours(spi) == [red, MAGENTA, red]
+    assert spi.overlapping_writes == 0
+
+
+def test_a_queued_marker_reaches_storage_before_the_next_segment(tmp_path):
+    # The outage case end to end: a press whose upload failed is still on the
+    # card when WiFi returns, and the segment it flags must not overtake it -
+    # the nightly run scores a segment against the markers in storage when it
+    # runs, and anything later falls to the DLQ's late-marker retry.
+    queue_dir = tmp_path / "queue"
+    storage = FakeStorageClient()
+    write_flag_marker(queue_dir, datetime(2026, 7, 4, 11, 59, 30))
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    stop = threading.Event()
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=lambda n: stop.set()),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        flush_markers=flag_worker.flush_markers,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.stop()
+
+    assert storage.uploaded == [
+        "device-abc/FLAG_20260704_115930.marker",
+        "device-abc/20260704_120000.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+
+
+def test_markers_only_ever_leave_on_the_flag_workers_own_thread(tmp_path):
+    # The invariant that lets both workers run without a lock on the queue:
+    # the upload worker asks for a flush instead of uploading a marker, so
+    # the two can never see the same marker and both send it.
+    queue_dir = tmp_path / "queue"
+
+    class ThreadRecordingStorage(FakeStorageClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.marker_threads: set[str] = set()
+
+        def upload(self, bucket, object_path, local_path):
+            if local_path.suffix == ".marker":
+                self.marker_threads.add(threading.current_thread().name)
+            super().upload(bucket, object_path, local_path)
+
+    storage = ThreadRecordingStorage()
+    for second in (10, 40):
+        write_flag_marker(queue_dir, datetime(2026, 7, 4, 11, 59, second))
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    stop = threading.Event()
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(
+            on_record=lambda n: stop.set() if n >= 2 else None
+        ),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        flush_markers=flag_worker.flush_markers,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.submit(write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 30)))
+    flag_worker.stop()
+
+    assert storage.marker_threads == {FLAG_UPLOAD_THREAD_NAME}
     assert list_pending(queue_dir) == []

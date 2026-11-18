@@ -793,7 +793,7 @@ def test_pending_segments_excludes_flag_markers(tmp_path):
 
 def _step(*, pending=True, stopping=False, retry_at=None, now=100.0, failures=0):
     return next_worker_step(
-        segments_pending=pending,
+        work_pending=pending,
         stopping=stopping,
         retry_at=retry_at,
         now=now,
@@ -842,7 +842,15 @@ def _queued(queue_dir: Path, *names: str) -> None:
         (queue_dir / name).write_bytes(b"segment")
 
 
-def _retry(queue_dir: Path, storage, health, led=None, limit=None, cancel=None):
+def _retry(
+    queue_dir: Path,
+    storage,
+    health,
+    led=None,
+    limit=None,
+    cancel=None,
+    flush_markers=None,
+):
     return retry_pending_segments(
         queue_dir=queue_dir,
         storage_client=storage,
@@ -852,6 +860,7 @@ def _retry(queue_dir: Path, storage, health, led=None, limit=None, cancel=None):
         upload_limit=limit or unlimited_upload_limit(),
         upload_health=health,
         cancel=cancel,
+        flush_markers=flush_markers,
     )
 
 
@@ -1021,3 +1030,137 @@ def test_a_cancelled_retry_round_leaves_the_rest_of_the_backlog_queued(tmp_path)
 
     assert outcome.uploaded == 2
     assert len(pending_segments(queue_dir)) == 2
+
+
+class OrderedStorageClient(FakeStorageClient):
+    """Records what reached storage, including what a marker flush sent."""
+
+    def flush_markers(self) -> bool:
+        self.uploaded.append("<marker flush>")
+        return True
+
+
+def test_flush_pending_sends_every_flag_marker_before_any_segment(tmp_path):
+    # The reboot-mid-backlog case. Name order puts the segments first, which
+    # is exactly backwards: a flush that cannot finish would upload a day's
+    # footage and leave its flags on the card for the next boot, and the
+    # nightly run would score those segments unflagged.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4", "20260704_120100.mp4")
+    (queue_dir / "FLAG_20260704_120030.marker").write_bytes(b"")
+    (queue_dir / "FLAG_20260704_120101.marker").write_bytes(b"")
+    storage = FakeStorageClient()
+
+    uploaded = flush_pending(queue_dir, storage, "device-abc", unlimited_upload_limit())
+
+    assert uploaded == 4
+
+    assert storage.uploaded == [
+        "device-abc/FLAG_20260704_120030.marker",
+        "device-abc/FLAG_20260704_120101.marker",
+        "device-abc/20260704_120000.mp4",
+        "device-abc/20260704_120100.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+
+
+def test_a_retry_round_flushes_the_markers_before_its_first_segment(tmp_path):
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4", "20260704_120100.mp4")
+    storage = OrderedStorageClient()
+
+    _retry(queue_dir, storage, UploadHealth(), flush_markers=storage.flush_markers)
+
+    assert storage.uploaded == [
+        "<marker flush>",
+        "device-abc/20260704_120000.mp4",
+        "device-abc/20260704_120100.mp4",
+    ]
+
+
+def test_a_retry_round_with_nothing_queued_does_not_flush_markers(tmp_path):
+    # No segment is about to reach storage, so there is nothing to order
+    # against and no reason to spend a request on a possibly dead network.
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    storage = OrderedStorageClient()
+
+    _retry(queue_dir, storage, UploadHealth(), flush_markers=storage.flush_markers)
+
+    assert storage.uploaded == []
+
+
+def test_a_cancelled_retry_round_does_not_flush_markers(tmp_path):
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    storage = OrderedStorageClient()
+
+    _retry(
+        queue_dir,
+        storage,
+        UploadHealth(),
+        cancel=lambda: True,
+        flush_markers=storage.flush_markers,
+    )
+
+    assert storage.uploaded == []
+
+
+def test_on_segment_complete_flushes_the_markers_before_its_own_upload(tmp_path):
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    storage = OrderedStorageClient()
+
+    on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=FakeCommandRunner(),
+        storage_client=storage,
+        status_client=FakeStatusClient(),
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        flush_markers=storage.flush_markers,
+    )
+
+    assert storage.uploaded == ["<marker flush>", "device-abc/20260704_120000.mp4"]
+
+
+def test_a_marker_flush_that_could_not_finish_still_uploads_the_segment(tmp_path):
+    # Footage outranks marker ordering, and the pipeline's late-marker
+    # handling is the backstop.
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    storage = FakeStorageClient()
+    health = UploadHealth()
+
+    result = on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=FakeCommandRunner(),
+        storage_client=storage,
+        status_client=FakeStatusClient(),
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        upload_health=health,
+        flush_markers=lambda: False,
+    )
+
+    assert storage.uploaded == ["device-abc/20260704_120000.mp4"]
+    assert result.upload_ok is True
+    # A marker that could not be sent is not a lost segment, so it must not
+    # count towards the Critical escalation.
+    assert health.consecutive_failures == 0

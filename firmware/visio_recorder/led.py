@@ -92,7 +92,9 @@ class LedController:
         # state it started from is still the one on the wire.
         self._generation = 0
         self._acks: queue.Queue[bool | None] = queue.Queue()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="led-controller", daemon=True
+        )
         self._thread.start()
 
     def set(self, color: tuple[int, int, int], pattern: LedPattern) -> None:

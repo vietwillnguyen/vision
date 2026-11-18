@@ -25,7 +25,7 @@ from visio_recorder.drivers import (
     Ws2812LedDriver,
 )
 from visio_recorder.flag_button import FlagUploadWorker, make_flag_press_handler
-from visio_recorder.led import LedDriver, LedState, apply_led_state
+from visio_recorder.led import LedController, LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
 from visio_recorder.onboarding import (
     NmcliConnectionActivator,
@@ -214,6 +214,9 @@ class LoopDeps:
     retry_backoff: RetryBackoff = field(default_factory=RetryBackoff)
     # The clock the upload worker measures its retry deadline against.
     monotonic: Callable[[], float] = time.monotonic
+    # FlagUploadWorker.flush_markers: run before any segment is uploaded, so
+    # flags reach storage with the footage the pipeline would score them on.
+    flush_markers: Callable[[], bool] | None = None
 
 
 def _push_recording_status(
@@ -287,6 +290,15 @@ def run_recording_loop(
     and a round already draining a backlog gives up rather than uploading
     through a halt.
 
+    ``deps.flush_markers`` is ``FlagUploadWorker.flush_markers``, and the
+    worker calls it before every segment it is about to upload - its own and
+    the first of each retry round - waiting for it to finish. That is what
+    keeps a segment from reaching storage ahead of the flags the nightly run
+    would score it with. Markers keep exactly one uploader, since this is a
+    request on that worker's queue rather than an upload made here, and its
+    result is ignored: footage outranks marker ordering, and the pipeline's
+    late-marker handling is the backstop.
+
     ``device_status.recording_active`` is pushed True before the first capture
     and False once the loop has exited for any reason (stop, halt, or a
     capture failure escaping), after the drain so the final row carries the
@@ -326,6 +338,7 @@ def run_recording_loop(
                     upload_limit=deps.upload_limit,
                     upload_health=upload_health,
                     cancel=stopping.is_set,
+                    flush_markers=deps.flush_markers,
                 )
             except Exception:
                 _logger.exception("queue retry round failed; worker continuing")
@@ -336,7 +349,7 @@ def run_recording_loop(
         while True:
             now = deps.monotonic()
             step = next_worker_step(
-                segments_pending=bool(pending_segments(deps.queue_dir)),
+                work_pending=bool(pending_segments(deps.queue_dir)),
                 stopping=stopping.is_set(),
                 retry_at=retry_at,
                 now=now,
@@ -373,6 +386,7 @@ def run_recording_loop(
                     data_dir=deps.data_dir,
                     upload_limit=deps.upload_limit,
                     upload_health=upload_health,
+                    flush_markers=deps.flush_markers,
                 )
             except Exception:
                 _logger.exception(
@@ -466,7 +480,9 @@ def main() -> int:
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
     battery_reader = PiJuiceBatteryReader()
-    led_driver = Ws2812LedDriver()
+    # Every LED write in the process goes through this one owner, which also
+    # renders the flag acknowledgement blink on its own thread.
+    led_driver = LedController(Ws2812LedDriver())
 
     startup = run_startup_sequence(battery_reader, led_driver)
     if not startup.proceed:
@@ -534,12 +550,13 @@ def main() -> int:
 
     # Held for the daemon's lifetime: gpiozero releases the pin (and the
     # callback) when the Button object is garbage collected.
-    flag_upload_worker = FlagUploadWorker(clients.storage, device_id)
+    flag_upload_worker = FlagUploadWorker(clients.storage, device_id, queue_dir)
     flag_button = GpioZeroFlagButton()
     flag_button.on_press(
         make_flag_press_handler(
             queue_dir=queue_dir,
             submit=flag_upload_worker.submit,
+            ack=led_driver.ack_flag,
         )
     )
 
@@ -557,11 +574,17 @@ def main() -> int:
         video=config.video,
         upload_limit=upload_limit,
         audio=audio,
+        flush_markers=flag_upload_worker.flush_markers,
     )
     try:
         run_recording_loop(deps, stop)
     finally:
+        # Order matters on the halt path: the loop has already applied the
+        # Critical red, so no new press can queue a blink over it, and any
+        # blink in flight is finished (restoring that red) before the
+        # controller stops rendering them.
         flag_upload_worker.stop()
+        led_driver.close()
     return 0
 
 
