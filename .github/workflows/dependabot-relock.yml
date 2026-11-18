@@ -30,7 +30,8 @@ name: dependabot-relock
 # The head checkout is sparse and non-cone: exactly the four manifest files
 # `uv lock` reads land on disk, so no source file, test fixture or build script
 # from the pull request is present to execute. Locking needs nothing more than
-# those four, and `uv lock --no-build` resolves them without building any source
+# those four, and both the `uv lock --check --no-build` staleness probe and the
+# `uv lock --no-build` relock resolve them without building any source
 # distribution, so no dependency build backend runs either (verified on a cold
 # uv cache; it produces a byte-identical lock to a full-tree relock).
 # relock-integration.sh then refuses to commit anything but integration/uv.lock,
@@ -77,12 +78,13 @@ name: dependabot-relock
 # workflow landed has no workflow_dispatch trigger in its own copy of the
 # target file and will warn until Dependabot recreates or rebases it.
 #
-# If the dispatch turns out not to work, a fine-grained token with
-# `contents: write` on this repository, stored as *both* an Actions secret and a
-# Dependabot secret named DEPENDABOT_RELOCK_TOKEN (GitHub's own recommendation
-# for workflows triggered by Dependabot and by others), makes the push itself
-# re-trigger CI the ordinary way. This workflow picks that secret up with no
-# edit.
+# This job authenticates with GITHUB_TOKEN only. If the dispatch turns out not
+# to work, the follow-up is a fine-grained token with `contents: write` on this
+# repository, held as a Dependabot secret (and as an Actions secret, GitHub's
+# own recommendation for workflows triggered by Dependabot and by others),
+# passed as the head checkout's `token:` so the push itself re-triggers CI the
+# ordinary way. Adopting it means dropping the dispatch at the same time
+# (RELOCK_DISPATCH=''), or every gate runs twice on the relocked head.
 
 on:
   pull_request_target:
@@ -90,13 +92,10 @@ on:
     # Only a sibling's manifest can invalidate integration/uv.lock. A bump that
     # changes only firmware/uv.lock or pipeline/uv.lock cannot, since
     # integration/uv.lock embeds their pyproject metadata and resolves its own
-    # transitive set - but both are listed anyway so a bump never slips past on
-    # a lock-only diff.
+    # transitive set, so lock-only diffs would only start no-op privileged runs.
     paths:
       - firmware/pyproject.toml
-      - firmware/uv.lock
       - pipeline/pyproject.toml
-      - pipeline/uv.lock
 
 # Only what the push and the dispatch need. No pull-requests, packages or
 # id-token scope. `actions: write` is the scope that dispatches a workflow;
@@ -141,7 +140,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           # Needed to push the relock commit back to the branch.
           persist-credentials: true
-          token: ${{ secrets.DEPENDABOT_RELOCK_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           sparse-checkout: |
             firmware/pyproject.toml
             pipeline/pyproject.toml
@@ -178,4 +177,4 @@ jobs:
           # interpolated into a shell command.
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           # `gh workflow run` dispatches the gating workflows after the push.
-          GH_TOKEN: ${{ secrets.DEPENDABOT_RELOCK_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

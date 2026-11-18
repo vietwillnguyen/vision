@@ -38,7 +38,7 @@ fail() {
 # --- fixture -----------------------------------------------------------------
 
 # Stub uv. State lives in $STUB_DIR:
-#   check-stale      present => `uv lock --check` fails as it does on a stale lock
+#   check-stale      present => `uv lock --check --no-build` fails as it does on a stale lock
 #   writes           lines of "<path>|<content>" that `uv lock` writes, relative
 #                    to the repo root; absent => it writes the usual relock
 #   lock-exit        exit code for `uv lock` (default 0)
@@ -51,7 +51,7 @@ write_stub() {
 printf '%s\n' "$*" >> "$STUB_DIR/calls"
 root=$(git rev-parse --show-toplevel)
 case "$*" in
-  "lock --check")
+  "lock --check --no-build")
     if [ -e "$STUB_DIR/check-stale" ]; then
       echo "error: The lockfile at \`uv.lock\` needs to be updated, but \`--check\` was provided." >&2
       exit 2
@@ -196,9 +196,11 @@ else
   fail "exit $? ($(cat "$workdir/err"))"
 fi
 
-new_case "locks with --no-build, so no dependency build backend can run"
+new_case "checks and locks with --no-build, so no dependency build backend can run"
 stale
 if run "$BRANCH"; then
+  grep -qx 'lock --check --no-build' "$STUB_DIR/calls" || fail "the staleness probe ran without --no-build: $(cat "$STUB_DIR/calls")"
+  grep -qx 'lock --check' "$STUB_DIR/calls" && fail "called a bare uv lock --check"
   grep -qx 'lock --no-build' "$STUB_DIR/calls" || fail "uv lock was called without --no-build: $(cat "$STUB_DIR/calls")"
   grep -qx 'lock' "$STUB_DIR/calls" && fail "called a bare uv lock"
 else
@@ -277,7 +279,7 @@ if run "$BRANCH"; then
 else
   remote_moved && fail "pushed from an incomplete checkout"
   grep -q 'firmware/pyproject.toml' "$workdir/err" || fail "error does not name the path: $(cat "$workdir/err")"
-  grep -qx 'lock --check' "$STUB_DIR/calls" && fail "ran uv before checking the checkout"
+  [ -s "$STUB_DIR/calls" ] && fail "ran uv before checking the checkout: $(cat "$STUB_DIR/calls")"
 fi
 
 new_case "dispatches every gating workflow on the branch after pushing"
@@ -329,6 +331,8 @@ stale
 if RELOCK_REPO='' GITHUB_REPOSITORY='' run "$BRANCH"; then
   fail "pushed without knowing where to dispatch"
 else
+  remote_moved && fail "pushed before failing on the unknown repository"
+  [ -s "$STUB_DIR/calls" ] && fail "ran uv before failing on the unknown repository: $(cat "$STUB_DIR/calls")"
   grep -q 'GITHUB_REPOSITORY' "$workdir/err" || fail "unexpected error: $(cat "$workdir/err")"
 fi
 
