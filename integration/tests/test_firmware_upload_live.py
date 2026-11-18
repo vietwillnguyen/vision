@@ -32,8 +32,14 @@ from typing import Any, cast
 import pytest
 from supabase import Client, create_client
 
+from visio_recorder.led import LedPattern
 from visio_recorder.muxer import SubprocessCommandRunner, mux_segment
-from visio_recorder.recording_loop import flush_pending
+from visio_recorder.recording_loop import (
+    UPLOAD_FAILURES_TO_CRITICAL,
+    UploadHealth,
+    flush_pending,
+    retry_pending_segments,
+)
 from visio_recorder.segment_size import DEFAULT_MAX_UPLOAD_BYTES
 from visio_recorder.supabase_clients import SupabaseStorage
 from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
@@ -83,6 +89,19 @@ def owner(live_supabase_env) -> Iterator[_Owner]:
         admin.auth.admin.delete_user(owner_id)
 
 
+class _HealthyBattery:
+    def get_charge_pct(self) -> int:
+        return 85
+
+
+class _RecordingLed:
+    def __init__(self) -> None:
+        self.colors: list[tuple[int, int, int]] = []
+
+    def set(self, color: tuple[int, int, int], pattern: LedPattern) -> None:
+        self.colors.append(color)
+
+
 def _limit(max_bytes: int = DEFAULT_MAX_UPLOAD_BYTES) -> UploadLimit:
     return UploadLimit(
         max_bytes=max_bytes,
@@ -120,6 +139,41 @@ def test_next_boot_flush_clears_a_segment_that_already_reached_storage(
 
     assert uploaded == 1
     assert list_pending(queue_dir) == []
+
+
+def test_the_in_process_retry_clears_a_segment_that_already_reached_storage(
+    owner: _Owner, tmp_path: Path
+):
+    # The same power cut, but recovered during the run instead of at the next
+    # boot: the upload worker's in-process retry round goes through the same
+    # adapter, so it must also treat the byte-identical stored object as
+    # uploaded and clear the queue entry rather than failing on the duplicate
+    # for the rest of the day. Pinned here as well as in firmware's mocked
+    # suite because x-upsert is a request header only the real server honours.
+    queue_dir = tmp_path / "queue"
+    segment = tmp_path / "20260714_093000.mp4"
+    segment.write_bytes(os.urandom(1024 * 1024))
+    queued = enqueue(queue_dir, segment)
+    storage = SupabaseStorage(owner.client)
+    upload_segment(storage, owner.device_id, queued)
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+    led = _RecordingLed()
+
+    outcome = retry_pending_segments(
+        queue_dir=queue_dir,
+        storage_client=storage,
+        led_driver=led,
+        battery_reader=_HealthyBattery(),
+        device_id=owner.device_id,
+        upload_limit=_limit(),
+        upload_health=health,
+    )
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (1, 0, 0)
+    assert list_pending(queue_dir) == []
+    # The retry draining the queue is what clears the Critical LED.
+    assert not health.is_critical
+    assert led.colors[-1] == (0, 255, 0)
 
 
 def test_a_different_file_under_an_existing_key_is_refused_not_overwritten(

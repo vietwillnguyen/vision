@@ -34,7 +34,9 @@ class FlagUploadWorker:
     marker is still uploaded immediately - as soon as this thread picks it
     up - so it reaches the pipeline before tonight's run. On upload failure
     the marker stays in the queue dir, where the next boot's
-    ``flush_pending`` retries it - the same retry contract as segments.
+    ``flush_pending`` retries it. Unlike a segment it gets no in-process
+    retry: the upload worker's retry rounds skip markers so the two threads
+    never race on one.
     """
 
     def __init__(self, storage_client: StorageClient, device_id: str) -> None:

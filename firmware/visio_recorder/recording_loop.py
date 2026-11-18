@@ -1,14 +1,21 @@
 import logging
 import shutil
-from dataclasses import asdict, dataclass
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, mux_segment
-from visio_recorder.upload_limit import UploadLimit, rejected_dir, upload_queued
+from visio_recorder.upload_limit import (
+    UploadLimit,
+    UploadOutcome,
+    rejected_dir,
+    upload_queued,
+)
 from visio_recorder.upload_queue import enqueue, list_pending
 from visio_recorder.uploader import StorageClient
 
@@ -16,7 +23,42 @@ _BYTES_PER_GB = 1024**3
 
 UPLOAD_FAILURES_TO_CRITICAL = 3
 
+RETRY_BASE_SEC = 30.0
+RETRY_MAX_SEC = 480.0
+
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RetryBackoff:
+    """How long the upload worker waits before retrying the queue in process.
+
+    The wait doubles per consecutive failure and is capped, so a brief WiFi
+    drop is recovered from within half a minute while a long outage settles
+    into one attempt every eight minutes instead of hammering a dead network
+    on a battery. The cap matters more than the base: an outage can last all
+    day, and every attempt costs radio power the pendant is running on.
+
+    The defaults are read against a 60 s segment (``segment_size``): the first
+    retry lands inside one segment period, and even the capped wait is short
+    next to the hours a next-boot-only retry could cost.
+    """
+
+    base_sec: float = RETRY_BASE_SEC
+    max_sec: float = RETRY_MAX_SEC
+
+    def delay_sec(self, consecutive_failures: int) -> float:
+        """Seconds to wait before the next retry round.
+
+        ``consecutive_failures`` is ``UploadHealth``'s counter, so the schedule
+        is driven by the same state that drives the Critical LED: the wait is
+        reset by exactly the thing that clears the red, a successful upload.
+        Zero failures (a queue inherited from the startup flush) waits the base
+        delay.
+        """
+        if consecutive_failures <= 1:
+            return self.base_sec
+        return min(self.base_sec * 2.0 ** (consecutive_failures - 1), self.max_sec)
 
 
 @dataclass
@@ -62,12 +104,97 @@ class SegmentResult:
     upload_ok: bool
 
 
-def next_led_state(battery_is_low: bool, is_uploading: bool) -> LedState:
+@dataclass
+class UploadHealth:
+    """How many uploads have failed in a row, and so whether to show Critical.
+
+    The upload worker owns one of these for the whole run.
+    It exists because the Critical LED is a *latched* condition, not a
+    per-segment one: the spec says three consecutive upload failures escalate
+    to the Critical red flash and "any subsequent successful upload resets the
+    counter", so from the escalation until that success the LED must stay red.
+    Deriving the LED state from this counter is what keeps a later segment's
+    Uploading blue and Recording green from painting over the red; before this
+    existed the counter lived in the worker, which re-applied Critical only
+    *after* ``on_segment_complete`` had already written both of those colours.
+
+    A rejected segment counts as a failure like a failed upload does, so
+    ``record`` takes the whole segment outcome, not just the upload's.
+    """
+
+    consecutive_failures: int = 0
+
+    @property
+    def is_critical(self) -> bool:
+        return self.consecutive_failures >= UPLOAD_FAILURES_TO_CRITICAL
+
+    def record(self, *, upload_ok: bool) -> None:
+        if upload_ok:
+            self.consecutive_failures = 0
+        else:
+            self.consecutive_failures += 1
+
+
+def next_led_state(
+    battery_is_low: bool, is_uploading: bool, upload_critical: bool = False
+) -> LedState:
+    """The one LED state a given set of conditions calls for.
+
+    ``upload_critical`` outranks everything: a device losing footage is worth
+    more than reporting a low battery or an upload in flight, and it is also
+    what the battery-halt path already does by applying Critical last.
+    """
+    if upload_critical:
+        return LedState.CRITICAL
     if battery_is_low:
         return LedState.LOW_BATTERY
     if is_uploading:
         return LedState.UPLOADING
     return LedState.RECORDING
+
+
+class WorkerAction(Enum):
+    WAIT_FOR_SEGMENT = "wait_for_segment"
+    WAIT_UNTIL_RETRY = "wait_until_retry"
+    RETRY_NOW = "retry_now"
+
+
+@dataclass(frozen=True)
+class WorkerStep:
+    action: WorkerAction
+    retry_at: float | None
+
+
+def next_worker_step(
+    *,
+    segments_pending: bool,
+    stopping: bool,
+    retry_at: float | None,
+    now: float,
+    retry_backoff: RetryBackoff,
+    consecutive_failures: int,
+) -> WorkerStep:
+    """What the upload worker does next, and the retry deadline it keeps.
+
+    Pulled out of the worker thread for the same reason as ``next_led_state``:
+    the decision is the part worth pinning, and here it needs no threads.
+
+    With nothing queued, or the loop stopping, there is no deadline and the
+    worker waits for its next segment or the shutdown sentinel; a stopping
+    worker never starts a round, since ``cancel`` would end it before its
+    first file. Otherwise the deadline is armed once, ``retry_backoff`` after
+    ``now`` for the live ``consecutive_failures``, and kept as it is until the
+    round it schedules has run: a segment arriving consumes the remaining wait
+    rather than restarting it, so segments arriving more often than the
+    backoff cannot postpone the retry. Once it has passed, retry now.
+    """
+    if stopping or not segments_pending:
+        return WorkerStep(WorkerAction.WAIT_FOR_SEGMENT, retry_at=None)
+    if retry_at is None:
+        retry_at = now + retry_backoff.delay_sec(consecutive_failures)
+    if retry_at <= now:
+        return WorkerStep(WorkerAction.RETRY_NOW, retry_at=retry_at)
+    return WorkerStep(WorkerAction.WAIT_UNTIL_RETRY, retry_at=retry_at)
 
 
 def build_device_status(
@@ -156,27 +283,195 @@ def recover_orphaned_segments(
     return sorted(recovered, key=lambda p: p.name)
 
 
+def pending_segments(queue_dir: Path) -> list[Path]:
+    """The queued segments the upload worker may retry while recording.
+
+    Flag markers are left out. ``FlagUploadWorker`` uploads and unlinks those
+    on its own thread for as long as the daemon runs, so draining them from
+    here too would race it: both threads would see the object missing, both
+    would upload, and the loser would be told the object already exists - a
+    failure that is not a failure, feeding the Critical LED escalation. A
+    marker keeps its documented contract instead, the next boot's
+    ``flush_pending``, which runs before that worker exists.
+    """
+    return [path for path in list_pending(queue_dir) if path.suffix == ".mp4"]
+
+
+def drain_pending(
+    paths: list[Path],
+    storage_client: StorageClient,
+    device_id: str,
+    upload_limit: UploadLimit,
+    cancel: Callable[[], bool] | None = None,
+    before_first_attempt: Callable[[], None] | None = None,
+) -> UploadOutcome:
+    """Upload each of ``paths``, returning the totals across all of them.
+
+    A queued segment over the upload limit (for example one recorded by an
+    older firmware with five-minute segments) is split first, so ``uploaded``
+    counts files that reached storage, not queue entries.
+
+    ``cancel`` is checked before each file, not inside one: it lets the caller
+    give up on a backlog (the daemon is stopping, or the battery hit the halt
+    threshold) without abandoning an upload mid-flight. Whatever is left is
+    still queued, so the next round or the next boot takes it.
+
+    ``before_first_attempt`` runs once, just before the first upload is tried,
+    and not at all when nothing is: ``attempted`` on the result says how many
+    files were tried, so a caller can tell a drain that did nothing from one
+    whose every upload succeeded.
+    """
+    total = UploadOutcome()
+    for path in paths:
+        if cancel is not None and cancel():
+            _logger.info("stopping the queue drain early; %s stays queued", path.name)
+            break
+        if total.attempted == 0 and before_first_attempt is not None:
+            before_first_attempt()
+        total.attempted += 1
+        try:
+            outcome = upload_queued(path, storage_client, device_id, upload_limit)
+        except Exception:
+            _logger.exception("failed to upload queued segment %s", path)
+            total.failed += 1
+            continue
+        total.uploaded += outcome.uploaded
+        total.failed += outcome.failed
+        total.rejected += outcome.rejected
+    return total
+
+
 def flush_pending(
     queue_dir: Path,
     storage_client: StorageClient,
     device_id: str,
     upload_limit: UploadLimit,
 ) -> int:
-    """Upload everything queued; returns how many files reached storage.
+    """Upload everything queued at startup; returns how many reached storage.
 
-    A queued segment over the upload limit (for example one recorded by an
-    older firmware with five-minute segments) is split first, so the count is
-    of uploaded files, not of queue entries.
+    Flag markers included, unlike ``pending_segments``: this runs before the
+    flag-upload worker exists, so there is nothing to race.
     """
-    uploaded = 0
-    for path in list_pending(queue_dir):
-        try:
-            outcome = upload_queued(path, storage_client, device_id, upload_limit)
-        except Exception:
-            _logger.exception("flush_pending failed to upload queued segment %s", path)
-            continue
-        uploaded += outcome.uploaded
-    return uploaded
+    return drain_pending(
+        list_pending(queue_dir), storage_client, device_id, upload_limit
+    ).uploaded
+
+
+def _upload_succeeded(outcome: UploadOutcome) -> bool:
+    # A rejected (unsplittable, oversized) segment is lost footage, so it
+    # counts towards the Critical LED like a failed upload does.
+    return outcome.failed == 0 and outcome.rejected == 0
+
+
+def _show_upload_led(
+    led_driver: LedDriver,
+    *,
+    battery_is_low: bool,
+    is_uploading: bool,
+    upload_health: UploadHealth,
+) -> None:
+    apply_led_state(
+        led_driver,
+        next_led_state(
+            battery_is_low,
+            is_uploading=is_uploading,
+            upload_critical=upload_health.is_critical,
+        ),
+    )
+
+
+def _upload_showing_led(
+    *,
+    upload: Callable[[Callable[[], None]], UploadOutcome],
+    led_driver: LedDriver,
+    battery_is_low: bool,
+    upload_health: UploadHealth,
+) -> UploadOutcome:
+    """Run one upload attempt bracketed by the LED states it should show.
+
+    Both states are derived from ``upload_health``, which is also updated from
+    the attempt's own outcome before the second one. So a run already
+    escalated to Critical shows red for the whole attempt instead of blue then
+    green, and the success that resets the counter turns the LED green on its
+    own attempt rather than one attempt later.
+
+    ``upload`` is handed the call that shows the first state and makes it just
+    before it tries a file. One that tries none reports ``attempted == 0`` and
+    leaves both the LED and ``upload_health`` untouched: "nothing failed"
+    would otherwise clear Critical without anything having reached storage.
+    """
+    outcome = upload(
+        lambda: _show_upload_led(
+            led_driver,
+            battery_is_low=battery_is_low,
+            is_uploading=True,
+            upload_health=upload_health,
+        )
+    )
+    if outcome.attempted == 0:
+        return outcome
+    upload_health.record(upload_ok=_upload_succeeded(outcome))
+    _show_upload_led(
+        led_driver,
+        battery_is_low=battery_is_low,
+        is_uploading=False,
+        upload_health=upload_health,
+    )
+    return outcome
+
+
+def retry_pending_segments(
+    *,
+    queue_dir: Path,
+    storage_client: StorageClient,
+    led_driver: LedDriver,
+    battery_reader: BatteryReader,
+    device_id: str,
+    upload_limit: UploadLimit,
+    upload_health: UploadHealth,
+    cancel: Callable[[], bool] | None = None,
+) -> UploadOutcome:
+    """One in-process retry round over the segments still queued.
+
+    Called by the upload worker when its retry deadline passes, so a segment
+    whose upload failed is retried during the same run rather than waiting for
+    the next boot's ``flush_pending``. It is the same upload
+    path ``on_segment_complete`` uses, so the 50 MB limit is handled the same
+    way: an oversized segment is split and its parts uploaded, and one that
+    cannot be split is moved to ``rejected/`` and so leaves the queue for
+    good - it can never become a retry loop.
+
+    The round's outcome feeds the same ``UploadHealth`` counter a segment's own
+    upload does, so retry failures escalate to Critical and a retry success
+    clears it. A round that tries no file, because the queue is empty or
+    ``cancel`` was already true, is a no-op that deliberately leaves the
+    counter and the LED alone: reporting "nothing failed" would clear Critical
+    without anything having reached storage.
+
+    No ``device_status`` upsert of its own: the next segment completes within
+    one segment period and reports the new ``segments_pending`` and
+    ``segments_uploaded_today`` then, which keeps this round off the status
+    client's failure path and out of the question of what ``audio_active``
+    would mean with no capture involved.
+    """
+    paths = pending_segments(queue_dir)
+    battery_status = read_battery_status(battery_reader)
+
+    def drain(show_uploading: Callable[[], None]) -> UploadOutcome:
+        def before_first_attempt() -> None:
+            _logger.info("retrying %d queued segment(s) in process", len(paths))
+            show_uploading()
+
+        return drain_pending(
+            paths, storage_client, device_id, upload_limit, cancel, before_first_attempt
+        )
+
+    return _upload_showing_led(
+        upload=drain,
+        led_driver=led_driver,
+        battery_is_low=battery_status.is_low,
+        upload_health=upload_health,
+    )
 
 
 def on_segment_complete(
@@ -193,25 +488,40 @@ def on_segment_complete(
     disk_stats_reader: DiskStatsReader,
     data_dir: Path,
     upload_limit: UploadLimit,
+    upload_health: UploadHealth | None = None,
 ) -> SegmentResult:
+    """Mux, queue and upload one finished capture, driving the LED and status.
+
+    ``upload_health`` is the worker's run-long consecutive-failure counter.
+    Both LED states are derived from it, so a run already escalated to
+    Critical keeps showing red through this segment's whole upload instead of
+    blinking blue then green; the counter is updated from this segment's
+    outcome before the second LED call, so a success clears the red here
+    rather than one segment later. Omitting it uploads the segment with no
+    escalation history, which is what a single-segment caller wants.
+    """
+    upload_health = UploadHealth() if upload_health is None else upload_health
     mp4_path = mux_segment(command_runner, h264_path, framerate)
     h264_path.unlink()
     queued_path = enqueue(queue_dir, mp4_path)
 
     battery_status = read_battery_status(battery_reader)
-    apply_led_state(
-        led_driver, next_led_state(battery_status.is_low, is_uploading=True)
-    )
 
-    outcome = upload_queued(queued_path, storage_client, device_id, upload_limit)
+    def upload(show_uploading: Callable[[], None]) -> UploadOutcome:
+        show_uploading()
+        return replace(
+            upload_queued(queued_path, storage_client, device_id, upload_limit),
+            attempted=1,
+        )
+
+    outcome = _upload_showing_led(
+        upload=upload,
+        led_driver=led_driver,
+        battery_is_low=battery_status.is_low,
+        upload_health=upload_health,
+    )
     segments_uploaded_today += outcome.uploaded
-    # A rejected (unsplittable, oversized) segment is lost footage, so it
-    # counts towards the Critical LED like a failed upload does.
-    upload_ok = outcome.failed == 0 and outcome.rejected == 0
-
-    apply_led_state(
-        led_driver, next_led_state(battery_status.is_low, is_uploading=False)
-    )
+    upload_ok = _upload_succeeded(outcome)
 
     status = build_device_status(
         device_id=device_id,

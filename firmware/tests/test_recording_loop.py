@@ -6,29 +6,42 @@ from pathlib import Path
 import pytest
 
 from tests.fakes import (
+    FailingSplitRunner,
     FailingStorageClient,
     FakeBatteryReader,
     FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
+    FakeDurationProbe,
     FakeLedDriver,
     FakeStatusClient,
     FakeStorageClient,
     FakeStorageClientFailingOn,
+    SizeCheckedStorageClient,
     unlimited_upload_limit,
 )
 from visio_recorder.capture import VideoSettings
 from visio_recorder.daemon import LoopDeps, run_recording_loop
 from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
+    RETRY_BASE_SEC,
+    RETRY_MAX_SEC,
+    UPLOAD_FAILURES_TO_CRITICAL,
     DiskStats,
+    RetryBackoff,
     ShutilDiskStatsReader,
+    UploadHealth,
+    WorkerAction,
+    WorkerStep,
     flush_pending,
     next_led_state,
+    next_worker_step,
     on_segment_complete,
+    pending_segments,
     recover_orphaned_segments,
+    retry_pending_segments,
 )
-from visio_recorder.upload_limit import UploadLimit
+from visio_recorder.upload_limit import UploadLimit, rejected_dir
 from visio_recorder.upload_queue import list_pending
 
 
@@ -49,6 +62,108 @@ def test_next_led_state_shows_recording_when_idle_and_healthy():
     assert (
         next_led_state(battery_is_low=False, is_uploading=False) == LedState.RECORDING
     )
+
+
+def test_next_led_state_lets_upload_critical_outrank_every_other_condition():
+    for battery_is_low in (False, True):
+        for is_uploading in (False, True):
+            assert (
+                next_led_state(
+                    battery_is_low, is_uploading=is_uploading, upload_critical=True
+                )
+                == LedState.CRITICAL
+            )
+
+
+def test_upload_health_escalates_at_three_failures_and_stays_critical():
+    # Snapshotted into a list rather than asserted in the loop: re-reading
+    # health.is_critical after an assert narrows it for mypy, which then calls
+    # the opposite assert unreachable.
+    health = UploadHealth()
+    escalated = []
+    for failures in range(1, UPLOAD_FAILURES_TO_CRITICAL + 3):
+        health.record(upload_ok=False)
+        escalated.append((failures, health.is_critical))
+
+    assert UPLOAD_FAILURES_TO_CRITICAL == 3
+    assert escalated == [(1, False), (2, False), (3, True), (4, True), (5, True)]
+
+
+def test_upload_health_is_cleared_by_one_successful_upload():
+    health = UploadHealth(consecutive_failures=7)
+
+    before = health.is_critical
+    health.record(upload_ok=True)
+    after = health.is_critical
+
+    assert (before, after) == (True, False)
+    assert health.consecutive_failures == 0
+
+
+def test_on_segment_complete_holds_critical_red_across_a_failing_segment(tmp_path):
+    # The LED bug end to end at the function level: a segment handled while
+    # the run is already Critical must not write the upload blue or the
+    # recording green at all.
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    led = FakeLedDriver()
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+
+    result = on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=FakeCommandRunner(),
+        storage_client=FailingStorageClient(),
+        status_client=FakeStatusClient(),
+        led_driver=led,
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        upload_health=health,
+    )
+
+    assert result.upload_ok is False
+    assert led.calls == [((255, 0, 0), LedPattern.FLASHING)] * 2
+    assert health.consecutive_failures == UPLOAD_FAILURES_TO_CRITICAL + 1
+
+
+def test_on_segment_complete_clears_critical_red_on_the_success_itself(tmp_path):
+    # The clear rule from the spec: "any subsequent successful upload resets
+    # the counter". The restore LED call must already see the reset, so the
+    # green lands on the successful segment rather than one segment later.
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    led = FakeLedDriver()
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+
+    on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=FakeCommandRunner(),
+        storage_client=FakeStorageClient(),
+        status_client=FakeStatusClient(),
+        led_driver=led,
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        upload_health=health,
+    )
+
+    assert led.calls == [
+        ((255, 0, 0), LedPattern.FLASHING),  # still Critical while uploading
+        ((0, 255, 0), LedPattern.SOLID),  # the success clears it
+    ]
+    assert not health.is_critical
 
 
 def test_on_segment_complete_happy_path(tmp_path):
@@ -637,3 +752,272 @@ def test_recover_orphaned_segments_remuxes_a_leftover_transport_stream(tmp_path)
 
     assert [p.name for p in recovered] == ["20261116_090000.mp4"]
     assert not (data_dir / "20261116_090000.ts").exists()
+
+
+def test_retry_backoff_delays_increase_and_stay_bounded():
+    backoff = RetryBackoff()
+    delays = [backoff.delay_sec(n) for n in range(0, 12)]
+
+    # A queue inherited from the startup flush (no failures yet) waits the
+    # base delay, same as the first failure.
+    assert delays[0] == delays[1] == RETRY_BASE_SEC
+    # Doubling per failure from there, then flat at the cap and never past it.
+    assert delays[1:6] == [30.0, 60.0, 120.0, 240.0, 480.0]
+    assert delays[5:] == [RETRY_MAX_SEC] * len(delays[5:])
+    assert delays == sorted(delays)
+    assert max(delays) == RETRY_MAX_SEC
+    # Bounded on both ends: a wait is always long enough to be a backoff.
+    assert min(delays) == RETRY_BASE_SEC > 0
+
+
+def test_retry_backoff_is_configurable_for_tests_and_tuning():
+    backoff = RetryBackoff(base_sec=0.5, max_sec=1.5)
+
+    assert [backoff.delay_sec(n) for n in range(1, 5)] == [0.5, 1.0, 1.5, 1.5]
+
+
+def test_pending_segments_excludes_flag_markers(tmp_path):
+    # Flag markers belong to FlagUploadWorker while the daemon runs; retrying
+    # them here as well would race it and manufacture spurious failures.
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "20260704_120000.mp4").write_bytes(b"segment")
+    (queue_dir / "FLAG_20260704_120005.marker").touch()
+
+    assert [p.name for p in list_pending(queue_dir)] == [
+        "20260704_120000.mp4",
+        "FLAG_20260704_120005.marker",
+    ]
+    assert [p.name for p in pending_segments(queue_dir)] == ["20260704_120000.mp4"]
+
+
+def _step(*, pending=True, stopping=False, retry_at=None, now=100.0, failures=0):
+    return next_worker_step(
+        segments_pending=pending,
+        stopping=stopping,
+        retry_at=retry_at,
+        now=now,
+        retry_backoff=RetryBackoff(base_sec=30.0, max_sec=480.0),
+        consecutive_failures=failures,
+    )
+
+
+def test_the_worker_waits_for_a_segment_with_nothing_queued():
+    assert _step(pending=False, retry_at=50.0) == WorkerStep(
+        WorkerAction.WAIT_FOR_SEGMENT, retry_at=None
+    )
+
+
+def test_a_stopping_worker_never_starts_a_retry_round_even_with_a_lapsed_deadline():
+    # The round would be cancelled before its first file; the worker goes
+    # straight to collecting the shutdown sentinel instead.
+    assert _step(stopping=True, retry_at=50.0, now=100.0) == WorkerStep(
+        WorkerAction.WAIT_FOR_SEGMENT, retry_at=None
+    )
+
+
+def test_a_newly_queued_backlog_arms_the_deadline_from_the_live_failure_count():
+    assert _step(retry_at=None, now=100.0, failures=3) == WorkerStep(
+        WorkerAction.WAIT_UNTIL_RETRY, retry_at=220.0
+    )
+
+
+def test_an_armed_deadline_is_kept_rather_than_restarted():
+    # A segment arriving wakes the worker before the deadline; the next step
+    # keeps the same deadline, whatever the failure count has grown to, so
+    # the wait shrinks instead of starting over.
+    assert _step(retry_at=150.0, now=120.0, failures=5) == WorkerStep(
+        WorkerAction.WAIT_UNTIL_RETRY, retry_at=150.0
+    )
+
+
+def test_a_passed_deadline_retries_now():
+    assert _step(retry_at=150.0, now=150.0).action is WorkerAction.RETRY_NOW
+    assert _step(retry_at=150.0, now=999.0).action is WorkerAction.RETRY_NOW
+
+
+def _queued(queue_dir: Path, *names: str) -> None:
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (queue_dir / name).write_bytes(b"segment")
+
+
+def _retry(queue_dir: Path, storage, health, led=None, limit=None, cancel=None):
+    return retry_pending_segments(
+        queue_dir=queue_dir,
+        storage_client=storage,
+        led_driver=led or FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        upload_limit=limit or unlimited_upload_limit(),
+        upload_health=health,
+        cancel=cancel,
+    )
+
+
+def test_retry_pending_segments_drains_the_queue_and_clears_critical(tmp_path):
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4", "20260704_120001.mp4")
+    storage = FakeStorageClient()
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+    led = FakeLedDriver()
+
+    outcome = _retry(queue_dir, storage, health, led=led)
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (2, 0, 0)
+    assert list_pending(queue_dir) == []
+    assert not health.is_critical
+    # Red while the round runs, green once the success has reset the counter.
+    assert led.calls == [
+        ((255, 0, 0), LedPattern.FLASHING),
+        ((0, 255, 0), LedPattern.SOLID),
+    ]
+
+
+def test_retry_failures_feed_the_same_counter_that_drives_critical(tmp_path):
+    # The round is one more consecutive failure, exactly like a segment's own
+    # failed upload, so a device whose retries keep failing still goes red.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL - 1)
+    led = FakeLedDriver()
+
+    outcome = _retry(queue_dir, FailingStorageClient(), health, led=led)
+
+    assert (outcome.uploaded, outcome.failed) == (0, 1)
+    assert health.consecutive_failures == UPLOAD_FAILURES_TO_CRITICAL
+    assert led.calls[-1] == ((255, 0, 0), LedPattern.FLASHING)
+    assert list_pending(queue_dir) != []
+
+
+def test_retry_pending_segments_on_an_empty_queue_leaves_critical_latched(tmp_path):
+    # Nothing reached storage, so nothing may clear the red - otherwise a
+    # no-op round would report success and un-escalate a real outage.
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "FLAG_20260704_120005.marker").touch()
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+    led = FakeLedDriver()
+    storage = FakeStorageClient()
+
+    outcome = _retry(queue_dir, storage, health, led=led)
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 0, 0)
+    assert health.consecutive_failures == UPLOAD_FAILURES_TO_CRITICAL
+    assert storage.uploaded == []
+    assert led.calls == []
+
+
+def test_a_retry_round_cancelled_before_its_first_file_leaves_critical_latched(
+    tmp_path,
+):
+    # The same rule as the empty queue, reached through cancel: a round that
+    # tried nothing must not report "nothing failed" and clear the red.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+    led = FakeLedDriver()
+    storage = FakeStorageClient()
+
+    outcome = _retry(queue_dir, storage, health, led=led, cancel=lambda: True)
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 0, 0)
+    assert outcome.attempted == 0
+    assert health.consecutive_failures == UPLOAD_FAILURES_TO_CRITICAL
+    assert health.is_critical
+    assert storage.uploaded == []
+    assert led.calls == []
+    assert [p.name for p in pending_segments(queue_dir)] == ["20260704_120000.mp4"]
+
+
+def test_retry_moves_an_unsplittable_oversized_segment_aside_exactly_once(tmp_path):
+    # The 50 MB limit cannot become a retry loop: the first round moves a
+    # segment that will not fit and cannot be split to rejected/ beside the
+    # queue, where device_status.segments_rejected counts it for the app and
+    # nothing ever retries it again. It is kept on the card for manual
+    # recovery, not deleted.
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir(parents=True)
+    (queue_dir / "20260704_120000.mp4").write_bytes(b"x" * 4096)
+    storage = FakeStorageClient()
+    health = UploadHealth()
+    # An ffmpeg that cannot split: the segment can never be made to fit.
+    limit = UploadLimit(
+        max_bytes=1024,
+        runner=FailingSplitRunner(),
+        probe=FakeDurationProbe(60.0),
+    )
+
+    first = _retry(queue_dir, storage, health, limit=limit)
+    second = _retry(queue_dir, storage, health, limit=limit)
+
+    assert (first.uploaded, first.failed, first.rejected) == (0, 0, 1)
+    # Nothing left to retry, so the second round is a no-op, not a rejection.
+    assert (second.uploaded, second.failed, second.rejected) == (0, 0, 0)
+    assert pending_segments(queue_dir) == []
+    assert [p.name for p in rejected_dir(queue_dir).iterdir()] == [
+        "20260704_120000.mp4"
+    ]
+    assert storage.uploaded == []
+
+
+def test_retry_after_a_crash_between_upload_and_unlink_is_idempotent(tmp_path):
+    # The overlap the firstmate analysis flagged: the storage adapter sends
+    # x-upsert false, so a segment that reached storage before a crash left a
+    # queue entry whose every retry could fail on the duplicate. main already
+    # closes this by checking the stored object's size first and treating a
+    # byte-identical object as uploaded; this pins that the in-process retry
+    # inherits it and clears the queue entry rather than retrying forever.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    storage = SizeCheckedStorageClient()
+    # The pre-crash upload: object in storage, file still queued.
+    storage.upload(
+        "segments", "device-abc/20260704_120000.mp4", queue_dir / "20260704_120000.mp4"
+    )
+    health = UploadHealth(consecutive_failures=UPLOAD_FAILURES_TO_CRITICAL)
+
+    outcome = _retry(queue_dir, storage, health)
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (1, 0, 0)
+    assert list_pending(queue_dir) == []
+    assert not health.is_critical
+    assert storage.bodies_sent == 1
+
+
+def test_retry_refuses_to_overwrite_a_different_file_under_an_existing_key(tmp_path):
+    # The other half of that contract: object keys are second-resolution local
+    # timestamps, so a clock step back can name a new segment after one
+    # already stored. That must stay queued and count as a failure, never
+    # replace the earlier recording.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    storage = SizeCheckedStorageClient()
+    storage.stored["device-abc/20260704_120000.mp4"] = 999_999
+    health = UploadHealth()
+
+    outcome = _retry(queue_dir, storage, health)
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 1, 0)
+    assert storage.stored["device-abc/20260704_120000.mp4"] == 999_999
+    assert [p.name for p in list_pending(queue_dir)] == ["20260704_120000.mp4"]
+    assert health.consecutive_failures == 1
+
+
+def test_a_cancelled_retry_round_leaves_the_rest_of_the_backlog_queued(tmp_path):
+    # A battery halt or a stop signal during a long drain must not keep
+    # uploading on a dying battery; whatever is left stays queued.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, *[f"2026070{n}_120000.mp4" for n in range(1, 5)])
+    storage = FakeStorageClient()
+    health = UploadHealth()
+
+    outcome = _retry(
+        queue_dir,
+        storage,
+        health,
+        cancel=lambda: len(storage.uploaded) >= 2,
+    )
+
+    assert outcome.uploaded == 2
+    assert len(pending_segments(queue_dir)) == 2

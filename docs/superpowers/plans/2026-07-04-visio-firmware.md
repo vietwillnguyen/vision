@@ -1524,8 +1524,17 @@ git commit -m "feat: add visio-recorder systemd unit"
 - **Recording loop:** resolved (issue #7) - `main()` supervises `rpicam-vid` as a subprocess via `run_recording_loop`, and calls `on_segment_complete` (Task 11) once per completed 5-minute segment, on a background worker thread per the spec.
 - **Real disk-usage stats:** resolved (issue #7) - `on_segment_complete`'s `DeviceStatus` now reads real usage via `ShutilDiskStatsReader`.
 - **Upload error handling:** resolved (issue #7) - the upload half of `on_segment_complete` is wrapped in try/except.
-  On failure the LED is restored to a normal state and the queued file is left in place - the startup queue flush is the retry mechanism.
+  On failure the queued file is left in place.
   Three consecutive failures escalate to the CRITICAL LED.
+  **Amended (in-process upload retry):** the startup queue flush is no longer the *only* retry mechanism, just the backstop.
+  While segments are queued, the upload worker blocks on its work queue only until a retry deadline rather than indefinitely, and once that deadline passes it retries everything still queued, whether or not new segments have arrived meanwhile.
+  The deadline is armed when the queue becomes non-empty and after each round, never restarted by a segment, from a backoff that doubles per consecutive failure from 30 s to a 480 s cap.
+  A stopping worker starts no round, and a round that tries no file leaves the consecutive-failure counter and the LED untouched.
+  A failed segment therefore reaches storage during the same run instead of waiting for a power cycle, which on a pendant worn all day could be hours.
+  Flag markers are excluded from those rounds and keep the next-boot contract, because `FlagUploadWorker` owns them while the daemon runs and two threads uploading the same marker would manufacture a duplicate-object failure.
+  **Amended (Critical LED latch):** the LED is restored to a normal state only while the run is *below* the escalation threshold.
+  Both of `on_segment_complete`'s LED states are now derived from a shared `UploadHealth` counter, so from the third consecutive failure until the success that resets it the LED stays Critical red through every segment, including while that segment uploads.
+  Before the amendment the worker applied Critical only after `on_segment_complete` had already written Uploading blue and restored Recording green, so a pendant in a sustained outage showed those colours for most of every segment.
 - **Bookworm networking:** resolved (issue #7) - stock Raspberry Pi OS Bookworm uses NetworkManager, which does not honor `/etc/wpa_supplicant/wpa_supplicant.conf`, so onboarding writes an NM keyfile (`/etc/NetworkManager/system-connections/visio.nmconnection`) instead of `write_wpa_supplicant`'s output path.
 - **FLAG marker naming:** resolved (issue #9) - `write_flag_marker` now writes dated `FLAG_YYYYMMDD_HHMMSS.marker` names matching the pipeline's `parse_flag_marker_filename` contract (Task 11 there), so same-second presses on different days no longer collide at the storage object path.
 

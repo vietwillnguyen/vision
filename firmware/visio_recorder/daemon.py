@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -35,14 +35,19 @@ from visio_recorder.onboarding import (
     run_onboarding,
 )
 from visio_recorder.recording_loop import (
-    UPLOAD_FAILURES_TO_CRITICAL,
     DiskStatsReader,
+    RetryBackoff,
     ShutilDiskStatsReader,
     StatusClient,
+    UploadHealth,
+    WorkerAction,
     build_device_status,
     flush_pending,
+    next_worker_step,
     on_segment_complete,
+    pending_segments,
     recover_orphaned_segments,
+    retry_pending_segments,
 )
 from visio_recorder.segment_size import (
     AUDIO_BITRATE_RESERVE_BPS,
@@ -205,6 +210,10 @@ class LoopDeps:
     upload_limit: UploadLimit
     # The microphone resolve_audio found at startup, or None for video only.
     audio: AudioSettings | None = None
+    # How long the upload worker waits between in-process retries of the queue.
+    retry_backoff: RetryBackoff = field(default_factory=RetryBackoff)
+    # The clock the upload worker measures its retry deadline against.
+    monotonic: Callable[[], float] = time.monotonic
 
 
 def _push_recording_status(
@@ -248,11 +257,35 @@ def run_recording_loop(
     """Record segments on the main thread; upload them on one background worker.
 
     The main thread only records and enqueues. A single worker thread owns all
-    upload state (segment count, consecutive failures) and every LED call except
-    the halt CRITICAL applied here at exit. Both the halt and stop paths drain
-    the queue via a ``None`` sentinel before joining the worker; on halt, the
-    CRITICAL LED is applied after the drain so it is the final LED state and
-    cannot be overwritten by the drained segments' LED restores.
+    upload state (segment count, the ``UploadHealth`` consecutive-failure
+    counter) and every LED call except the halt CRITICAL applied here at exit.
+    Both the halt and stop paths drain the queue via a ``None`` sentinel before
+    joining the worker; on halt, the CRITICAL LED is applied after the drain so
+    it is the final LED state and cannot be overwritten by the drained
+    segments' LED restores.
+
+    The worker no longer applies the upload-failure CRITICAL itself.
+    ``on_segment_complete`` derives both of its LED states from the shared
+    ``UploadHealth``, so once three uploads have failed in a row the red is
+    held for every following segment - including while it uploads - until an
+    upload succeeds and resets the counter.
+
+    The worker also owns the in-process retry, which is why, while segments
+    are queued, it waits on its work queue only until a retry deadline kept on
+    ``deps.monotonic``. Once that deadline passes it runs
+    ``retry_pending_segments`` over whatever is still queued, so a failed
+    upload reaches storage during this run instead of waiting for the next
+    boot's ``flush_pending``. ``next_worker_step`` makes that decision: the
+    deadline is armed from ``deps.retry_backoff``, indexed by the same
+    ``UploadHealth`` counter, so it grows while uploads keep failing and the
+    success that clears the red brings the next one back to the base delay.
+    It is armed when the queue becomes non-empty and again after each round,
+    never by a new segment, so segments arriving more often than the backoff
+    cannot postpone the retry. A new segment or the sentinel still returns
+    from ``work.get`` immediately, so the retry delays neither. ``stopping``
+    is set before the sentinel is queued: a stopping worker starts no round,
+    and a round already draining a backlog gives up rather than uploading
+    through a halt.
 
     ``device_status.recording_active`` is pushed True before the first capture
     and False once the loop has exited for any reason (stop, halt, or a
@@ -272,12 +305,56 @@ def run_recording_loop(
     work: queue.Queue[Path | None] = queue.Queue()
     # Written only by the worker; read by the main thread only after join().
     uploaded_today = [0]
+    # Set before the sentinel is queued, so a retry round in flight can give
+    # up on the rest of its backlog instead of uploading through a halt.
+    stopping = threading.Event()
 
     def worker() -> None:
         segments_uploaded_today = 0
-        consecutive_failures = 0
+        upload_health = UploadHealth()
+        retry_at: float | None = None
+
+        def retry_round() -> None:
+            nonlocal segments_uploaded_today
+            try:
+                outcome = retry_pending_segments(
+                    queue_dir=deps.queue_dir,
+                    storage_client=deps.storage_client,
+                    led_driver=deps.led_driver,
+                    battery_reader=deps.battery_reader,
+                    device_id=deps.device_id,
+                    upload_limit=deps.upload_limit,
+                    upload_health=upload_health,
+                    cancel=stopping.is_set,
+                )
+            except Exception:
+                _logger.exception("queue retry round failed; worker continuing")
+                return
+            segments_uploaded_today += outcome.uploaded
+            uploaded_today[0] = segments_uploaded_today
+
         while True:
-            item = work.get()
+            now = deps.monotonic()
+            step = next_worker_step(
+                segments_pending=bool(pending_segments(deps.queue_dir)),
+                stopping=stopping.is_set(),
+                retry_at=retry_at,
+                now=now,
+                retry_backoff=deps.retry_backoff,
+                consecutive_failures=upload_health.consecutive_failures,
+            )
+            retry_at = step.retry_at
+            # Waiting with a timeout is what makes the retry in-process: the
+            # worker owns it, so there is no second thread and no scheduler,
+            # and a new segment or the sentinel still wakes it immediately.
+            try:
+                if step.action is WorkerAction.RETRY_NOW:
+                    raise queue.Empty
+                item = work.get(timeout=None if retry_at is None else retry_at - now)
+            except queue.Empty:
+                retry_round()
+                retry_at = None
+                continue
             if item is None:
                 return
             try:
@@ -295,6 +372,7 @@ def run_recording_loop(
                     disk_stats_reader=deps.disk_stats_reader,
                     data_dir=deps.data_dir,
                     upload_limit=deps.upload_limit,
+                    upload_health=upload_health,
                 )
             except Exception:
                 _logger.exception(
@@ -304,15 +382,6 @@ def run_recording_loop(
                 continue
             segments_uploaded_today = result.segments_uploaded_today
             uploaded_today[0] = segments_uploaded_today
-            if result.upload_ok:
-                consecutive_failures = 0
-            else:
-                consecutive_failures += 1
-                # ">=" so a sustained outage re-applies CRITICAL after every
-                # failure past the threshold; on_segment_complete has already
-                # restored a normal LED state by this point.
-                if consecutive_failures >= UPLOAD_FAILURES_TO_CRITICAL:
-                    apply_led_state(deps.led_driver, LedState.CRITICAL)
 
     audio = deps.audio
     _push_recording_status(
@@ -367,6 +436,7 @@ def run_recording_loop(
                 continue
             work.put(h264_path)
     finally:
+        stopping.set()
         work.put(None)
         worker_thread.join()
         _push_recording_status(

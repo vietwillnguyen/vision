@@ -22,7 +22,8 @@ a fitting file too large after the fact. So before upload:
   card, or ffmpeg failing while the queue's filesystem has less free space
   than twice the file being split, which covers the parts, their per-part
   ``moov`` overhead and the segment still recording) leaves the segment
-  queued and counts it as failed, so the next boot's flush tries again.
+  queued and counts it as failed, so the upload worker's next in-process
+  retry round tries again, with the next boot's flush as the backstop.
 
 Splitting is crash-safe: parts are built in a scratch directory inside the
 queue (skipped by ``list_pending``), every part except the one that reuses the
@@ -99,6 +100,9 @@ class UploadOutcome:
     uploaded: int = 0
     failed: int = 0
     rejected: int = 0
+    # Queue entries an upload was actually tried for, which a drain cancelled
+    # before its first file, or given nothing to drain, leaves at zero.
+    attempted: int = 0
 
 
 def rejected_dir(queue_dir: Path) -> Path:
@@ -222,7 +226,9 @@ def upload_queued(
     """Upload one queued file, splitting it first if it is over the limit.
 
     Every uploaded file is removed from the queue; a file that failed for any
-    other reason (network, auth) stays queued for the next boot's flush.
+    other reason (network, auth) stays queued for the upload worker's next
+    in-process retry round, with the next boot's flush as the backstop; flag
+    markers are the exception and wait for the next boot's flush.
     """
     outcome = UploadOutcome()
     if not path.exists():
