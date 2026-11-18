@@ -31,7 +31,7 @@
 <!-- source-sha256: 16618ecaf15a7a37f0c0cdf99a0a7ce0a5779bdf75199bee174845c0a76d77d0  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- source-sha256: fb5efe70278957f2f65f4a27b4a8efd2b39045b29f6af2da8e5e19a96b37a106  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
+<!-- source-sha256: c7e3b98113036dbbf1d413125a638c7053b2c2ed377efc967868be4507b8d2ec  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
 <!-- regenerated-at: 2026-11-18 (interruptible capture, bounded shutdown, recording stop/start design) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
@@ -321,8 +321,9 @@ flowchart TD
   U --> S["a complete, shorter segment"]
   TERM --> S
   KILL --> S
-  S --> M["mux, queue, upload\nlike any other segment"]
-  M --> D["recording_active=false,\nprocess exits well inside\nTimeoutStopSec=30"]
+  S --> M["mux and queue\nthe cut segment"]
+  M --> D["recording_active=false,\nwell inside TimeoutStopSec=30"]
+  D --> W["the worker drains the queue;\nan upload cut off by the budget\nresumes on the next boot"]
       </pre>
       <p class="text-xs text-base-content/70 mt-2">Before this, the loop observed the stop only between segments, so a stop waited up to a whole segment - 300 s measured on the device with the old five-minute segments, 60 s with today's derived default - and systemd's 90 s default stop timeout turned the overrun into a SIGKILL that lost the in-flight segment.</p>
     </div>
@@ -372,7 +373,7 @@ flowchart TD
     </div>
 
     <div class="alert alert-warning alert-soft" role="alert">
-      <span><strong>Open bench checks (none block a PR).</strong> BENCH-1: that <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid -s</span> exits 0 on SIGUSR2 and the cut <span class="font-mono text-xs bg-base-200 rounded px-1">.h264</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">.ts</span> remux with <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg -c copy</span> - the runner tolerates a non-zero exit, so a failure degrades to the orphan-recovery path rather than a lost segment. BENCH-2: that a 2 s hold is reliably distinguishable from a tap through clothing. BENCH-3: that cancel, mux, enqueue and status push on a Zero 2W fit inside <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span>.</span>
+      <span><strong>Open bench checks (none block a PR).</strong> BENCH-1: that <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid -s</span> exits 0 on SIGUSR2 and the cut <span class="font-mono text-xs bg-base-200 rounded px-1">.h264</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">.ts</span> remux with <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg -c copy</span> - the runner tolerates a non-zero exit, so a failure degrades to the orphan-recovery path rather than a lost segment. BENCH-2: that a 2 s hold is reliably distinguishable from a tap through clothing. BENCH-3: that cancel, mux, enqueue and the final <span class="font-mono text-xs bg-base-200 rounded px-1">recording_active=false</span> push on a Zero 2W fit inside <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span>; they run before the upload drain, so an upload the budget cuts off leaves the app correct and its segment queued for the next boot.</span>
     </div>
   </section>
 

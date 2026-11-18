@@ -127,6 +127,7 @@ The real implementation uses `Popen`, polls `wait(timeout=0.2)` until the proces
 If `rpicam-vid` exits non-zero after a cancel (BENCH-1 in the August report is still unverified), the runner reports it as a cancelled exit rather than raising, and the loop queues the partial file when it is non-empty, exactly as the audio-failure path does today at `daemon.py:359-366`; a raw `.h264` has no trailer and a `.ts` is readable when cut, which is why the capture module already chose those containers.
 `SIGTERM` handling changes from "set `stop`" to `control.request_exit()`, which sets `stop`, `cancel_capture` and `wake`, so a `systemctl stop` or poweroff that lands mid-segment now ends the capture in seconds instead of running into systemd's 90 s default and a `SIGKILL`.
 With that bounded, the unit gets `KillMode=mixed` (systemd signals only the daemon, which owns its child) and `TimeoutStopSec=30`.
+On the way out the loop muxes and queues the cut segment and pushes `recording_active=false` before the upload worker drains the queue, so the 30 s bounds the stop the wearer sees; an upload still running when it expires is cut off and resumed by the next boot's `flush_pending`.
 
 ### LED
 
@@ -260,7 +261,8 @@ Bench checks that remain open and must be run on the device before the feature i
 
 - BENCH-1: `rpicam-vid -s` exits 0 on `SIGUSR2` and the cut `.h264` and `.ts` remux with `ffmpeg -c copy`. The runner tolerates a non-zero exit, so a failure here degrades to the orphan-style recovery path rather than a lost segment.
 - BENCH-2: a 2 s hold is reliably distinguishable from a tap through clothing, and the accidental-hold rate over a day of wear is acceptable; the fallback is a recessed button on GPIO 27.
-- BENCH-3: wall-clock of cancel, mux, enqueue and status push on a Zero 2W fits inside `TimeoutStopSec=30`.
+- BENCH-3: wall-clock of cancel, mux, enqueue and the final `recording_active=false` status push on a Zero 2W fits inside `TimeoutStopSec=30`.
+  They run in that order, before the upload worker drains the queue, so the app shows the stop even when an upload is still running as the budget expires; that upload is cut off by the `SIGKILL`, and its segment stays queued for the next boot's `flush_pending`.
 
 ---
 

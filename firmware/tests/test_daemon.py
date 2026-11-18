@@ -3,6 +3,7 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -193,8 +194,13 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
         "device-abc/20260704_120001.mp4",
         "device-abc/20260704_120002.mp4",
     ]
-    # One upsert per segment, bracketed by the loop's start and exit reports.
-    assert [u["segments_uploaded_today"] for u in status.upserts] == [0, 1, 2, 3, 3]
+    # One upsert per segment, bracketed by the loop's start report and the
+    # stop's two reports, one before the drain and one after it.
+    counts = [u["segments_uploaded_today"] for u in status.upserts]
+    assert len(counts) == 6
+    assert counts[0] == 0
+    assert {1, 2, 3} <= set(counts)
+    assert counts[-1] == 3
 
 
 def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
@@ -351,8 +357,17 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
     # reported.
     status = ScriptedStatusClient(fail_on_attempts={2})
 
+    starts = iter(range(1, 100))
+
+    def on_capture_start() -> None:
+        # Hold each capture until the worker has reported the one before, so
+        # attempt 2 is segment 1's upsert and not the stop's own push.
+        started = next(starts)
+        _wait_for(lambda: status.attempts >= started)
+
     runner = FakeCaptureRunner(
-        on_record=lambda count: stop.set() if count >= 3 else None
+        on_record=lambda count: stop.set() if count >= 3 else None,
+        on_capture_start=on_capture_start,
     )
     deps = _make_deps(
         tmp_path,
@@ -376,11 +391,13 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
     # uploaded and their status reported, proving the worker kept running.
     assert "device-abc/20260704_120001.mp4" in storage.uploaded
     assert "device-abc/20260704_120002.mp4" in storage.uploaded
-    # Start report, segments 2 and 3, exit report.
+    # Start report, segment 2, the stop's report before the drain, segment 3
+    # uploaded by that drain, and the report after it.
     assert [u["recording_active"] for u in status.upserts] == [
         True,
         True,
-        True,
+        False,
+        False,
         False,
     ]
 
@@ -616,11 +633,123 @@ def test_stop_reports_recording_inactive_as_the_final_status(tmp_path):
     assert final["segments_uploaded_today"] == 2
     assert final["segments_pending"] == 0
     assert final["battery_pct"] == 85
-    assert [u["recording_active"] for u in status.upserts] == [
-        True,
-        True,
-        True,
-        False,
+    # Start report, two segments, and the stop's reports before and after the
+    # drain; once a row has said stopped, no later row says recording.
+    flags = [u["recording_active"] for u in status.upserts]
+    assert len(flags) == 5
+    assert flags[0] is True
+    assert flags == sorted(flags, reverse=True)
+
+
+def _wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition never became true"
+        time.sleep(0.005)
+
+
+class _OrderedStorage(FakeStorageClient):
+    def __init__(self, events: list[tuple], gate: threading.Event | None = None):
+        super().__init__()
+        self._events = events
+        self._gate = gate
+
+    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
+        self._events.append(("upload", object_path))
+        if self._gate is not None and len(self.uploaded) == 0:
+            assert self._gate.wait(timeout=5), "the stop's push never came"
+        super().upload(bucket, object_path, local_path)
+
+
+class _OrderedStatus(FakeStatusClient):
+    def __init__(self, events: list[tuple]):
+        super().__init__()
+        self._events = events
+
+    def upsert_device_status(self, status: dict) -> None:
+        self._events.append(
+            ("status", status["recording_active"], status["segments_pending"])
+        )
+        super().upsert_device_status(status)
+
+
+def test_a_stop_reports_recording_inactive_before_the_drain_uploads(tmp_path):
+    # systemd's 30 s stop budget can expire while the drain is still
+    # uploading over slow WiFi. The app must already show the stop by then:
+    # the cut segment is muxed and queued, recording_active=False is pushed
+    # with it counted as pending, and only then does its upload start.
+    events: list[tuple] = []
+    stop = threading.Event()
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(
+            duration_sec=STOP_SEGMENT_SEC, on_capture_start=stop.set
+        ),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=_OrderedStorage(events),
+        status_client=_OrderedStatus(events),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert events == [
+        ("status", True, 0),
+        ("status", False, 1),
+        ("upload", "device-abc/20261118_090000.mp4"),
+        ("status", False, 0),
+        ("status", False, 0),
+    ]
+
+
+def test_a_stop_during_an_earlier_upload_neither_waits_for_it_nor_is_undone(
+    tmp_path,
+):
+    # A stop that lands while the worker is still uploading an earlier
+    # segment must push recording_active=False without waiting for that
+    # upload, and the earlier segment's own upsert, landing after the stop's
+    # push, must not flip the app back to Recording.
+    events: list[tuple] = []
+    stop = threading.Event()
+    pushed_stopped = threading.Event()
+    storage = _OrderedStorage(events, gate=pushed_stopped)
+
+    class Status(_OrderedStatus):
+        def upsert_device_status(self, status: dict) -> None:
+            super().upsert_device_status(status)
+            if status["recording_active"] is False:
+                pushed_stopped.set()
+
+    starts = iter(range(1, 100))
+
+    def on_capture_start() -> None:
+        if next(starts) == 2:
+            _wait_for(lambda: len(events) >= 2)
+            stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(on_capture_start=on_capture_start),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        status_client=Status(events),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert events == [
+        ("status", True, 0),
+        ("upload", "device-abc/20261118_090000.mp4"),
+        ("status", False, 2),
+        ("status", False, 1),
+        ("upload", "device-abc/20261118_090001.mp4"),
+        ("status", False, 0),
+        ("status", False, 0),
+    ]
+    assert storage.uploaded == [
+        "device-abc/20261118_090000.mp4",
+        "device-abc/20261118_090001.mp4",
     ]
 
 
@@ -779,7 +908,7 @@ def test_loop_records_audio_segments_and_reports_audio_active(tmp_path):
         "device-abc/20261116_090000.mp4",
         "device-abc/20261116_090001.mp4",
     ]
-    assert [u["audio_active"] for u in status.upserts] == [True, True, True, True]
+    assert [u["audio_active"] for u in status.upserts] == [True] * 5
 
 
 def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
@@ -824,8 +953,12 @@ def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
         "device-abc/20261116_090002.mp4",
         "device-abc/20261116_090003.mp4",
     ]
-    per_segment = [u["audio_active"] for u in status.upserts[1:-1]]
-    assert per_segment == [True, False, False]
+    # The start report and the .ts segment report audio; the two .h264
+    # segments after the fallback and the stop's two reports do not.
+    flags = [u["audio_active"] for u in status.upserts]
+    assert len(flags) == 6
+    assert flags[0] is True
+    assert flags.count(True) == 2
     assert status.upserts[-1]["audio_active"] is False
 
 

@@ -16,9 +16,11 @@ User=pi
 # KillMode=control-group would SIGTERM rpicam-vid directly and lose the
 # finalised short segment the daemon is in the middle of saving.
 KillMode=mixed
-# The bounded shutdown: cancelling the capture, muxing it, queueing it and
-# pushing the final device_status all happen well inside this, so a stop that
-# overruns it is a bug worth a SIGKILL rather than the 90 s default wait.
+# The bounded shutdown, in order: cancel the capture, mux and queue the cut
+# segment, push the final device_status (recording_active=false), then let the
+# upload worker drain the queue. Everything before the drain fits well inside
+# this; an upload still running when it expires is cut off by the SIGKILL, and
+# its segment stays queued for the next boot's flush to upload.
 TimeoutStopSec=30
 
 [Install]
