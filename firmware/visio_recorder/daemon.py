@@ -14,11 +14,13 @@ from typing import Any
 from visio_recorder.battery import (
     BATTERY_BOOT_SAMPLE_INTERVAL_SEC,
     BATTERY_BOOT_SAMPLES,
+    HALT_CONFIRMATIONS,
     WAKE_ON_CHARGE_PCT,
     BatteryMonitor,
     BatteryReader,
     BatteryState,
     BatteryVerdict,
+    HaltReason,
 )
 from visio_recorder.capture import (
     AudioSettings,
@@ -210,10 +212,11 @@ def resolve_power_controller(
 @dataclass
 class StartupResult:
     proceed: bool
-    battery_pct: int
+    # None, like ``battery``, only when the gauge could not be read at all.
+    battery_pct: int | None
     # The debounced battery the boot samples built, handed to the loop so its
     # moving average starts from real readings rather than from nothing.
-    battery: BatteryState
+    battery: BatteryState | None
 
 
 def run_startup_sequence(
@@ -235,8 +238,32 @@ def run_startup_sequence(
     Three seconds is the whole cost against a day of recording. Returns the
     ``BatteryState`` the samples went into, so the recording loop inherits a
     warm moving average instead of starting blind.
+
+    The first reading is retried up to ``HALT_CONFIRMATIONS`` times at the
+    same cadence, and the state is built from the first one that succeeds. A
+    gauge unreadable for every attempt is the boot-time form of the
+    ``unreadable`` halt: the boot is refused so ``main`` powers off, rather
+    than crashing into a restart loop that never does.
     """
-    battery = BatteryState(battery_reader, monitor)
+    battery: BatteryState | None = None
+    for attempt in range(HALT_CONFIRMATIONS):
+        if attempt:
+            sleep(sample_interval_sec)
+        try:
+            battery = BatteryState(battery_reader, monitor)
+            break
+        except Exception:
+            _logger.exception("battery reading failed at boot")
+    if battery is None:
+        _logger.error(
+            "battery halt confirmed at boot (reason %s): gauge unreadable for "
+            "%d consecutive readings; not recording",
+            HaltReason.UNREADABLE.value,
+            HALT_CONFIRMATIONS,
+        )
+        apply_led_state(led_driver, next_led_state(False, False, battery_halted=True))
+        return StartupResult(proceed=False, battery_pct=None, battery=None)
+
     verdict = battery.current()
     for _ in range(max(0, samples - 1)):
         if verdict.should_halt:
@@ -608,7 +635,7 @@ def main() -> int:
     power_controller = resolve_power_controller(command_runner, pijuice)
 
     startup = run_startup_sequence(battery_reader, led_driver)
-    if not startup.proceed:
+    if not startup.proceed or startup.battery is None:
         # A confirmed halt at boot must not leave the Pi powered and
         # discharging; that is what used to corrupt SD cards.
         power_controller.power_off(wake_on_charge_pct=WAKE_ON_CHARGE_PCT)

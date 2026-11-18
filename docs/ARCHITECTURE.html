@@ -28,7 +28,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 9be00adbe5da8802eb898e65fa97c2c0913b80c803ea8153d6e14da2076db609  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 3251e3d00c2bbb2cb0d5a70238fcd3e187eb1b0c1cbc3490e52373aa1c60ff6b  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-18 (debounced battery halt, voltage floor, clean power-off, wake on charge) -->
@@ -288,7 +288,7 @@ flowchart TD
           <tbody>
             <tr><td class="font-mono">BATTERY_WARN_PCT</td><td>20</td><td>sets the low-battery latch (yellow LED)</td></tr>
             <tr><td class="font-mono">BATTERY_WARN_CLEAR_PCT</td><td>25</td><td>clears it - a 20-25 % hysteresis band, so a battery hovering at the line does not flicker the LED all afternoon</td></tr>
-            <tr><td class="font-mono">BATTERY_HALT_PCT</td><td>10</td><td>halts after <span class="font-mono">HALT_CONFIRMATIONS</span> (3) consecutive smoothed samples below it; the same count of consecutive <em>failed</em> readings halts too, with reason <span class="font-mono">unreadable</span>, while a single failed reading keeps the last verdict</td></tr>
+            <tr><td class="font-mono">BATTERY_HALT_PCT</td><td>10</td><td>halts after <span class="font-mono">HALT_CONFIRMATIONS</span> (3) consecutive smoothed samples below it; the same count of consecutive <em>failed</em> readings halts too, with reason <span class="font-mono">unreadable</span>, while a single failed reading keeps the last verdict; at boot the first reading is retried that many times and an unreadable gauge refuses the boot and powers off</td></tr>
             <tr><td class="font-mono">BATTERY_FLOOR_MV</td><td>3300</td><td>halts after <span class="font-mono">FLOOR_CONFIRMATIONS</span> (2) consecutive <em>raw</em> samples below it - the floor exists because the percentage lags under load, so smoothing it would reintroduce the lag it covers</td></tr>
             <tr><td class="font-mono">PCT_AVERAGE_WINDOW</td><td>5</td><td>samples in the percentage moving average; a shorter run averages what has arrived rather than running unguarded</td></tr>
             <tr><td class="font-mono">WAKE_ON_CHARGE_PCT</td><td>25</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">SetWakeUpOnCharge</span> level, armed before the power-off so the HAT re-powers the Pi on its own</td></tr>

@@ -93,6 +93,7 @@ A battery reading that fails outright is bounded the same way.
 An isolated failure keeps the last published verdict (`test_a_single_failed_reading_keeps_the_published_verdict`), and a successful reading resets the count (`test_a_successful_reading_resets_the_unreadable_count`).
 `HALT_CONFIRMATIONS` failures in a row confirm a halt with reason `unreadable`; `test_a_gauge_that_stays_unreadable_halts_and_powers_off` drives a gauge that dies mid-run through the real loop and asserts the drain, the final `recording_active=False` row, the Critical red and the power-off with the wake armed, behind the fake power controller.
 Without the bound the same trace never halts: the loop records on the last good verdict until the cell browns out.
+The first reading at boot is retried the same number of times: `test_a_gauge_faulted_from_power_on_refuses_the_boot_so_main_powers_off` refuses the boot after `HALT_CONFIRMATIONS` failed reads, so `main()` powers off instead of crashing into a restart loop, and `test_a_boot_read_that_fails_once_then_succeeds_still_records` comes up recording.
 
 ## systemd and polkit
 

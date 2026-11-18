@@ -496,6 +496,47 @@ def test_one_bad_reading_at_power_on_does_not_cost_the_day():
     assert led.calls == [RECORDING_LED]
 
 
+class FailsFirstReads(FakeTelemetryBatteryReader):
+    """A gauge whose first ``failures`` charge reads raise, as a faulted bus."""
+
+    def __init__(self, failures: int, pct: int = 85) -> None:
+        super().__init__(pct=pct)
+        self.failures = failures
+        self.reads = 0
+
+    def get_charge_pct(self) -> int:
+        self.reads += 1
+        if self.reads <= self.failures:
+            raise RuntimeError("pijuice GetChargeLevel failed: COMM_ERROR")
+        return super().get_charge_pct()
+
+
+def test_a_gauge_faulted_from_power_on_refuses_the_boot_so_main_powers_off():
+    # Before, the first read raised out of main() and systemd restarted it
+    # forever, leaving an idle Pi powered until it browned out.
+    led = FakeLedDriver()
+    reader = FailsFirstReads(failures=10**6)
+
+    result, slept = _startup(reader, led)
+
+    assert result.proceed is False
+    assert result.battery is None
+    assert reader.reads == HALT_CONFIRMATIONS
+    assert slept == [1.0] * (HALT_CONFIRMATIONS - 1)
+    assert led.calls == [CRITICAL_LED]
+
+
+def test_a_boot_read_that_fails_once_then_succeeds_still_records():
+    led = FakeLedDriver()
+    reader = FailsFirstReads(failures=1)
+
+    result, _ = _startup(reader, led)
+
+    assert result.proceed is True
+    assert result.battery_pct == 85
+    assert led.calls == [RECORDING_LED]
+
+
 def test_a_charging_pendant_never_halts_at_boot():
     # Plugged in at 3 %: it is charging, so it has to come up and record.
     led = FakeLedDriver()
@@ -532,6 +573,7 @@ def test_the_boot_samples_seed_the_loop_s_moving_average():
 
     result, _ = _startup(reader, led)
     reader.pct = 5
+    assert result.battery is not None
 
     # Two more readings fold into a window that already holds three 85s, so
     # the smoothed value is nowhere near the halt threshold.
