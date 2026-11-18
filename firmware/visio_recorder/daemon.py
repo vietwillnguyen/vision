@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import queue
 import signal
@@ -35,6 +36,7 @@ from visio_recorder.onboarding import (
     run_onboarding,
 )
 from visio_recorder.recording_loop import (
+    RESTART_GAP_SEC,
     DiskStatsReader,
     RetryBackoff,
     ShutilDiskStatsReader,
@@ -48,6 +50,7 @@ from visio_recorder.recording_loop import (
     pending_segments,
     recover_orphaned_segments,
     retry_pending_segments,
+    wait_out_restart_gap,
 )
 from visio_recorder.segment_size import (
     AUDIO_BITRATE_RESERVE_BPS,
@@ -212,11 +215,15 @@ class LoopDeps:
     audio: AudioSettings | None = None
     # How long the upload worker waits between in-process retries of the queue.
     retry_backoff: RetryBackoff = field(default_factory=RetryBackoff)
-    # The clock the upload worker measures its retry deadline against.
+    # The clock the upload worker measures its retry deadline and each
+    # segment's restart gap against, and the sleep that waits the gap out.
     monotonic: Callable[[], float] = time.monotonic
-    # FlagUploadWorker.flush_markers: run before any segment is uploaded, so
-    # flags reach storage with the footage the pipeline would score them on.
+    sleep: Callable[[float], None] = time.sleep
+    # FlagUploadWorker.flush_markers: run before any segment is uploaded, once
+    # the segment's restart gap has passed, so flags reach storage with the
+    # footage the pipeline would score them on.
     flush_markers: Callable[[], bool] | None = None
+    restart_gap_sec: float = RESTART_GAP_SEC
 
 
 def _push_recording_status(
@@ -294,7 +301,12 @@ def run_recording_loop(
     worker calls it before every segment it is about to upload - its own and
     the first of each retry round - waiting for it to finish. That is what
     keeps a segment from reaching storage ahead of the flags the nightly run
-    would score it with. Markers keep exactly one uploader, since this is a
+    would score it with. The pipeline also gives a segment the presses made
+    up to ``deps.restart_gap_sec`` after it ends, so the main thread queues
+    each capture with the ``deps.monotonic`` time it returned, and the worker
+    waits until that time plus the gap (never longer than the gap, on
+    ``deps.sleep``) before the flush; a retry round waits on the newest
+    segment this run has queued. Markers keep exactly one uploader, since this is a
     request on that worker's queue rather than an upload made here, and its
     result is ignored: footage outranks marker ordering, and the pipeline's
     late-marker handling is the backstop.
@@ -314,7 +326,7 @@ def run_recording_loop(
     for the following whole second if needed, so its second-resolution
     filename never collides with the failed capture's.
     """
-    work: queue.Queue[Path | None] = queue.Queue()
+    work: queue.Queue[tuple[Path, float] | None] = queue.Queue()
     # Written only by the worker; read by the main thread only after join().
     uploaded_today = [0]
     # Set before the sentinel is queued, so a retry round in flight can give
@@ -325,6 +337,23 @@ def run_recording_loop(
         segments_uploaded_today = 0
         upload_health = UploadHealth()
         retry_at: float | None = None
+        last_ended_at = -math.inf
+
+        def flush_after_gap(ended_at: float) -> Callable[[], bool] | None:
+            flush_markers = deps.flush_markers
+            if flush_markers is None:
+                return None
+
+            def flush() -> bool:
+                wait_out_restart_gap(
+                    ended_at,
+                    gap_sec=deps.restart_gap_sec,
+                    monotonic=deps.monotonic,
+                    sleep=deps.sleep,
+                )
+                return flush_markers()
+
+            return flush
 
         def retry_round() -> None:
             nonlocal segments_uploaded_today
@@ -338,7 +367,7 @@ def run_recording_loop(
                     upload_limit=deps.upload_limit,
                     upload_health=upload_health,
                     cancel=stopping.is_set,
-                    flush_markers=deps.flush_markers,
+                    flush_markers=flush_after_gap(last_ended_at),
                 )
             except Exception:
                 _logger.exception("queue retry round failed; worker continuing")
@@ -370,9 +399,10 @@ def run_recording_loop(
                 continue
             if item is None:
                 return
+            capture, last_ended_at = item
             try:
                 result = on_segment_complete(
-                    h264_path=item,
+                    h264_path=capture,
                     queue_dir=deps.queue_dir,
                     command_runner=deps.command_runner,
                     storage_client=deps.storage_client,
@@ -386,12 +416,12 @@ def run_recording_loop(
                     data_dir=deps.data_dir,
                     upload_limit=deps.upload_limit,
                     upload_health=upload_health,
-                    flush_markers=deps.flush_markers,
+                    flush_markers=flush_after_gap(last_ended_at),
                 )
             except Exception:
                 _logger.exception(
                     "on_segment_complete failed for segment %s; worker continuing",
-                    item,
+                    capture,
                 )
                 continue
             segments_uploaded_today = result.segments_uploaded_today
@@ -444,11 +474,11 @@ def run_recording_loop(
                 not_before = started_at.replace(microsecond=0) + timedelta(seconds=1)
                 if partial.exists():
                     if partial.stat().st_size > 0:
-                        work.put(partial)
+                        work.put((partial, deps.monotonic()))
                     else:
                         partial.unlink()
                 continue
-            work.put(h264_path)
+            work.put((h264_path, deps.monotonic()))
     finally:
         stopping.set()
         work.put(None)

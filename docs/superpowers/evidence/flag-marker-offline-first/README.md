@@ -6,8 +6,9 @@ Storage is a fake client with a switchable network, because the whole point is w
 
 `run_recording_loop`, `flush_pending`, `FlagUploadWorker`, `make_flag_press_handler`, `LedController` and the real `Ws2812LedDriver` are all the shipped code.
 
-The retry schedule is scaled 1500:1 (30 s becomes 20 ms, the 480 s cap becomes 320 ms) so a two-hour outage plays out in a few seconds.
-Nothing else is scaled, and scenario 1 prints the unscaled production schedule straight out of `RetryBackoff` beside the scaled one.
+The retry schedule is scaled 1500:1 (30 s becomes 20 ms, the 480 s cap becomes 320 ms) so a two-hour outage plays out in a few seconds, and scenario 1 prints the unscaled production schedule straight out of `RetryBackoff` beside the scaled one.
+The 3 s restart gap a segment waits out before its marker flush is scaled the same way in scenarios 1-4, and runs unscaled in scenario 5, the one about it.
+Nothing else is scaled.
 
 ## Before (firmware at `5073cce`, the branch point)
 
@@ -51,6 +52,13 @@ The segment upload is blocked inside the storage client when the button is press
 - The wearer was acknowledged - magenta on the wire - before the upload finished.
 - The upload then completed mid-blink, so that state change won and the restore stood down; the LED ended on the recording green rather than magenta.
 - Only `flag-upload-worker` ever uploaded a marker.
+
+### 5. A press in the restart gap
+
+The segment is already muxed when the wearer presses 2.5 s after it ended, inside the 3 s gap the pipeline attaches to that segment.
+
+- The upload worker waited out the rest of the gap - 2.96 s of the unscaled 3 s - before flushing markers, and no longer.
+- Storage received the marker first and the segment it flags second, so the pipeline sees the segment with its flag rather than relying on the late-marker backstop.
 
 `overlapping_writes == 0` on every scenario: no two threads interleaved a frame on the wire.
 

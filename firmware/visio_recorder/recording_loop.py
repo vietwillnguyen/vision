@@ -26,6 +26,11 @@ UPLOAD_FAILURES_TO_CRITICAL = 3
 RETRY_BASE_SEC = 30.0
 RETRY_MAX_SEC = 480.0
 
+# The pipeline's RESTART_GAP_TOLERANCE_SEC: a press this long after a segment
+# ends still flags that segment, so it is how long the segment must wait for
+# its flags before it is sent.
+RESTART_GAP_SEC = 3.0
+
 _logger = logging.getLogger(__name__)
 
 
@@ -151,6 +156,26 @@ def next_led_state(
     if is_uploading:
         return LedState.UPLOADING
     return LedState.RECORDING
+
+
+def wait_out_restart_gap(
+    ended_at: float,
+    *,
+    gap_sec: float,
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> None:
+    """Sleep until ``gap_sec`` after ``ended_at``, and never longer than that.
+
+    ``ended_at`` is when the segment's capture returned, on ``monotonic``. A
+    press up to ``gap_sec`` later belongs to that segment, so flushing markers
+    any earlier would let the segment reach storage ahead of its own flag.
+    The wait is capped at ``gap_sec`` whatever the clock says, so neither a
+    stop, a halt, nor a clock step can hold an upload for longer.
+    """
+    remaining = min(ended_at + gap_sec - monotonic(), gap_sec)
+    if remaining > 0:
+        sleep(remaining)
 
 
 class WorkerAction(Enum):

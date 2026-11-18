@@ -1,5 +1,5 @@
-visio flag-marker offline-first simulation, 2026-11-18 16:44
-firmware: /home/viet/.treehouse/vision-61dce7/3/vision/firmware
+visio flag-marker offline-first simulation, 2026-11-18 17:01
+firmware: /home/viet/.no-mistakes/worktrees/4e3fd015ec75/01M7Q11YBD6WBWKQ1WBFHKAX0C/firmware
 
 ==============================================================================
 1. WiFi down for hours, then restored
@@ -7,36 +7,33 @@ firmware: /home/viet/.treehouse/vision-61dce7/3/vision/firmware
 Production retry schedule, straight out of RetryBackoff():
   consecutive failures 1..6 -> 30s, 60s, 120s, 240s, 480s, 480s
   simulated here at 1/1500: 20ms, 40ms, 80ms, 160ms, 320ms, 320ms
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120000.mp4 failed; keeping it queued
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120100.mp4 failed; keeping it queued
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120000.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120100.mp4 failed; keeping it queued
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120200.mp4 failed; keeping it queued
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120000.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120100.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120200.mp4 failed; keeping it queued
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: upload of /tmp/tmpk9h74nie/data/queue/20260704_120300.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmps48jrr05/data/queue/20260704_120000.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmps48jrr05/data/queue/20260704_120100.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmps48jrr05/data/queue/20260704_120000.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmps48jrr05/data/queue/20260704_120100.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmps48jrr05/data/queue/20260704_120200.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmps48jrr05/data/queue/20260704_120300.mp4 failed; keeping it queued
 
 Holding the outage for 19 retry rounds = 2.1 device-hours (6.1s real at worst)
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
-    firmware: flag marker upload failed; /tmp/tmpk9h74nie/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmps48jrr05/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
   [PASS] the marker is retried in process while the network is down: 19 attempts over 2.1 device-hours
   [PASS] every one of those attempts was the flag worker's: {'flag-upload-worker'}
   [PASS] nothing reached storage while the network was down
@@ -59,13 +56,13 @@ WiFi comes back.
 ==============================================================================
 2. Flaky WiFi (every other attempt fails)
 ==============================================================================
-    firmware: upload of /tmp/tmpt745byp1/data/queue/20260704_120000.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpt745byp1/data/queue/20260704_120000.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpt745byp1/data/queue/20260704_120200.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpt745byp1/data/queue/20260704_120200.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpt745byp1/data/queue/20260704_120200.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpt745byp1/data/queue/20260704_120200.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmpt745byp1/data/queue/20260704_120200.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp12ir0m_s/data/queue/20260704_120000.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp12ir0m_s/data/queue/20260704_120000.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp12ir0m_s/data/queue/20260704_120200.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp12ir0m_s/data/queue/20260704_120200.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmp12ir0m_s/data/queue/FLAG_20260704_120401.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmp12ir0m_s/data/queue/FLAG_20260704_120401.marker stays queued for the next retry
+    firmware: upload of /tmp/tmp12ir0m_s/data/queue/20260704_120400.mp4 failed; keeping it queued
   [PASS] all three presses reached storage: ['device-sim/FLAG_20260704_120030.marker', 'device-sim/FLAG_20260704_120215.marker', 'device-sim/FLAG_20260704_120401.marker']
   [PASS] the queue drained completely
   [PASS] each press was acknowledged on the wire: 3 magenta frames
@@ -81,9 +78,9 @@ WiFi comes back.
     20260704120300.mp4
     FLAG_20260704_120030.marker
     FLAG_20260704_120401.marker
-    firmware: upload of /tmp/tmptf7c4mlw/data/queue/20260704120100.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmptf7c4mlw/data/queue/20260704120200.mp4 failed; keeping it queued
-    firmware: upload of /tmp/tmptf7c4mlw/data/queue/20260704120300.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmpswpvuidc/data/queue/20260704120100.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmpswpvuidc/data/queue/20260704120200.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmpswpvuidc/data/queue/20260704120300.mp4 failed; keeping it queued
   reached storage before the power went:
     device-sim/FLAG_20260704_120030.marker
     device-sim/FLAG_20260704_120401.marker
@@ -99,7 +96,7 @@ WiFi comes back.
 ==============================================================================
 4. A press while a segment upload is in flight
 ==============================================================================
-  [PASS] the press handler returned while the segment upload was still blocked: 19.2 ms
+  [PASS] the press handler returned while the segment upload was still blocked: 25.2 ms
   [PASS] the marker was on the card before the uploader was told about it
   [PASS] the wearer was acknowledged before the upload even finished
   LED timeline on the wire:
@@ -110,6 +107,16 @@ WiFi comes back.
   [PASS] the blink did not leave magenta on: green (recording) - the upload finished mid-blink, so that state change won and the restore stood down
   [PASS] only the flag worker ever uploaded a marker
   [PASS] no two LED frames interleaved
+
+==============================================================================
+5. A press in the restart gap, after the segment has been muxed
+==============================================================================
+  storage, in the order it received things:
+    device-sim/FLAG_20260704_120102.marker
+    device-sim/20260704_120000.mp4
+  [PASS] the segment waited for its gap, and never longer than the gap: waited 2.96 s of the unscaled 3 s gap
+  [PASS] the gap press reached storage before the segment it flags: ['device-sim/FLAG_20260704_120102.marker', 'device-sim/20260704_120000.mp4']
+  [PASS] the queue drained completely
 
 ==============================================================================
 Result

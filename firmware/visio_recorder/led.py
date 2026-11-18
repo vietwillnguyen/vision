@@ -33,7 +33,7 @@ MAGENTA = (255, 0, 255)
 
 # How long a flag acknowledgement holds the pixel. Long enough to register
 # through a pendant housing, short enough that it cannot be mistaken for a
-# state; presses are 2 s apart at most, so blinks never stack.
+# state; accepted presses are at least 2 s apart, so blinks never stack.
 FLAG_ACK_BLINK_SEC = 0.15
 
 _STATE_TO_COLOR_PATTERN: dict[LedState, tuple[tuple[int, int, int], LedPattern]] = {

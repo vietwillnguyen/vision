@@ -40,6 +40,7 @@ from visio_recorder.recording_loop import (
     pending_segments,
     recover_orphaned_segments,
     retry_pending_segments,
+    wait_out_restart_gap,
 )
 from visio_recorder.upload_limit import UploadLimit, rejected_dir
 from visio_recorder.upload_queue import list_pending
@@ -1164,3 +1165,25 @@ def test_a_marker_flush_that_could_not_finish_still_uploads_the_segment(tmp_path
     # A marker that could not be sent is not a lost segment, so it must not
     # count towards the Critical escalation.
     assert health.consecutive_failures == 0
+
+
+@pytest.mark.parametrize(
+    ("ended_at", "now", "expected"),
+    [
+        (100.0, 101.0, [2.0]),
+        (100.0, 103.0, []),
+        (100.0, 500.0, []),
+        # A clock that has gone backwards still never waits beyond the gap.
+        (100.0, 50.0, [3.0]),
+    ],
+)
+def test_the_restart_gap_wait_ends_at_the_gap_and_never_lasts_longer(
+    ended_at, now, expected
+):
+    slept: list[float] = []
+
+    wait_out_restart_gap(
+        ended_at, gap_sec=3.0, monotonic=lambda: now, sleep=slept.append
+    )
+
+    assert slept == expected

@@ -148,6 +148,7 @@ def _make_deps(
     retry_backoff=None,
     monotonic=None,
     flush_markers=None,
+    sleep=None,
 ) -> LoopDeps:
     return LoopDeps(
         command_runner=command_runner,
@@ -164,6 +165,7 @@ def _make_deps(
         upload_limit=unlimited_upload_limit(),
         audio=audio,
         flush_markers=flush_markers,
+        sleep=sleep or (lambda seconds: None),
         **({} if retry_backoff is None else {"retry_backoff": retry_backoff}),
         **({} if monotonic is None else {"monotonic": monotonic}),
     )
@@ -1329,6 +1331,83 @@ def test_a_queued_marker_reaches_storage_before_the_next_segment(tmp_path):
         "device-abc/FLAG_20260704_115930.marker",
         "device-abc/20260704_120000.mp4",
     ]
+    assert list_pending(queue_dir) == []
+
+
+def test_a_press_late_in_the_restart_gap_reaches_storage_before_its_segment(
+    tmp_path,
+):
+    # Segment N's capture returns at T, the worker has it muxed by T+1 - where
+    # the flush used to run - and the wearer presses at T+2.5, inside the 3 s
+    # gap the pipeline attaches to segment N. One fake clock drives all of it.
+    queue_dir = tmp_path / "queue"
+    capture_returned_at = 100.0
+    press_at = capture_returned_at + 2.5
+    lock = threading.Lock()
+    now = [0.0]
+    slept: list[float] = []
+
+    class TimedStorage(FakeStorageClient):
+        markers_stored_when_segment_started: list[str] | None = None
+
+        def upload(self, bucket, object_path, local_path):
+            if local_path.suffix == ".mp4":
+                self.markers_stored_when_segment_started = [
+                    key for key in self.uploaded if key.endswith(".marker")
+                ]
+                advance(2.0)
+            super().upload(bucket, object_path, local_path)
+
+    storage = TimedStorage()
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    press = make_flag_press_handler(
+        queue_dir=queue_dir,
+        submit=flag_worker.submit,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 0, 3), step_seconds=0),
+    )
+
+    def advance(seconds: float) -> None:
+        with lock:
+            before = now[0]
+            now[0] += seconds
+            after = now[0]
+        if before < press_at <= after:
+            press()
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        advance(seconds)
+
+    class MuxTakesASecond(FakeCommandRunner):
+        def run(self, args):
+            if "ffmpeg" in args:
+                advance(1.0)
+            super().run(args)
+
+    stop = threading.Event()
+
+    def capture_returns(count: int) -> None:
+        with lock:
+            now[0] = capture_returned_at
+        stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=MuxTakesASecond(on_record=capture_returns),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        monotonic=lambda: now[0],
+        flush_markers=flag_worker.flush_markers,
+        sleep=sleep,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.stop()
+
+    assert storage.markers_stored_when_segment_started == [
+        "device-abc/FLAG_20260704_120003.marker"
+    ]
+    assert slept == [2.0]
     assert list_pending(queue_dir) == []
 
 

@@ -55,6 +55,7 @@ from visio_recorder.flag_button import (  # noqa: E402
 from visio_recorder.led import LedController  # noqa: E402
 from visio_recorder.muxer import SubprocessCommandRunner  # noqa: E402
 from visio_recorder.recording_loop import (  # noqa: E402
+    RESTART_GAP_SEC,
     RetryBackoff,
     ShutilDiskStatsReader,
     flush_pending,
@@ -66,6 +67,7 @@ DEVICE = "device-sim"
 EFFECTIVE_SPI_HZ = 6_250_000
 SCALE = 1500.0  # production seconds per simulated second
 SCALED_BACKOFF = RetryBackoff(base_sec=30.0 / SCALE, max_sec=480.0 / SCALE)
+SCALED_GAP_SEC = RESTART_GAP_SEC / SCALE
 COLOUR_NAMES = {
     (0, 255, 0): "green (recording)",
     (0, 0, 255): "blue (uploading)",
@@ -186,7 +188,16 @@ class Status:
         pass
 
 
-def _deps(tmp: Path, runner, storage, led, flag_worker) -> LoopDeps:
+def _deps(
+    tmp: Path,
+    runner,
+    storage,
+    led,
+    flag_worker,
+    *,
+    gap_sec: float = SCALED_GAP_SEC,
+    sleep=time.sleep,
+) -> LoopDeps:
     data_dir = tmp / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return LoopDeps(
@@ -204,6 +215,8 @@ def _deps(tmp: Path, runner, storage, led, flag_worker) -> LoopDeps:
         upload_limit=UploadLimit(max_bytes=2**40, runner=runner, probe=_NoProbe()),
         flush_markers=flag_worker.flush_markers,
         retry_backoff=SCALED_BACKOFF,
+        restart_gap_sec=gap_sec,
+        sleep=sleep,
     )
 
 
@@ -561,6 +574,72 @@ def scenario_4_press_during_upload() -> None:
         check("no two LED frames interleaved", spi.overlapping_writes == 0)
 
 
+def scenario_5_press_in_the_restart_gap() -> None:
+    heading("5. A press in the restart gap, after the segment has been muxed")
+    with tempfile.TemporaryDirectory() as tmp_name:
+        tmp = Path(tmp_name)
+        queue_dir = tmp / "data" / "queue"
+        storage = Network(online=True)
+        led = LedController(Ws2812LedDriver(spi=SimulatedSpiDevice()))
+        flag_worker = FlagUploadWorker(
+            storage, DEVICE, queue_dir, retry_backoff=SCALED_BACKOFF
+        )
+        # 12:00:00 + 60 s segment, pressed 2.5 s into the gap that follows.
+        press = make_flag_press_handler(
+            queue_dir,
+            flag_worker.submit,
+            ack=led.ack_flag,
+            clock=FakeClock(datetime(2026, 7, 4, 12, 1, 2, 500000), step_seconds=0),
+        )
+        waits: list[float] = []
+
+        def gap_sleep(seconds: float) -> None:
+            # The worker is waiting out the gap: the segment is already muxed
+            # and would have been on its way to storage without this wait.
+            waits.append(seconds)
+            press()
+            time.sleep(seconds)
+
+        stop = threading.Event()
+        runner = SimulatedCamera(lambda n: stop.set())
+        assert run_startup_sequence(FakeBatteryReader(85), led).proceed
+        deps = _deps(
+            tmp,
+            runner,
+            storage,
+            led,
+            flag_worker,
+            gap_sec=RESTART_GAP_SEC,
+            sleep=gap_sleep,
+        )
+        run_recording_loop(
+            deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0), step_seconds=60)
+        )
+        flag_worker.stop()
+        led.close()
+
+        print("  storage, in the order it received things:")
+        for key in storage.stored:
+            print(f"    {key}")
+        check(
+            "the segment waited for its gap, and never longer than the gap",
+            len(waits) == 1 and 0 < waits[0] <= RESTART_GAP_SEC,
+            f"waited {waits[0]:.2f} s of the unscaled {RESTART_GAP_SEC:.0f} s gap"
+            if len(waits) == 1
+            else f"{len(waits)} waits",
+        )
+        check(
+            "the gap press reached storage before the segment it flags",
+            storage.stored
+            == [
+                f"{DEVICE}/FLAG_20260704_120102.marker",
+                f"{DEVICE}/20260704_120000.mp4",
+            ],
+            str(storage.stored),
+        )
+        check("the queue drained completely", list_pending(queue_dir) == [])
+
+
 def main() -> int:
     _quiet_logging()
     print(
@@ -571,6 +650,7 @@ def main() -> int:
     scenario_2_flaky_wifi()
     scenario_3_reboot_mid_backlog()
     scenario_4_press_during_upload()
+    scenario_5_press_in_the_restart_gap()
     heading("Result")
     if failures:
         for name in failures:
