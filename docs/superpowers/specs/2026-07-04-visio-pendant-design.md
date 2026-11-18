@@ -311,7 +311,7 @@ stateDiagram-v2
     Starting --> Halted: Wi-Fi activation failed
     state RecordingFamily {
         Recording --> Uploading: upload starts
-        Uploading --> Recording: upload done
+        Uploading --> Recording
         Recording --> LowBattery: battery under 20%
         Uploading --> Critical: 3rd consecutive failure
         Critical --> Recording: any upload success
