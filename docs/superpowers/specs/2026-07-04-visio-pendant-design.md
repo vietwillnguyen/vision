@@ -98,6 +98,7 @@ The device records passively all day, uploads footage to the cloud over home WiF
 - Camera Module 3 Wide: ~0.3W.
 - Total continuous draw: ~1.5W.
 - 3000mAh @ 3.7V = 11.1Wh → ~7.4 hours real-world.
+- The firmware stops recording and powers off before the pack is flat, so the usable window is bounded by the halt thresholds rather than by the pack; see Battery and Power Management.
 
 ### GPIO Pin Map
 
@@ -144,7 +145,10 @@ A single Python systemd service manages the full device lifecycle.
 **Startup sequence (as-built, Epic 5 daemon glue):**
 
 1. PiJuice powers on Pi; systemd starts `visio-recorder` with `EnvironmentFile=/etc/visio-recorder.env` supplying Supabase credentials and the data-dir/segment/framerate tunables.
-2. Check battery level via PiJuice API. If below the halt threshold (<10%), flash LED red and exit 0 without recording; below the 20% low-battery threshold, proceed but show the low-battery LED throughout.
+2. Check the battery via the PiJuice API, debounced: `BATTERY_BOOT_SAMPLES` (3) samples one second apart rather than the single sample this used to take, so a pendant is never refused a day's recording over one bad read at power-on.
+   A confirmed halt (charge or voltage, and only while not externally powered) flashes the Critical red LED and runs the power-off sequence instead of exiting 0 - an exit left the Pi powered and discharging, which is how an idle pendant browns out mid-write.
+   A confirmed low battery proceeds but shows the low-battery LED throughout, with the hysteresis band already applied.
+   See Battery and Power Management for the thresholds, the debounce, and the power-off sequence.
 3. First boot only (no session file on disk yet): scan a QR code via `rpicam-still` + zbar to onboard WiFi (writes the NetworkManager keyfile) and Supabase auth, up to 60 attempts; exit 1 if onboarding never succeeds.
    Then activate the connection (`nmcli connection reload` + `nmcli connection up visio`); on activation failure, flash the Critical red LED and exit 1 so systemd retries.
    On restart boots (session file already on disk), the same reload/up runs again as a best-effort retry whenever the keyfile exists, so a first boot whose activation failed is not stranded offline; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
@@ -277,12 +281,30 @@ Unlike a segment it gets no in-process retry, since the upload worker's retry ro
 
 **LED state machine:**
 
-| State | Color / Pattern |
-|---|---|
-| Recording | Solid green |
-| Uploading | Pulsing blue |
-| Low battery (<20%) | Pulsing yellow |
-| Critical battery / error | Red flash |
+One condition set, one priority ladder, one state.
+The ladder is the whole contract: conditions are not mutually exclusive (a pendant can be low on battery, uploading, and shutting down at once), so the state shown is the highest-priority condition that currently holds.
+
+| Priority | Condition | State | Color / Pattern |
+|---|---|---|---|
+| 1 | Battery halt confirmed | Critical | Red flash |
+| 2 | Deliberate shutdown in progress (SIGTERM / SIGINT) | Shutting down | White, pulsing |
+| 3 | 3 consecutive upload failures, latched | Critical | Red flash |
+| 4 | Low-battery latch set (see Battery and Power Management) | Low battery | Pulsing yellow |
+| 5 | An upload is in flight | Uploading | Pulsing blue |
+| 6 | Base state - the loop is capturing | Recording | Solid green |
+| 6 | Base state - the loop is idle | Stopped | Dim white, solid |
+
+Priorities 2 and 6-Stopped belong to the recording stop/start control design, which is approved but not yet implemented; whichever of the two features lands second composes with the first against this table rather than re-deriving an order.
+That design states the ladder as `SHUTTING_DOWN > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING or STOPPED`.
+This table refines it by splitting its single `CRITICAL` term in two, because the two things that paint the LED red are not the same event:
+
+- A **battery halt** is terminal and outranks everything, including a deliberate shutdown. It is the pendant's only chance to tell the wearer *why* it just went dark, and "charge me" is the one actionable message at that moment. It is also already applied last, after the upload worker is joined, so no drained segment's LED restore can paint over it - the invariant that made `next_led_state` exist.
+- An **upload-failure** Critical is a running condition, not an ending one. A deliberate shutdown outranks it: while the pendant is powering off, "I am shutting down" is what the wearer needs, and the failed uploads are still queued for the next boot regardless.
+
+A battery halt therefore never shows Shutting down even though it ends in a power-off.
+Never "LED off" in any state: a dark pendant is indistinguishable from a dead one.
+
+`next_led_state` in `firmware/visio_recorder/recording_loop.py` is the single place this ladder is encoded, including the halt, which no longer applies `LedState.CRITICAL` by hand.
 
 **LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour.
 `Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).
@@ -302,6 +324,109 @@ The device needs three things for this driver:
 - The service user in the `spi` group, which owns `/dev/spidev*` through Raspberry Pi OS's udev rules.
 
 The provisioning script and systemd unit are being changed in PR #26, which has not merged; the changes it needs for this driver are listed in [`2026-07-21-visio-device-provisioning-design.md`](2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26).
+
+### Battery and Power Management
+
+The pendant runs on a single-cell LiPo behind a PiJuice pHAT and spends its whole day discharging, so every decision here exists to keep a dying battery from costing footage or an SD card.
+Two failure modes drive it: acting on one noisy fuel-gauge sample, and browning out mid-write.
+
+**Why a single sample is not evidence.**
+A fuel gauge reports state of charge, not energy, and the PiJuice's gauge is resistance-compensated against a battery profile rather than measured.
+Under the pendant's own load - a 4 Mbps hardware H.264 encode plus a WiFi upload burst, the two heaviest consumers on the board - the reported percentage dips and recovers, and the cell's terminal voltage sags and recovers with it.
+Reading `GetChargeLevel()` once and halting on it therefore shuts a healthy pendant down mid-morning as readily as it catches a real one at dusk.
+
+#### Thresholds
+
+| Name | Value | What it does |
+|---|---|---|
+| `BATTERY_WARN_PCT` | 20 | Below this, the low-battery latch sets and the LED goes yellow |
+| `BATTERY_WARN_CLEAR_PCT` | 25 | At or above this, the latch clears - the hysteresis band is 20-25 % |
+| `BATTERY_HALT_PCT` | 10 | Below this, confirmed, the pendant stops recording and powers off |
+| `BATTERY_FLOOR_MV` | 3300 | Terminal voltage below this, confirmed, is an emergency halt regardless of percentage |
+| `PCT_AVERAGE_WINDOW` | 5 | Samples in the percentage moving average |
+| `HALT_CONFIRMATIONS` | 3 | Consecutive smoothed samples under `BATTERY_HALT_PCT` before halting |
+| `FLOOR_CONFIRMATIONS` | 2 | Consecutive raw samples under `BATTERY_FLOOR_MV` before halting |
+| `WAKE_ON_CHARGE_PCT` | 25 | Charge level at which the PiJuice re-powers the Pi after a low-battery halt |
+| `UPLOAD_DRAIN_TIMEOUT_SEC` | 120 | How long a halt waits for the upload queue to drain before powering off |
+
+`BATTERY_HALT_PCT` and `BATTERY_FLOOR_MV` are PiJuice's own shipped defaults for the same two jobs (`min_charge.threshold` 10 and `min_bat_voltage.threshold` 3.3 in `pijuice_cli.py`), which is the reason to prefer them over a figure of this project's own invention: they are the values the HAT's vendor chose for a 1S LiPo, and matching them keeps the firmware's software halt and the HAT's independent backstop (below) from disagreeing about when the battery is empty.
+`WAKE_ON_CHARGE_PCT` is deliberately the hysteresis *clear* threshold rather than PiJuice's 50 % default: a pendant that wakes at 25 % comes up already out of the low-battery band, so it never boots straight into a yellow LED, and it earns about two hours of recording at the 1.5 W budget.
+
+#### Debounce and hysteresis
+
+One object, `BatteryMonitor`, turns a stream of samples into a verdict and holds every piece of state that makes the verdict stable.
+It is pure: it reads no hardware and keeps no clock, so the noisy, sagging, charging and recovering traces it has to survive are ordinary test inputs.
+
+- **Percentage** is smoothed by a moving average over the last `PCT_AVERAGE_WINDOW` samples before any threshold is compared against it. Fewer samples than the window average over what has arrived, so a pendant three samples into its run is already protected rather than running unguarded until the window fills.
+- **The low-battery latch** is hysteretic, not a comparison: it sets when the smoothed percentage goes below 20 and clears only at 25 or above. Without the gap, a battery hovering at the threshold flickers the LED between yellow and green all afternoon, and a wearer learns to ignore it.
+- **The charge halt** needs `HALT_CONFIRMATIONS` consecutive smoothed samples below 10. One sample at or above 10 resets the count to zero; the confirmations must be consecutive, not cumulative, because a gauge that dips and recovers is reporting load, not depletion.
+- **The voltage floor** is compared against the *raw* reading, not the average. Averaging a sag defeats the point of watching voltage at all - the floor exists precisely because the percentage lags under load, so smoothing it would reintroduce the lag it is there to cover. Its debounce is the confirmation count instead, and it is 2 rather than 3: it is the emergency path, so it trades one sample of latency for the shorter reaction time, and rather than 1 because a lone 3.29 V sample during a WiFi transmit burst is the noise this whole section exists to reject.
+- **External power resets everything.** While `powerInput` or `powerInput5vIo` reads `PRESENT`, or the battery reads `NOT_PRESENT`, both confirmation counts are cleared and no halt can be returned, so a pendant on a charger cannot shut itself down no matter what the gauge says. This is also what PiJuice's own `pijuice_sys.py` does - `_EvalCharge` and `_EvalBatVoltage` both return before reading the gauge at all when external power is present.
+
+#### Sample cadence, and the backstop that does not depend on it
+
+The battery is sampled on the main loop thread, at the same point it is sampled today: once per loop iteration, which is once per segment while recording (60 s at the defaults, 300 s at the cap) and once per `IDLE_BATTERY_POLL_SEC` once the recording stop/start control's idle state exists.
+No monitor thread is added.
+A second thread would have to be given a share of the LED, and the single-owner invariant that the LED state machine depends on is worth more than a faster poll.
+
+The consequence is honest and stated rather than hidden: the software voltage floor's reaction time is `FLOOR_CONFIRMATIONS` x the segment length, about two minutes at the defaults.
+Two minutes at the 1.5 W power budget is roughly 0.05 Wh out of the pack's 11.1 Wh, so the cost is not the energy - it is that a cell already at 3.3 V has little margin above the point where the Pi browns out.
+That margin is covered by something that does not run on this loop at all: the PiJuice's own system task, configured with `min_charge` and `min_bat_voltage` thresholds and `wakeup_on_charge`, halts the Pi on its own schedule whether or not the daemon is healthy.
+The firmware's debounced halt exists to make the *common* case a clean, upload-draining shutdown; the HAT's own task is the independent backstop for the case where the daemon is wedged, mid-capture, or already gone.
+Arming it needs the HAT, so it is a bench step (see the provisioning plan's Task 9), not firmware.
+
+#### What a halt does
+
+A confirmed halt is a shutdown sequence, not an exit.
+The old behaviour - stop recording, flash red, exit 0 - left an idle Pi powered on to discharge to zero and brown out mid-write, which is the single most likely way this device corrupts an SD card.
+
+1. Stop recording. The in-flight capture finishes, or is cut short once the recording-control design's interruptible capture lands.
+2. Drain the upload queue, bounded by `UPLOAD_DRAIN_TIMEOUT_SEC`. The worker is joined with that timeout rather than indefinitely: a dying battery is exactly when an upload is most likely to hang on a weak signal, and waiting forever for it is how the Pi ends up browning out instead of powering off. Whatever is left stays queued for the next boot.
+3. Push the final `device_status` row, `recording_active = false`, as it does for any loop exit.
+4. Apply the Critical red LED - priority 1 in the ladder above, applied after the join so nothing can overwrite it.
+5. Re-read the battery once more. If external power has appeared during the drain, the halt is cancelled: see Recovery below.
+6. Otherwise power off cleanly, and arm the wake.
+
+**Powering off.**
+Where a PiJuice is present the sequence is the HAT's own: `power.SetWakeUpOnCharge(WAKE_ON_CHARGE_PCT)` so the pack re-powers the Pi when it has charge again, `power.SetSystemPowerSwitch(0)` to drop the 5 V rail's load, `power.SetPowerOff(60)` to tell the HAT to cut power 60 seconds from now, and then `systemctl poweroff` to actually halt the OS.
+The order matters: the OS halt is what protects the filesystem, and the HAT's 60-second timer is a deadline that fires whether or not the halt completed, so a wedged shutdown still ends in a cut rail instead of a slow brownout.
+60 seconds is PiJuice's own figure for the same job in `pijuice_sys.py`, chosen to let a halt finish.
+Where no PiJuice is present, the sequence is `systemctl poweroff` alone and there is no wake to arm; a pendant on a USB power bank cannot reach a halt in the first place (see Battery sources).
+
+`systemctl poweroff` is a privileged call and the daemon does not run as root, so the service user needs a polkit grant for `org.freedesktop.login1.power-off`.
+That rule ships beside the systemd unit in `firmware/systemd/` and provisioning installs it; without it the halt logs a failure and the PiJuice's 60-second timer becomes the only thing that stops the device.
+`VISIO_BATTERY_POWEROFF=off` suppresses the power-off for bench work, so the whole halt path can be watched on a real device without the device going dark; the default is `on`.
+
+#### Recovery
+
+A pendant that halts must come back on its own.
+Two mechanisms cover the two cases, and they are deliberately different:
+
+- **Charge returns before the power-off.** The re-read at step 5 sees external power, the halt is cancelled, the Critical LED gives way to the live state, and the recording loop is re-entered with a fresh upload worker. Plugging a pendant in during the drain therefore keeps it running rather than powering it off and waiting for the wake.
+- **Charge returns after the power-off.** `SetWakeUpOnCharge(25)` was armed in step 6, so the PiJuice powers the Pi back up once the pack reaches 25 %, and the ordinary boot sequence runs. Nothing waits for a human to press anything.
+
+Neither path needs a manual reboot, which was the behaviour this replaces.
+The wake is armed *before* the power-off, not after, because after it there is no process left to arm anything.
+
+#### Battery sources
+
+`BatteryReader` stays a one-method `Protocol` (`get_charge_pct`), which is the minimum every source can answer.
+Voltage and external-power state are a *second*, richer protocol, `BatteryTelemetryReader`, and a source that does not implement it is read for percentage alone:
+
+- `PiJuiceBatteryReader` implements both. Percentage is `status.GetChargeLevel()`, voltage is `status.GetBatteryVoltage()` in millivolts, and external power is `status.GetStatus()`'s `powerInput` / `powerInput5vIo` reading `PRESENT` or its `battery` reading `NOT_PRESENT`.
+- A percentage-only source yields no voltage, so the floor is never evaluated for it, and unknown external power is treated as absent.
+
+Treating unknown external power as absent is the safe direction: it can only make the firmware *more* willing to halt, and halting an idle Pi is recoverable while browning out mid-write is not.
+It is also unreachable for the one percentage-only source that exists.
+
+`VISIO_BATTERY_SOURCE=none` - the USB power bank used for bring-up while the PiJuice is unavailable, landing with PR #26 - reports a fixed 100 %, implements only `get_charge_pct`, and is therefore provably unchanged by everything above: 100 % never sets the latch, never reaches the halt threshold, and offers no voltage to compare against a floor.
+Its power controller is the systemd one, which nothing on that path can ever call.
+
+#### Interactions with work not in this section
+
+- **Recording stop/start control** (approved, not implemented) adds the Stopped and Shutting down LED states and an idle loop state. The LED ladder above is the composed order for both features. Its idle state is also what makes the halt reachable without a capture in flight, which is why the battery is read at the top of every loop iteration rather than after each capture.
+- **The GPIO 3 shutdown/wake button path** is separate work. It arrives at the same power-off that step 6 performs, so the polkit grant and the PiJuice sequence are shared rather than duplicated when it lands.
+- **`device_status`** gains no column. The halt reason - charge or voltage - is logged, not reported, so there is no migration, no pgTAP change and no generated-types regeneration here. `battery_pct` keeps reporting the latest raw reading rather than the smoothed one: the row is a readout of the gauge, and the moving average exists to decide, not to display.
 
 ### WiFi Onboarding
 
