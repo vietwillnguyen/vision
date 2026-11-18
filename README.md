@@ -14,7 +14,7 @@ supabase/            -- Epic 0: Postgres migrations, pgTAP tests, local stack co
 firmware/            -- Epic 1: visio-recorder Python systemd daemon
   visio_recorder/    -- battery, LED, muxer, upload queue, uploader, wifi/device onboarding, recording loop
   tests/             -- pytest suite (fakes for every hardware/network Protocol)
-  systemd/           -- installable systemd unit
+  systemd/           -- installable systemd unit and the polkit rule that lets it power off
 pipeline/            -- Epic 2: nightly cloud AI pipeline (Python package)
   pipeline/          -- ingestion, scoring, selection, assembly, delivery stages,
                         nightly orchestrator + `python -m pipeline` entrypoint

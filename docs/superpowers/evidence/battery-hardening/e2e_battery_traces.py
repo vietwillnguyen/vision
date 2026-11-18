@@ -216,17 +216,13 @@ def replay(name: str) -> tuple[int | None, int | None, bool]:
     new_at: int | None = None
     old_at: int | None = None
     for index, (pct, voltage_mv, external) in enumerate(trace, start=1):
-        sample = BatterySample(
-            pct=pct, voltage_mv=voltage_mv, external_power=external
-        )
+        sample = BatterySample(pct=pct, voltage_mv=voltage_mv, external_power=external)
         verdict = monitor.observe(sample)
         if verdict.should_halt and new_at is None:
             new_at = index
         if old_policy(sample) and old_at is None:
             old_at = index
-        new_text = (
-            f"HALT ({verdict.halt_reason.value})" if verdict.should_halt else "-"
-        )
+        new_text = f"HALT ({verdict.halt_reason.value})" if verdict.should_halt else "-"
         old_text = "HALT" if old_policy(sample) else "-"
         note = ""
         if verdict.should_halt is not old_policy(sample):
@@ -330,10 +326,7 @@ def run_loop(name: str) -> None:
         f"segments_pending={final['segments_pending']}"
     )
     if power.power_offs:
-        print(
-            f"    POWERED OFF      wake-on-charge armed at "
-            f"{power.power_offs[0]}%"
-        )
+        print(f"    POWERED OFF      wake-on-charge armed at {power.power_offs[0]}%")
     else:
         print("    POWERED OFF      no - the device stayed up")
 
