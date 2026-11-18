@@ -38,7 +38,9 @@
 #
 # Env: RELOCK_REMOTE (default origin), RELOCK_DRY_RUN=1 to stop before pushing,
 #      RELOCK_COMMITTER_NAME / RELOCK_COMMITTER_EMAIL (default the
-#      github-actions[bot] identity).
+#      github-actions[bot] identity), RELOCK_DISPATCH (workflow files to
+#      dispatch after the push, default the three gating workflows; empty to
+#      dispatch none), RELOCK_REPO (default $GITHUB_REPOSITORY).
 set -euo pipefail
 
 log() { printf 'relock-integration: %s\n' "$*" >&2; }
@@ -108,3 +110,34 @@ fi
 # the push is rejected and the next run on the new head relocks it again.
 log "pushing to $remote $branch"
 git -C "$root" push "$remote" "HEAD:refs/heads/$branch"
+
+# The push alone leaves the relocked head with no checks on it. A push made with
+# GITHUB_TOKEN creates no workflow run - "events triggered by the GITHUB_TOKEN
+# will not create a new workflow run" - and `workflow_dispatch` is one of the two
+# documented exceptions that always do:
+# https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow
+#
+# A dispatched run's jobs become check runs on the commit its ref resolves to,
+# under the same names they carry on a pull_request run, which is what the pull
+# request's checks and any required status check read. So dispatching each gating
+# workflow on the branch is what actually turns the pull request green.
+#
+# A dispatch that fails does not fail this script: the relock is already pushed,
+# and that is the part that used to need a hand-made pull request. The warning
+# below is an Actions annotation so the run surfaces it rather than burying it.
+# The known case is a Dependabot branch cut before this workflow landed, whose
+# copy of the target file has no workflow_dispatch trigger yet; Dependabot
+# recreating or rebasing the branch clears it.
+repo="${RELOCK_REPO:-${GITHUB_REPOSITORY:-}}"
+read -r -a dispatch <<< "${RELOCK_DISPATCH-tests.yml lint.yml hooks.yml}"
+if [ "${#dispatch[@]}" -gt 0 ] && [ -z "$repo" ]; then
+  die "cannot dispatch workflows: neither RELOCK_REPO nor GITHUB_REPOSITORY is set"
+fi
+for workflow in ${dispatch[@]+"${dispatch[@]}"}; do
+  log "dispatching $workflow on $branch"
+  if ! out="$(gh workflow run "$workflow" --repo "$repo" --ref "$branch" 2>&1)"; then
+    printf '::warning title=Relock pushed but %s was not dispatched::%s
+'       "$workflow" "$out"
+    log "could not dispatch $workflow: $out"
+  fi
+done

@@ -71,6 +71,19 @@ echo "stub uv: unhandled: $*" >&2
 exit 2
 STUB
   chmod +x "$workdir/bin/uv"
+  # Stub gh. Records every `gh workflow run` and fails for any workflow file
+  # listed in $STUB_DIR/dispatch-fail, one per line.
+  cat > "$workdir/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_DIR/calls"
+if [ "$1 $2" = "workflow run" ] \
+  && [ -e "$STUB_DIR/dispatch-fail" ] && grep -qxF "$3" "$STUB_DIR/dispatch-fail"; then
+  echo "could not create workflow dispatch event: HTTP 422: Workflow does not have 'workflow_dispatch' trigger" >&2
+  exit 1
+fi
+exit 0
+STUB
+  chmod +x "$workdir/bin/gh"
 }
 
 # origin: a bare repository. seed: a full checkout used to seed it and to move
@@ -78,6 +91,14 @@ STUB
 # workflow's second actions/checkout produces.
 write_repo() {
   git init -q --bare "$workdir/origin"
+  # Records the push itself into the same ordered log as the uv and gh calls, so
+  # a case can assert what happened before what. git runs receive-pack as a
+  # child of the pushing process, so the hook inherits $STUB_DIR.
+  cat > "$workdir/origin/hooks/post-receive" <<'HOOK'
+#!/usr/bin/env bash
+while read -r _old _new ref; do printf 'push %s\n' "$ref" >> "$STUB_DIR/calls"; done
+HOOK
+  chmod +x "$workdir/origin/hooks/post-receive"
   local s="$workdir/seed"
   git init -q -b main "$s"
   git -C "$s" config user.email test@example.invalid
@@ -118,15 +139,21 @@ new_case() {
   mkdir -p "$STUB_DIR"
   write_stub
   write_repo
+  # Seeding the fixture pushed main and the Dependabot commit through the hook
+  # above; the cases only care about what the script itself does.
+  : > "$STUB_DIR/calls"
   remote_head_before=$(git -C "$workdir/origin" rev-parse "$BRANCH")
 }
 
 stale() { touch "$STUB_DIR/check-stale"; }
 
 run() {
-  ( cd "$workdir/head" && PATH="$workdir/bin:$PATH" "$SCRIPT" "$@" ) \
+  ( cd "$workdir/head" && PATH="$workdir/bin:$PATH" \
+      RELOCK_REPO="${RELOCK_REPO-vietwillnguyen/vision}" "$SCRIPT" "$@" ) \
     > "$workdir/out" 2> "$workdir/err"
 }
+
+dispatches() { grep '^workflow run ' "$STUB_DIR/calls" || true; }
 
 remote_head() { git -C "$workdir/origin" rev-parse "$BRANCH"; }
 remote_moved() { [ "$(remote_head)" != "$remote_head_before" ]; }
@@ -137,6 +164,7 @@ new_case "does nothing when integration/uv.lock is already current"
 if run "$BRANCH"; then
   grep -qx 'lock --no-build' "$STUB_DIR/calls" && fail "relocked although the lock was current"
   remote_moved && fail "pushed although the lock was current"
+  [ -z "$(dispatches)" ] || fail "dispatched although the lock was current: $(dispatches)"
   grep -q 'already current' "$workdir/err" || fail "did not say it was current: $(cat "$workdir/err")"
 else
   fail "exit $? ($(cat "$workdir/err"))"
@@ -250,6 +278,66 @@ else
   remote_moved && fail "pushed from an incomplete checkout"
   grep -q 'firmware/pyproject.toml' "$workdir/err" || fail "error does not name the path: $(cat "$workdir/err")"
   grep -qx 'lock --check' "$STUB_DIR/calls" && fail "ran uv before checking the checkout"
+fi
+
+new_case "dispatches every gating workflow on the branch after pushing"
+stale
+if run "$BRANCH"; then
+  expected="workflow run tests.yml --repo vietwillnguyen/vision --ref $BRANCH
+workflow run lint.yml --repo vietwillnguyen/vision --ref $BRANCH
+workflow run hooks.yml --repo vietwillnguyen/vision --ref $BRANCH"
+  [ "$(dispatches)" = "$expected" ] || fail "unexpected dispatches: $(dispatches)"
+else
+  fail "exit $? ($(cat "$workdir/err"))"
+fi
+
+new_case "dispatches only after the push, never before it"
+stale
+if run "$BRANCH"; then
+  # A dispatch of a branch the relock has not reached yet would run CI on the
+  # stale head and report a green that means nothing, so the order is the point.
+  first=$(grep -E '^(push |workflow run )' "$STUB_DIR/calls" | head -1)
+  [ "$first" = "push refs/heads/$BRANCH" ] \
+    || fail "dispatched before the push landed: $(cat "$STUB_DIR/calls")"
+else
+  fail "exit $? ($(cat "$workdir/err"))"
+fi
+
+new_case "a refused dispatch warns but does not fail the pushed relock"
+stale
+printf '%s\n' lint.yml > "$STUB_DIR/dispatch-fail"
+if run "$BRANCH"; then
+  remote_moved || fail "did not push"
+  grep -q '^::warning title=Relock pushed but lint.yml was not dispatched::' "$workdir/out" \
+    || fail "no warning annotation: $(cat "$workdir/out")"
+  grep -q "workflow run hooks.yml" "$STUB_DIR/calls" || fail "stopped dispatching after the failure"
+else
+  fail "exit $? ($(cat "$workdir/err"))"
+fi
+
+new_case "RELOCK_DISPATCH= dispatches nothing"
+stale
+if RELOCK_DISPATCH='' run "$BRANCH"; then
+  remote_moved || fail "did not push"
+  [ -z "$(dispatches)" ] || fail "dispatched with RELOCK_DISPATCH empty: $(dispatches)"
+else
+  fail "exit $? ($(cat "$workdir/err"))"
+fi
+
+new_case "fails before relocking when the repository for the dispatch is unknown"
+stale
+if RELOCK_REPO='' GITHUB_REPOSITORY='' run "$BRANCH"; then
+  fail "pushed without knowing where to dispatch"
+else
+  grep -q 'GITHUB_REPOSITORY' "$workdir/err" || fail "unexpected error: $(cat "$workdir/err")"
+fi
+
+new_case "RELOCK_DRY_RUN=1 dispatches nothing either"
+stale
+if RELOCK_DRY_RUN=1 run "$BRANCH"; then
+  [ -z "$(dispatches)" ] || fail "dispatched although RELOCK_DRY_RUN=1: $(dispatches)"
+else
+  fail "exit $? ($(cat "$workdir/err"))"
 fi
 
 new_case "exits with usage when given no branch"

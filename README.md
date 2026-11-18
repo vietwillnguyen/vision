@@ -56,7 +56,8 @@ The hook's own suite is [`scripts/hooks/tests/test-pre-commit.sh`](scripts/hooks
 ## Continuous integration
 
 Every pull request targeting `main`, and every push to `main`, is gated by the workflows below.
-They are split by what each needs to run, so a red check points at one thing:
+They are split by what each needs to run, so a red check points at one thing.
+All three also carry a `workflow_dispatch` trigger, which exists for [`dependabot-relock.yml`](.github/workflows/dependabot-relock.yml) below rather than for manual use:
 
 - [`tests.yml`](.github/workflows/tests.yml) - the subsystem test suites (the `firmware`, `pipeline`, `integration`, and `app` jobs) plus the pgTAP database contract, and a `ci-scripts` job that runs the stubbed suites for [`scripts/ci/`](scripts/ci) (a stub `docker` for the image cache, a stub `uv` and a local bare remote for the Dependabot relock). Needs Docker and a live local Supabase instance, so it is the slowest gate.
 - [`lint.yml`](.github/workflows/lint.yml) - `ruff check`, `ruff format --check`, and `mypy` on the Python packages, plus `npm run lint` (eslint), `npm run format:check` (Prettier), and `npm run typecheck` (`tsc --noEmit`) on the app. Needs neither Docker nor Supabase, so it fails fast and independently of the suites above; see [Lint, format, and type-check](#lint-format-and-type-check). Type-checking is the one thing this split does not separate: `tsc --noEmit` runs here and in `tests.yml`, so a type error reddens both checks.
@@ -75,7 +76,9 @@ Bump [`.github/supabase-images.txt`](.github/supabase-images.txt) in the same PR
 
 [`dependabot-relock.yml`](.github/workflows/dependabot-relock.yml) is not a gate either - it repairs a coupling the gates above can only report.
 `integration/pyproject.toml` declares `../firmware` and `../pipeline` as `[tool.uv.sources]` path dependencies and `integration/uv.lock` records their `requires-dist` metadata verbatim, so a bump to either sibling's `pyproject.toml` leaves the integration lock stale and the integration jobs' `uv run --locked` refuses to run; Dependabot relocks only the directory it bumps, so [#79](https://github.com/vietwillnguyen/vision/pull/79) and [#81](https://github.com/vietwillnguyen/vision/pull/81) both arrived red and were relocked by hand in [#90](https://github.com/vietwillnguyen/vision/pull/90).
-This workflow does that relock on Dependabot's `firmware/` and `pipeline/` pull requests and pushes the commit back to the branch; its header comment carries the reasoning for the one job in this repo that runs with a write token, and the one limitation only a real Dependabot pull request can settle.
+This workflow does that relock on Dependabot's `firmware/` and `pipeline/` pull requests and pushes the commit back to the branch, then dispatches the three gating workflows on it.
+That second half is not optional: a push made with `GITHUB_TOKEN` creates no workflow run, so the relocked head would otherwise carry no checks at all, and `workflow_dispatch` is one of the two events that always creates a run even when `GITHUB_TOKEN` triggers it.
+The workflow's header comment carries the rest - why the one job in this repo that runs with a write token can be trusted with it, what the dispatched runs do differently from the pull request's own, and what only a real Dependabot pull request can settle.
 
 ## Lint, format, and type-check
 

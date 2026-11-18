@@ -42,20 +42,47 @@ name: dependabot-relock
 # what this job executes. Dependabot keeps SHA pins current the same way it
 # keeps tags current.
 #
-# Known limitation, provable only on a real Dependabot pull request
-# ----------------------------------------------------------------
-# A push made with GITHUB_TOKEN does not create new workflow runs, so the relock
-# commit may not re-run tests.yml and lint.yml by itself. Per GitHub's docs a
-# `pull_request` `synchronize` caused by a GITHUB_TOKEN push is the documented
-# exception and creates runs in an approval-required state, needing one click
-# from a maintainer; if that exception does not apply to Dependabot's own pull
-# requests, the checks stay pending and the reviewer re-runs them by closing and
-# reopening the pull request. Either way the lock itself is already fixed, which
-# is the part that previously had to be done by hand. To make the re-run
-# automatic, add a fine-grained token with `contents: write` on this repository
-# as *both* an Actions secret and a Dependabot secret named
-# DEPENDABOT_RELOCK_TOKEN (GitHub's own recommendation for workflows triggered
-# by Dependabot and by others); this workflow picks it up with no edit.
+# Getting the relocked head its checks
+# ------------------------------------
+# Pushing is not enough on its own. "Events triggered by the GITHUB_TOKEN will
+# not create a new workflow run", so the relock commit would otherwise carry no
+# checks at all and the pull request could never go green. `workflow_dispatch`
+# and `repository_dispatch` are the two documented exceptions that always create
+# a run, so after pushing, the script dispatches each gating workflow on the
+# branch. That is why tests.yml, lint.yml and hooks.yml each carry a
+# `workflow_dispatch` trigger, and why this job needs `actions: write`.
+# https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow
+# https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-on-actions
+#
+# A dispatched run's jobs become check runs on the commit its ref resolves to,
+# carrying the same names they carry on a pull_request run, which is what a pull
+# request's checks and any required status check read. `main` is unprotected
+# today, so there are no required contexts to satisfy either way; if it is
+# protected later, the contexts match because the job names do.
+#
+# Two differences from the pull_request runs are worth knowing. A dispatched run
+# checks out the branch head rather than the pull request's merge commit, so it
+# gates the branch rather than the merge result. And the relocked head is tested
+# by a second set of runs, so a relocked Dependabot pull request costs roughly
+# twice the CI of an ordinary one.
+#
+# What only a real Dependabot pull request can settle
+# ---------------------------------------------------
+# That the dispatch is accepted end to end on a Dependabot-triggered run: the
+# read-only default token raised to `contents: write` and `actions: write` by
+# the `permissions:` key below, on a `pull_request_target` whose base ref is
+# main rather than Dependabot's. A dispatch that is refused does not fail the
+# job - the relock is pushed either way - and surfaces as a warning annotation
+# naming the workflow and the reason. A Dependabot branch cut before this
+# workflow landed has no workflow_dispatch trigger in its own copy of the
+# target file and will warn until Dependabot recreates or rebases it.
+#
+# If the dispatch turns out not to work, a fine-grained token with
+# `contents: write` on this repository, stored as *both* an Actions secret and a
+# Dependabot secret named DEPENDABOT_RELOCK_TOKEN (GitHub's own recommendation
+# for workflows triggered by Dependabot and by others), makes the push itself
+# re-trigger CI the ordinary way. This workflow picks that secret up with no
+# edit.
 
 on:
   pull_request_target:
@@ -71,9 +98,13 @@ on:
       - pipeline/pyproject.toml
       - pipeline/uv.lock
 
-# Only what the push needs. No pull-requests, packages or id-token scope.
+# Only what the push and the dispatch need. No pull-requests, packages or
+# id-token scope. `actions: write` is the scope that dispatches a workflow;
+# together with the base-branch definition above it is bounded to running this
+# repository's own gating workflows on the branch.
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   # Serialize per pull request: two relock jobs racing would have one push
@@ -138,7 +169,7 @@ jobs:
           # cache the unprivileged jobs restore.
           enable-cache: false
 
-      - name: Relock integration/uv.lock and push
+      - name: Relock integration/uv.lock, push, and dispatch the gating workflows
         working-directory: head
         run: ../base/scripts/ci/relock-integration.sh "$HEAD_REF"
         env:
@@ -146,3 +177,5 @@ jobs:
           # attacker-influenced text in the general case and must never be
           # interpolated into a shell command.
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          # `gh workflow run` dispatches the gating workflows after the push.
+          GH_TOKEN: ${{ secrets.DEPENDABOT_RELOCK_TOKEN || secrets.GITHUB_TOKEN }}
