@@ -19,7 +19,7 @@ this implements.
 
 import logging
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from threading import Lock
 from typing import Protocol, runtime_checkable
@@ -94,6 +94,7 @@ class BatterySample:
 class HaltReason(Enum):
     CHARGE = "charge"
     VOLTAGE = "voltage"
+    UNREADABLE = "unreadable"
 
 
 @dataclass(frozen=True)
@@ -166,12 +167,14 @@ class BatteryMonitor:
         self._is_low = False
         self._halt_streak = 0
         self._floor_streak = 0
+        self._unreadable_streak = 0
 
     def read(self, reader: BatteryReader) -> BatteryVerdict:
         """Take one sample from ``reader`` and fold it into the verdict."""
         return self.observe(read_battery_sample(reader))
 
     def observe(self, sample: BatterySample) -> BatteryVerdict:
+        self._unreadable_streak = 0
         self._window.append(sample.pct)
         smoothed = round(sum(self._window) / len(self._window))
 
@@ -188,6 +191,27 @@ class BatteryMonitor:
             halt_reason=halt_reason,
             external_power=sample.external_power,
         )
+
+    def observe_unreadable(self, last: BatteryVerdict) -> BatteryVerdict:
+        """The verdict after a reading that failed outright.
+
+        An isolated failure keeps ``last``: one bad I2C transfer is noise like
+        one sagging sample is. A gauge that stays unreadable for
+        ``halt_confirmations`` readings in a row is treated as a confirmed
+        empty battery, because a pendant that cannot see its battery cannot
+        tell a full cell from one about to brown out mid-write, and halting an
+        idle Pi is recoverable while that brownout is not. External power is
+        reported absent for the same reason ``read_battery_sample`` reports it
+        absent when unknown. The next successful reading resets the count.
+        """
+        self._unreadable_streak += 1
+        if self._unreadable_streak < self._halt_confirmations:
+            return last
+        _logger.error(
+            "battery gauge unreadable for %d consecutive readings; halting",
+            self._unreadable_streak,
+        )
+        return replace(last, halt_reason=HaltReason.UNREADABLE, external_power=False)
 
     def _observe_halt(self, sample: BatterySample, smoothed: int) -> HaltReason | None:
         """The confirmed halt this sample completes, if it completes one.
@@ -260,16 +284,17 @@ class BatteryState:
 
         Only the owning thread may call this; every other thread calls
         ``current``. A reading that fails - an I2C transfer is most likely to
-        fail exactly when the cell is sagging - is logged and returns the
-        verdict already published, untouched. That keeps a halt confirmed
-        before the failure confirmed, so a failed read can never cancel or
-        crash the power-off that follows it.
+        fail exactly when the cell is sagging - is logged and goes to
+        ``BatteryMonitor.observe_unreadable``: an isolated failure keeps the
+        verdict already published, so a halt confirmed before it stays
+        confirmed and a failed read can never cancel or crash the power-off
+        that follows, while a run of them confirms a halt of its own.
         """
         try:
             verdict = self._monitor.read(self._reader)
         except Exception:
-            _logger.exception("battery reading failed; keeping the last verdict")
-            return self.current()
+            _logger.exception("battery reading failed")
+            verdict = self._monitor.observe_unreadable(self.current())
         with self._lock:
             self._current = verdict
         return verdict

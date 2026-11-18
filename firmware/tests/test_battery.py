@@ -336,24 +336,61 @@ def test_the_state_folds_every_sample_into_one_shared_debounce():
     assert state.sample().should_halt is True
 
 
-def test_a_failed_reading_keeps_the_published_verdict():
-    # An I2C fault is most likely exactly when the cell is sagging; it must
-    # neither crash the sampler nor undo a halt already confirmed.
-    class FailsAfterSeeding(FakeTelemetryBatteryReader):
-        broken = False
+class FlakyGauge(FakeTelemetryBatteryReader):
+    """A gauge whose charge read fails while ``broken`` is set."""
 
-        def get_charge_pct(self) -> int:
-            if self.broken:
-                raise RuntimeError("pijuice GetChargeLevel failed: COMM_ERROR")
-            return super().get_charge_pct()
+    broken = False
 
-    reader = FailsAfterSeeding(pct=5)
-    state = BatteryState(reader, BatteryMonitor(halt_confirmations=1))
-    confirmed = state.current()
+    def get_charge_pct(self) -> int:
+        if self.broken:
+            raise RuntimeError("pijuice GetChargeLevel failed: COMM_ERROR")
+        return super().get_charge_pct()
+
+
+def test_a_single_failed_reading_keeps_the_published_verdict():
+    # One bad I2C transfer is noise, like one sagging sample.
+    reader = FlakyGauge(pct=60)
+    state = BatteryState(reader)
+    published = state.current()
     reader.broken = True
 
-    assert state.sample() is confirmed
-    assert state.current().should_halt is True
+    assert state.sample() is published
+    assert state.current() is published
+
+
+def test_a_failed_reading_never_undoes_a_confirmed_halt():
+    # The recovery re-read after a halt's drain must not cancel the power-off.
+    reader = FlakyGauge(pct=5)
+    state = BatteryState(reader, BatteryMonitor(halt_confirmations=1))
+    reader.broken = True
+
+    assert state.sample().should_halt is True
+
+
+def test_a_gauge_unreadable_for_the_confirmation_count_confirms_a_halt():
+    # A pendant that cannot see its battery cannot tell 60 % from empty, and
+    # halting an idle Pi is recoverable while a mid-write brownout is not.
+    reader = FlakyGauge(pct=60, external_power=True)
+    state = BatteryState(reader)
+    reader.broken = True
+
+    verdicts = [state.sample() for _ in range(HALT_CONFIRMATIONS)]
+
+    assert [v.should_halt for v in verdicts[:-1]] == [False] * (HALT_CONFIRMATIONS - 1)
+    assert verdicts[-1].halt_reason is HaltReason.UNREADABLE
+    assert verdicts[-1].external_power is False
+
+
+def test_a_successful_reading_resets_the_unreadable_count():
+    reader = FlakyGauge(pct=60)
+    state = BatteryState(reader)
+
+    for _ in range(3):
+        reader.broken = True
+        for _ in range(HALT_CONFIRMATIONS - 1):
+            assert state.sample().should_halt is False
+        reader.broken = False
+        assert state.sample().should_halt is False
 
 
 @pytest.mark.parametrize("pct", [0, 100])

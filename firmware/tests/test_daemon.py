@@ -30,6 +30,7 @@ from tests.fakes import (
 )
 from tests.ws2812_waveform import decode_frame
 from visio_recorder.battery import (
+    HALT_CONFIRMATIONS,
     WAKE_ON_CHARGE_PCT,
     BatteryMonitor,
     BatteryState,
@@ -824,6 +825,48 @@ def test_a_failed_reading_after_the_drain_still_powers_off(tmp_path):
     )
 
     assert outcome is LoopOutcome.HALTED
+    assert power.power_offs == [WAKE_ON_CHARGE_PCT]
+
+
+def test_a_gauge_that_stays_unreadable_halts_and_powers_off(tmp_path):
+    # A permanent I2C fault mid-run: without a bound the loop would keep
+    # recording on the last good verdict until the cell browned out.
+    stop = threading.Event()
+    led = FakeLedDriver()
+    power = FakePowerController()
+    status = FakeStatusClient()
+
+    class DiesAfterTwoReads(FakeTelemetryBatteryReader):
+        def __init__(self):
+            super().__init__(pct=60)
+            self.reads = 0
+
+        def get_charge_pct(self):
+            self.reads += 1
+            if self.reads > 2:
+                raise RuntimeError("pijuice GetChargeLevel failed: COMM_ERROR")
+            return super().get_charge_pct()
+
+    runner = FakeCommandRunner()
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery=BatteryState(DiesAfterTwoReads()),
+        led_driver=led,
+        status_client=status,
+        power_controller=power,
+    )
+
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+
+    assert outcome is LoopOutcome.HALTED
+    # One segment on the good read, then one per failed read short of the
+    # confirmation count.
+    assert runner.record_count == HALT_CONFIRMATIONS
+    assert status.upserts[-1]["recording_active"] is False
+    assert led.calls[-1] == CRITICAL_LED
     assert power.power_offs == [WAKE_ON_CHARGE_PCT]
 
 

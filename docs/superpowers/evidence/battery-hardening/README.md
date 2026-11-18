@@ -89,6 +89,11 @@ Two of those deserve naming because they are the regressions this work exists to
 - `test_a_fixed_full_percentage_only_source_never_halts_or_warns` drives the whole loop with a reader that reports a fixed 100 % and implements no telemetry - the `VISIO_BATTERY_SOURCE=none` shape - and asserts no latch, no halt, no power-off.
 - `test_a_wedged_upload_cannot_hold_a_dying_battery_open_forever` wedges an upload that never returns and asserts the halt still powers off, which is the bound on the drain doing its job.
 
+A battery reading that fails outright is bounded the same way.
+An isolated failure keeps the last published verdict (`test_a_single_failed_reading_keeps_the_published_verdict`), and a successful reading resets the count (`test_a_successful_reading_resets_the_unreadable_count`).
+`HALT_CONFIRMATIONS` failures in a row confirm a halt with reason `unreadable`; `test_a_gauge_that_stays_unreadable_halts_and_powers_off` drives a gauge that dies mid-run through the real loop and asserts the drain, the final `recording_active=False` row, the Critical red and the power-off with the wake armed, behind the fake power controller.
+Without the bound the same trace never halts: the loop records on the last good verdict until the cell browns out.
+
 ## systemd and polkit
 
 [`systemd-analyze-verify.txt`](systemd-analyze-verify.txt): `systemd-analyze verify` on the service unit, and a JavaScript syntax check of the polkit rule (polkit rules are JavaScript; the file is copied to a `.js` name because `node --check` goes by extension).
