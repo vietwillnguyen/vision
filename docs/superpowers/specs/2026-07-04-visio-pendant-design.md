@@ -295,11 +295,11 @@ Keeping that the exception rather than the rule needs the device to upload every
 - the startup flush drains the queue markers-first (`markers_before_segments`), which is the reboot-mid-backlog case;
 - while the daemon runs, the upload worker asks the flag-upload worker to flush its pending markers and waits for that flush - before the segment it has just recorded, and before each in-process retry round.
   The flush is a request on the flag-upload worker's own work queue, so markers still have exactly one uploader and the two threads never race one.
-- a segment's flush waits until the segment's end plus the 3 s restart gap (`RESTART_GAP_SEC`, the pipeline's `RESTART_GAP_TOLERANCE_SEC`), because a press in that gap flags the segment that just ended and would otherwise be pressed after its segment had already left.
+  The flush itself is bounded at 30 s; if that elapses, or the flush could not send everything, the segment is uploaded anyway, because footage is worth more than marker ordering and the pipeline's late-marker handling is the backstop.
+- before that flush, the upload worker waits until the segment's end plus the 3 s restart gap (`RESTART_GAP_SEC`, the pipeline's `RESTART_GAP_TOLERANCE_SEC`), because a press in that gap flags the segment that just ended, and without the wait its marker would be uploaded after that segment had already reached storage.
   The end is when the capture returned, and a retry round waits on the newest segment the run has queued.
-  The wait is capped at the gap itself, so it never holds an upload longer than 3 s, and a stop, shutdown or battery halt drains through it with the same bound.
-  Most of it is spent muxing the segment, which happens first.
-  The wait is bounded at 30 s; if it elapses, or the flush could not send everything, the segment is uploaded anyway, because footage is worth more than marker ordering and the pipeline's late-marker handling is the backstop.
+  The gap wait is capped at the gap itself, so it never holds an upload longer than 3 s, and a stop, shutdown or battery halt drains through it with the same bound.
+  Most of the gap is spent muxing the segment, which happens first.
 
 The rule is deliberately coarser than the pipeline's matching window: rather than work out which segment each marker belongs to, every pending marker goes first.
 Together with the gap wait, that covers both a marker inside a segment and one in the 3 s restart gap, which the pipeline attaches to the segment that just ended.
