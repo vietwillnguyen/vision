@@ -5,6 +5,13 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Dispatched by dependabot-relock.yml after it pushes a relock commit to a
+  # Dependabot branch. A push made with GITHUB_TOKEN creates no workflow run, so
+  # without this the relocked head would carry no checks at all;
+  # `workflow_dispatch` is one of the two events that always creates a run even
+  # when GITHUB_TOKEN triggers it. See that workflow's header comment.
+  # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -40,9 +47,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Test scripts/ci
+      - name: Test scripts/ci/supabase-images.sh
         # Stubbed docker; no daemon or network.
         run: scripts/ci/tests/test-supabase-images.sh
+      - name: Test scripts/ci/relock-integration.sh
+        # Stubbed uv and a local bare remote; no network, no uv install and no
+        # push to a real branch.
+        run: scripts/ci/tests/test-relock-integration.sh
 
   firmware:
     runs-on: ubuntu-latest
