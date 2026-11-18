@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visio PRD v1</title>
+<style>
+  /* Tokens mirror app/src/theme.ts so the PRD reads like the product */
+  :root {
+    --bg: #0F1115; --surface: #1A1E26; --surface-2: #222733; --border: #2C3240;
+    --text: #F2F4F8; --muted: #8B93A5; --accent: #4F8EF7;
+    --danger: #E5484D; --success: #3DD68C; --warning: #F5A623;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 30px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15px; margin: 0 0 6px; }
+  p { margin: 0 0 10px; }
+  .muted { color: var(--muted); }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2);
+    padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .card ul { margin: 0; padding-left: 18px; }
+  .card li { margin: 3px 0; }
+  .kpi { font-size: 26px; font-weight: 700; }
+  .hero { background: linear-gradient(135deg, #1A2540, var(--surface)); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; margin: 20px 0 8px; }
+  .hero strong { color: var(--accent); }
+  .pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid currentColor; white-space: nowrap; }
+  .p0 { color: var(--danger); } .p1 { color: var(--warning); } .p2 { color: var(--muted); }
+  .ok { color: var(--success); } .warn { color: var(--warning); } .no { color: var(--danger); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  th { background: var(--surface-2); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  tr:last-child td { border-bottom: 0; }
+  td ul { margin: 0; padding-left: 16px; } td li { margin: 2px 0; }
+  .id { font: 600 13px ui-monospace, Menlo, monospace; color: var(--accent); white-space: nowrap; }
+  .milestones { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .ms h3 span { color: var(--accent); }
+  .q { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .q label { display: block; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+  .q label:hover { background: var(--surface-2); }
+  .q .rec { color: var(--success); font-size: 12px; font-weight: 600; margin-left: 4px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px;
+    font-weight: 600; cursor: pointer; margin-top: 8px; }
+  textarea { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px; font: inherit; margin-top: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <p class="muted">Product requirements - v1 - 2026-11-18</p>
+  <h1>Visio pendant v1</h1>
+  <p class="muted">Source of truth for the how: <code>docs/superpowers/specs/2026-07-04-visio-pendant-design.md</code>. This doc owns the who, the why, and what "done" means.</p>
+
+  <div class="hero">
+    <p><strong>Problem.</strong> The best moments of an ordinary day go unrecorded because filming means stopping to hold a phone, and reviewing hours of footage nobody wants to do.</p>
+    <p style="margin:0"><strong>Product.</strong> A cheap pendant that records passively all day, uploads over home Wi-Fi, and delivers a 60-120 second highlight reel to your phone each morning with zero editing.</p>
+  </div>
+
+  <h2>Users</h2>
+  <div class="grid">
+    <div class="card"><h3>The only v1 user: you</h3><p>Wears it around home and nearby, owns the Pi, the Supabase project and the repo. Being technical is not an excuse for friction: setup should be one CLI command plus app onboarding, with no hand-edited config or SSH needed day to day.</p></div>
+    <div class="card"><h3>Out of scope: DIY makers</h3><p>No public setup guide or kit in v1. The seamless-setup bar above keeps that door open later.</p></div>
+    <div class="card"><h3>Bystanders</h3><p>Family and visitors who are recorded. Not users, but a privacy constraint: the device must show clearly when it is recording (LED).</p></div>
+  </div>
+
+  <h2>Goals and success metrics</h2>
+  <div class="grid">
+    <div class="card"><div class="kpi">1 reel / day</div><p class="muted">A reel lands every morning a day was recorded, with no manual step.</p></div>
+    <div class="card"><div class="kpi">7-8 h</div><p class="muted">Passive recording per charge, no interaction needed.</p></div>
+    <div class="card"><div class="kpi">&lt; $110</div><p class="muted">Hardware BOM.</p></div>
+    <div class="card"><div class="kpi">&lt; $0.75</div><p class="muted">Cloud cost per recorded day.</p></div>
+    <div class="card"><div class="kpi">1 command</div><p class="muted">From a freshly flashed SD card to recording: one CLI run, then QR onboarding from the app. No SSH after that, including when Wi-Fi changes.</p></div>
+    <div class="card"><div class="kpi">"Worth watching"</div><p class="muted">Qualitative: on at least 4 of 5 test days, you would rather watch the reel than skip it.</p></div>
+  </div>
+  <div class="grid" style="margin-top:12px">
+    <div class="card"><h3>Non-goals for v1</h3><ul>
+      <li>On-device AI inference</li><li>Live streaming</li><li>Waterproof or rugged enclosure</li>
+      <li>Multi-user or social features beyond export and share</li><li>App store release</li><li>Public DIY kit or setup guide</li></ul></div>
+    <div class="card"><h3>v2</h3><ul>
+      <li>J10 teach the reel (always / never include)</li><li>J11 regenerate a reel</li><li>Battery and enclosure (wearable all day, see M3)</li>
+      <li>Accelerometer tap instead of a flag button</li><li>Wake-word auto-flag</li>
+      <li>BLE status on the local network</li><li>Off-the-shelf pendant shell instead of a 3D print</li></ul></div>
+  </div>
+
+  <h2>User journeys</h2>
+  <p>All core software exists. <strong>No journey has been run end to end on real hardware.</strong> Status checked against <code>main</code> on 2026-11-18.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>ID</th><th>Journey</th><th>Pri</th><th>Acceptance criteria</th><th>Software</th><th>Pi + camera only?</th></tr></thead>
+    <tbody>
+      <tr><td class="id">J1</td><td><b>Set up the device</b><br><span class="muted">Flash, provision, boot into recording</span></td><td><span class="pill p0">P0</span></td>
+        <td><ul><li><code>setup-device.sh</code> converges in one run and is idempotent on re-run</li><li>Preflight passes all BLOCK checks</li><li>Daemon starts on boot and reports <code>recording_active = true</code></li></ul></td>
+        <td><span class="warn">Draft #26, #93; issue #49 (swap re-run)</span></td><td><span class="ok">Yes</span></td></tr>
+      <tr><td class="id">J2</td><td><b>Connect to Wi-Fi</b><br><span class="muted">Scan a QR code shown by the app</span></td><td><span class="pill p0">P0</span></td>
+        <td><ul><li>Device decodes the QR within 60 attempts</li><li>NetworkManager keyfile written, connection comes up</li></ul></td>
+        <td><span class="ok">Done (#25)</span></td><td><span class="ok">Yes</span></td></tr>
+      <tr><td class="id">J12</td><td><b>Change Wi-Fi</b><br><span class="muted">New router, password change, or moving house</span></td><td><span class="pill p0">P0</span></td>
+        <td><ul><li>No SSH needed</li><li>Manual trigger only: long-press the flag button (M2) to enter scan mode; the LED shows scanning</li><li>Bench fallback until the button exists (M1): one CLI command over SSH, e.g. <code>visio-reonboard</code></li><li>Never triggered automatically: the pendant is offline most of the day by design</li><li>The app's Re-onboard QR code then works and recording resumes</li></ul></td>
+        <td><span class="no">Gap: the device only scans on first boot (no <code>session.json</code>), so the app's QR code does nothing today</span></td><td><span class="warn">CLI fallback only</span></td></tr>
+      <tr><td class="id">J13</td><td><b>Keep the raw footage and re-edit a day</b><br><span class="muted">If a reel is bad, re-run it with another editor or AI later</span></td><td><span class="pill p1">P1</span></td>
+        <td><ul><li>Raw segments are kept 30 days, then deleted; flagged and "always include" clips, and all reels, are kept forever</li><li>Re-running the pipeline for any past day replaces that day's reel</li><li>One command downloads a whole day's raw footage</li></ul></td>
+        <td><span class="warn">Partly: nothing deletes raw footage today, and the nightly workflow takes a <code>day</code> input for re-runs. No bulk download (the app saves one clip at a time); no 30-day cleanup job yet</span></td><td><span class="ok">Yes</span></td></tr>
+      <tr><td class="id">J3</td><td><b>Record the day</b><br><span class="muted">Passive capture and upload</span></td><td><span class="pill p0">P0</span></td>
+        <td><ul><li>15+ minutes produces <code>segments</code> rows and storage objects with no gaps over ~2 s</li><li>A Wi-Fi drop is recovered without losing segments</li><li>Pulling power mid-segment loses at most that segment</li></ul></td>
+        <td><span class="ok">Done (#70, #86, #98)</span></td><td><span class="ok">Yes</span></td></tr>
+      <tr><td class="id">J4</td><td><b>Get a daily reel</b><br><span class="muted">Built overnight from the day's footage, with a push notification when it is ready</span></td><td><span class="pill p0">P0</span></td>
+        <td><ul><li>Nightly run (or manual dispatch) creates a <code>reels</code> row for the day</li><li>A push notification arrives</li><li>Reel is 60-120 s and plays on the phone</li></ul></td>
+        <td><span class="ok">Done</span></td><td><span class="ok">Yes</span></td></tr>
+      <tr><td class="id">J5</td><td><b>Watch and share</b><br><span class="muted">Today tab, archive, export</span></td><td><span class="pill p1">P1</span></td>
+        <td><ul><li>Today tab plays the reel</li><li>Archive heat-map shows the day and opens it</li><li>Share exports to camera roll or the share sheet</li></ul></td>
+        <td><span class="ok">Done</span></td><td><span class="ok">Yes</span></td></tr>
+      <tr><td class="id">J6</td><td><b>Check the device</b><br><span class="muted">Device tab, live status</span></td><td><span class="pill p1">P1</span></td>
+        <td><ul><li>Storage, pending and uploaded counts update live via Realtime</li><li>Recording indicator matches reality</li><li>Battery shown when a meter is fitted</li></ul></td>
+        <td><span class="ok">Done</span></td><td><span class="warn">Yes, no battery reading</span></td></tr>
+      <tr><td class="id">J7</td><td><b>Flag a moment</b><br><span class="muted">Something good just happened: press the pendant's physical button so that moment is far more likely to make tonight's reel</span></td><td><span class="pill p1">P1</span></td>
+        <td><ul><li>A press writes a <code>FLAG_*.marker</code> that uploads</li><li>The matching segment is <code>manually_flagged</code> and boosted 1.5x</li><li>LED acknowledges the press</li></ul></td>
+        <td><span class="ok">Done</span></td><td><span class="no">No, needs a button</span></td></tr>
+      <tr><td class="id">J8</td><td><b>Hear audio in the reel</b><br><span class="muted">Microphone recorded with the video. INMP441 (I2S) for the wearable; any USB mic also works for bench testing</span></td><td><span class="pill p1">P1</span></td>
+        <td><ul><li>Segments carry an audio stream when the mic is fitted</li><li>Missing mic falls back to video only with a warning</li><li>A USB mic works by setting <code>VISIO_AUDIO_DEVICE</code>, no code change</li><li>Audio scoring (weight 0.3) affects selection</li></ul></td>
+        <td><span class="ok">Done (#87)</span></td><td><span class="warn">Yes with a USB mic + OTG adapter</span></td></tr>
+      <tr><td class="id">J9</td><td><b>Low battery</b><br><span class="muted">Warn, then stop safely</span></td><td><span class="pill p2">P2</span></td>
+        <td><ul><li>Below 20%: low-battery LED</li><li>Below 10%: red, stop recording, keep the queue</li></ul></td>
+        <td><span class="warn">Done, reader stubbed (no PiJuice)</span></td><td><span class="no">No</span></td></tr>
+      <tr><td class="id">J10</td><td><b>Choose what goes in the reel</b><br><span class="muted">In the app's Raw Footage timeline, long-press any clip and pick "Always include" or "Never include". The next reel for that day respects it, and over time the scoring learns what you like.</span></td><td><span class="pill p2">v2</span></td>
+        <td><ul><li>App saves feedback (done)</li><li><b>Pipeline honours it</b>: include forces a clip in, exclude keeps it out</li></ul></td>
+        <td><span class="no">App only. Pipeline never reads <code>user_feedback</code></span></td><td class="muted">Deferred</td></tr>
+      <tr><td class="id">J11</td><td><b>Regenerate a reel</b><br><span class="muted">Length, style, mood</span></td><td><span class="pill p2">v2</span></td>
+        <td><ul><li>Bottom sheet choices produce a new reel for that day</li></ul></td>
+        <td><span class="no">Not built (no backend consumer)</span></td><td class="muted">Deferred</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>LED: device status at all times</h2>
+  <p><b>Requirement:</b> whenever the pendant has power, the LED shows exactly one state, and a wearer or bystander can tell from it whether the pendant is recording. <b>LED off means not recording</b>, and nothing else.</p>
+  <p class="muted">This PRD owns what each state means to a person. The state machine (transitions, triggers, priorities, the renderer thread) lives in the design spec, <code>docs/superpowers/specs/2026-07-04-visio-pendant-design.md</code>, under "LED state machine", and is rendered in <code>docs/ARCHITECTURE.html</code>.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Priority</th><th>State</th><th>Look</th><th>Means</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>1 (wins)</td><td><b>Critical</b></td><td><span class="no">Red, flashing</span></td><td>Needs you: 3+ uploads failed in a row, Wi-Fi activation failed, or battery under 10% (stops recording)</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>2</td><td><b>Low battery</b></td><td><span class="warn">Yellow, pulsing</span></td><td>Under 20%, still recording</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>1 (non-recording)</td><td><b>Halted</b></td><td><span class="no">Red, solid</span></td><td>Stopped because of a problem (battery halt, onboarding gave up, Wi-Fi activation or capture failed); held 30 s, then off</td><td><span class="no">Missing</span>: shows Critical today</td></tr>
+      <tr><td>3</td><td><b>Scanning for QR</b></td><td>Cyan, pulsing</td><td>Waiting for a Wi-Fi QR code; not recording (the camera is busy)</td><td><span class="no">Missing</span>: onboarding shows no LED today</td></tr>
+      <tr><td>4</td><td><b>Flag saved</b></td><td>White, 2 quick blinks, then back</td><td>Your button press was recorded (J7)</td><td><span class="no">Missing</span></td></tr>
+      <tr><td>5</td><td><b>Uploading</b></td><td style="color:var(--accent)">Blue, pulsing</td><td>Recording and sending footage over Wi-Fi</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>6</td><td><b>Recording</b></td><td><span class="ok">Green, solid</span></td><td>Recording; offline is normal, footage queues for later</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>7</td><td><b>Starting up</b></td><td>Dim white, solid</td><td>Booting and running preflight, not recording yet</td><td><span class="no">Missing</span></td></tr>
+      <tr><td>-</td><td><b>Off</b></td><td class="muted">Dark</td><td>Not recording: stopped, crashed, or no power</td><td><span class="warn">Not guaranteed</span>: a crash may leave the last colour lit</td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted" style="margin-top:8px">Colours for the 3 new states are proposals. All of this can only be checked once the LED is fitted (M2).</p>
+
+  <h2>Journeys by component</h2>
+  <p class="muted">The journeys stay user-facing because each one crosses several parts. This view shows what each part must deliver, and what you can test once that part's hardware arrives.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Component</th><th>Have it?</th><th>Journeys it unlocks</th><th>Its own acceptance check</th></tr></thead>
+    <tbody>
+      <tr><td><b>Pi Zero 2W + camera</b></td><td><span class="ok">Yes</span></td><td>J1, J2, J3, J12</td><td>Provisioning converges, QR decodes, segments upload, auto-scan when offline</td></tr>
+      <tr><td><b>Pipeline</b> (GitHub Actions)</td><td><span class="ok">Yes</span></td><td>J4, J8 scoring, J7 boost</td><td>Manual dispatch on a recorded day makes a 60-120 s reel and sends a push</td></tr>
+      <tr><td><b>App</b> (Expo)</td><td><span class="ok">Yes</span></td><td>J2, J5, J6, J12 QR</td><td>Reel plays, archive opens, Device tab updates live, Re-onboard QR scans</td></tr>
+      <tr><td><b>Flag button</b></td><td><span class="no">No</span></td><td>J7, J12 long-press</td><td>Press writes a marker; long-press enters scan mode</td></tr>
+      <tr><td><b>WS2812B LED</b></td><td><span class="no">No</span></td><td>All journeys (status), J7 ack, J9</td><td>Each state (recording, uploading, low battery, critical, scanning) is distinct</td></tr>
+      <tr><td><b>INMP441 mic</b></td><td><span class="no">No</span></td><td>J8</td><td>Segments carry an audio stream; unplugging falls back with a warning</td></tr>
+      <tr><td><b>Battery</b> (power bank or PiJuice)</td><td><span class="no">No</span></td><td>J9, all-day wear (v2)</td><td>7-8 h per charge; thresholds trigger with a real meter</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>How pairing works today (as built)</h2>
+  <div class="grid">
+    <div class="card"><h3>1. Phone shows a QR</h3><p>Device tab, Re-onboard: you type the Wi-Fi name and password. The QR holds those <b>plus your login tokens</b>.</p></div>
+    <div class="card"><h3>2. Pendant reads it</h3><p>Its camera decodes the QR, saves the Wi-Fi profile and your login (<code>session.json</code>), and joins the network.</p></div>
+    <div class="card"><h3>3. Pendant registers</h3><p>It adds itself to <code>devices</code> under your account in Supabase.</p></div>
+    <div class="card"><h3>4. App finds it</h3><p>The app reads your devices from Supabase and follows <code>device_status</code> live.</p></div>
+  </div>
+  <p class="muted" style="margin-top:8px">The phone and pendant never talk directly. They are "paired" only by sharing your account in Supabase, and the app knows nothing until the pendant is online. There is no Bluetooth anywhere in the code today.</p>
+
+  <h3 style="margin-top:20px">Open-source options for Bluetooth Wi-Fi setup on a Pi</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Option</th><th>Pi side</th><th>App side</th><th>Fit</th></tr></thead>
+    <tbody>
+      <tr><td><b>Improv Wi-Fi</b> (open protocol, Home Assistant / ESPHome)</td><td><code>improv-wifi</code> Rust crate: BlueZ over D-Bus, built-in NetworkManager backend</td><td>No React Native library found; the protocol is a handful of Bluetooth characteristics, so a small layer on <code>react-native-ble-plx</code></td><td><span class="ok">Best fit.</span> Same NetworkManager setup as today, and its "authorisation" step can require a button press, which matches the flag button in M2. Wi-Fi password is sent unencrypted over Bluetooth, limited to that short button-gated window.</td></tr>
+      <tr><td><b>r3onboard</b> (Remote.it, 2024)</td><td>Python Bluetooth server written for Raspberry Pi OS Bookworm; reported MIT</td><td>Remote.it app or browser</td><td><span class="warn">Usable as reference.</span> Built around Remote.it's own registration; we would write our own app side anyway.</td></tr>
+      <tr><td><b>Espressif provisioning</b></td><td>Made for ESP32 chips; no maintained Pi server found</td><td><code>@orbital-systems/react-native-esp-idf-provisioning</code> (MIT, Expo plugin, encrypted)</td><td><span class="no">Poor.</span> Strong app library, but nothing to run on the Pi.</td></tr>
+      <tr><td><b>wpable-server</b></td><td>Python, tested on Pi Zero 2 W, Bullseye</td><td>Own client</td><td><span class="no">Poor.</span> Writes <code>wpa_supplicant</code>, which Bookworm ignores.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted" style="margin-top:8px">Whichever is used, Bluetooth only replaces Wi-Fi changes. First setup stays on QR, because the QR also hands the pendant your login, and Improv has no field for that.</p>
+
+  
+
+  <h2>Change Wi-Fi: how other devices do it</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Pattern</th><th>Examples</th><th>How it works</th><th>Fit for Visio</th></tr></thead>
+    <tbody>
+      <tr><td><b>Camera scans a QR from the phone</b></td><td>Wyze cameras</td><td>App shows a QR with the network details; the device's camera reads it</td><td><span class="ok">Built already</span>; only needs a way to re-enter scan mode</td></tr>
+      <tr><td><b>Bluetooth from the app</b></td><td>Google Nest, Amazon Echo, Matter devices</td><td>Phone finds the device over Bluetooth and sends the credentials</td><td><span class="warn">Best experience, most work</span>: Expo dev build plus a Bluetooth service on the Pi. v2</td></tr>
+      <tr><td><b>Device hotspot (SoftAP)</b></td><td>Shelly, Tuya / Smart Life plugs, Raspberry Pi tools like balena wifi-connect</td><td>Device starts its own Wi-Fi; phone joins it and types the new password in a web page</td><td><span class="warn">Works with no camera</span>, but the user has to switch phone networks: clunky</td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted" style="margin-top:8px">The trigger is the same across all three: hold a setup button, or fall back to setup mode when no known network is reachable. J12 uses only the button, because Visio is offline by design for most of the day.</p>
+
+  <h2>Milestones</h2>
+  <div class="milestones">
+    <div class="card ms"><h3><span>M1</span> Bench prototype - first reel</h3>
+      <p class="muted">Hardware: Pi Zero 2W + camera + USB power (what you have now).</p>
+      <ul><li>J1-J6 pass on the bench, with <code>VISIO_BATTERY_SOURCE=none</code></li><li>J12 CLI fallback (<code>visio-reonboard</code>) built</li><li>Land #26 and #93, fix #49</li><li>Exit: one real day recorded and one reel watched on the phone</li></ul>
+      <p class="muted" style="margin-top:8px">Estimate: 1-2 hands-on days, about a week elapsed.</p></div>
+    <div class="card ms"><h3><span>M2</span> Feature-complete device = <b>v1 done</b></h3>
+      <p class="muted">Adds button, WS2812B LED, INMP441 mic.</p>
+      <ul><li>J7, J8 and J12 long-press pass</li><li>LED states visible to bystanders</li><li>Exit: 5 test days, at least 4 reels judged worth watching</li></ul></div>
+    <div class="card ms"><h3><span>M3</span> Wearable (v2)</h3>
+      <p class="muted">Adds battery (power bank or PiJuice) and an enclosure.</p>
+      <ul><li>J9 passes; 7-8 h on one charge</li><li>BOM under $110 confirmed</li><li>J10 and J11</li></ul></div>
+  </div>
+
+  <h2>Risks</h2>
+  <div class="grid">
+    <div class="card"><h3 class="warn">First hardware contact</h3><p>Every past software-done milestone hit 1-2 gaps on a real flow. Expect the same in M1; budget a fix round.</p></div>
+    <div class="card"><h3 class="warn">Reel quality</h3><p>Scoring weights were tuned without real footage. A bench camera pointed at a desk will make dull reels; test by wearing or carrying it.</p></div>
+    <div class="card"><h3 class="warn">Privacy and consent</h3><p>All-day recording of others in the home. Recording LED is the only signal until M2 adds it; footage sits in Supabase storage.</p></div>
+    <div class="card"><h3 class="warn">Storage cost grows every day</h3><p>At 4 Mbps, 8 h is about 14.4 GB a day, roughly 430 GB a month, and nothing is ever deleted. 30-day retention caps it at about 430 GB, which is still well past Supabase's included storage (check current pricing). Lowering the bitrate or the retention window are the levers if cost bites.</p></div>
+    <div class="card"><h3 class="warn">Thermals and power</h3><p>Continuous encode plus Wi-Fi upload on a Zero 2W is unproven for 8 h; the 7.4 h figure is a paper estimate.</p></div>
+  </div>
+
+  <h2>Decisions (resolved 2026-11-18)</h2>
+  <div class="card" style="margin-bottom:12px"><ul>
+    <li><b>v1 is done at M2</b>: button, LED and mic working. Battery and enclosure (M3) are v2.</li>
+    <li><b>v1 is for you only</b>, but setup must still be seamless: one CLI command plus app onboarding.</li>
+    <li><b>J10 (teach the reel) is v2</b>, and the long-press stays in the app as is.</li>
+    <li><b>J11 (regenerate) is v2.</b></li>
+    <li><b>J12 (change Wi-Fi) is P0</b>: manual only: long-press on the flag button (M2), with an SSH command as the bench fallback, plus the QR code from the app. No automatic trigger, because the pendant records offline on walks most of the day, and scanning would also take the camera away from recording. <b>Bluetooth is v2</b> (D5): it needs an Expo dev build and a GATT service on the Pi, while the QR path already exists and also carries the login session.</li>
+  <li><b>Raw footage is kept 30 days</b> (D6); flagged and "always include" clips, and every reel, are kept forever.</li>
+  </ul></div>
+  
+  
+</main>
+</body>
+</html>
