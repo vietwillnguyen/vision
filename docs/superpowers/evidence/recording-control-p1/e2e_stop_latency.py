@@ -51,7 +51,7 @@ SIGTERM_AFTER_SEC = 1.5
 # Well past the segment, so a stop that waits for one is measured, not timed out.
 PATIENCE_SEC = 60.0
 
-CAMERA_SHIM = '''
+CAMERA_SHIM = """
 import signal, subprocess, sys
 
 args = sys.argv[1:]
@@ -96,7 +96,7 @@ while True:
     except subprocess.TimeoutExpired:
         continue
 sys.exit(0 if finalising else returncode)
-'''
+"""
 
 
 class BlockingCaptureRunner:
@@ -146,8 +146,14 @@ class SilentStatus:
 def _probe_duration_sec(path: Path) -> float:
     probed = subprocess.run(
         [
-            "ffprobe", "-hide_banner", "-loglevel", "error",
-            "-show_format", "-print_format", "json", str(path),
+            "ffprobe",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-show_format",
+            "-print_format",
+            "json",
+            str(path),
         ],
         check=True,
         capture_output=True,
@@ -179,9 +185,7 @@ def measure(runner, label: str) -> dict:
 
             def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
                 capture_running.set()
-                return runner.run(
-                    ["python3", str(shim), *args[1:]], cancel
-                )
+                return runner.run(["python3", str(shim), *args[1:]], cancel)
 
         deps = LoopDeps(
             command_runner=QuietFfmpegRunner(),
@@ -228,9 +232,7 @@ def measure(runner, label: str) -> dict:
             "label": label,
             "stop_latency_sec": stop_latency_sec,
             "segment": segment.name if segment else None,
-            "segment_duration_sec": (
-                _probe_duration_sec(segment) if segment else None
-            ),
+            "segment_duration_sec": (_probe_duration_sec(segment) if segment else None),
             "leftovers": sorted(
                 p.name for p in data_dir.iterdir() if p.name != "queue"
             ),
