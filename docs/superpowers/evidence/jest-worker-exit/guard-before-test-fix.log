@@ -1,0 +1,93 @@
+PASS __tests__/components/ReelPlayer.test.tsx
+PASS __tests__/hooks/useSignedUrl.test.tsx
+PASS __tests__/hooks/useDevice.test.tsx
+PASS __tests__/logic/timeline.test.ts
+PASS __tests__/screens/ReonboardScreen.test.tsx
+PASS __tests__/hooks/useSegments.test.tsx
+PASS __tests__/lib/videoThumbnails.web.test.ts
+PASS __tests__/hooks/useAuth.test.tsx
+PASS __tests__/components/SegmentPreview.test.tsx
+PASS __tests__/screens/AuthScreen.test.tsx (5.116 s)
+PASS __tests__/containers/DeviceContainer.test.tsx
+PASS __tests__/containers/ReonboardContainer.test.tsx (5.23 s)
+PASS __tests__/containers/ArchiveContainer.test.tsx (5.547 s)
+PASS __tests__/components/TimelineScrubber.test.tsx (5.744 s)
+PASS __tests__/screens/DeviceScreen.test.tsx
+PASS __tests__/containers/AuthContainer.test.tsx (5.44 s)
+PASS __tests__/screens/ArchiveScreen.test.tsx
+PASS __tests__/lib/mediaSave.web.test.ts
+PASS __tests__/hooks/useReel.test.tsx
+PASS __tests__/hooks/useSlotThumbnails.test.tsx
+PASS __tests__/containers/TodayReelContainer.test.tsx
+PASS __tests__/logic/segmentExport.test.ts
+PASS __tests__/hooks/useDeviceStatus.test.tsx
+PASS __tests__/logic/heatmap.test.ts
+PASS __tests__/logic/authValidation.test.ts
+PASS __tests__/logic/regeneratePreferences.test.ts
+PASS __tests__/lib/webColorScheme.test.ts
+PASS __tests__/lib/supabase.test.ts
+PASS __tests__/hooks/useSlotThumbnails.moduleMissing.test.tsx
+PASS __tests__/logic/dates.test.ts
+PASS __tests__/containers/RawFootageContainer.test.tsx (8.105 s)
+PASS __tests__/App.test.tsx
+FAIL __tests__/hooks/useDeviceStatus.live.test.tsx
+  ● Test suite failed to run
+
+    1 timer(s) were still pending when this test file finished. A live timer keeps the jest worker from exiting ("A worker process has failed to exit gracefully"); clear it, or close whatever owns it, before the file ends.
+
+    setTimeout(..., 10000) created
+        at <repo>/app/node_modules/@supabase/realtime-js/src/phoenix/socketAdapter.ts:97:7
+        at new Promise (<anonymous>)
+        at SocketAdapter.disconnect (<repo>/app/node_modules/@supabase/realtime-js/src/phoenix/socketAdapter.ts:96:12)
+        at RealtimeClient.disconnect (<repo>/app/node_modules/@supabase/realtime-js/src/RealtimeClient.ts:354:37)
+        at Object.disconnect (<repo>/app/__tests__/hooks/useDeviceStatus.live.test.tsx:194:36)
+        at Generator.next (<anonymous>)
+        at asyncGeneratorStep (<repo>/app/node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+        at _next (<repo>/app/node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+    [0m [90m 192 |[39m       [90m// test run has completed") without this explicit disconnect.[39m
+     [90m 193 |[39m       [36mif[39m (ownerClient) {
+    [31m[1m>[22m[39m[90m 194 |[39m         [36mawait[39m ownerClient[33m.[39mrealtime[33m.[39mdisconnect()[33m;[39m
+     [90m     |[39m                                    [31m[1m^[22m[39m
+     [90m 195 |[39m       }
+     [90m 196 |[39m       [36mawait[39m adminClient[33m.[39mauth[33m.[39madmin[33m.[39mdeleteUser(userId)[33m;[39m
+     [90m 197 |[39m     }[0m
+
+      at node_modules/@supabase/realtime-js/src/phoenix/socketAdapter.ts:97:7
+      at Object.disconnect (__tests__/hooks/useDeviceStatus.live.test.tsx:194:36)
+      at TimerLeakEnvironment.<anonymous> (jest.timerLeakEnv.js:105:17)
+
+Summary of all failing tests
+FAIL __tests__/hooks/useDeviceStatus.live.test.tsx
+  ● Test suite failed to run
+
+    1 timer(s) were still pending when this test file finished. A live timer keeps the jest worker from exiting ("A worker process has failed to exit gracefully"); clear it, or close whatever owns it, before the file ends.
+
+    setTimeout(..., 10000) created
+        at <repo>/app/node_modules/@supabase/realtime-js/src/phoenix/socketAdapter.ts:97:7
+        at new Promise (<anonymous>)
+        at SocketAdapter.disconnect (<repo>/app/node_modules/@supabase/realtime-js/src/phoenix/socketAdapter.ts:96:12)
+        at RealtimeClient.disconnect (<repo>/app/node_modules/@supabase/realtime-js/src/RealtimeClient.ts:354:37)
+        at Object.disconnect (<repo>/app/__tests__/hooks/useDeviceStatus.live.test.tsx:194:36)
+        at Generator.next (<anonymous>)
+        at asyncGeneratorStep (<repo>/app/node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+        at _next (<repo>/app/node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+
+    [0m [90m 192 |[39m       [90m// test run has completed") without this explicit disconnect.[39m
+     [90m 193 |[39m       [36mif[39m (ownerClient) {
+    [31m[1m>[22m[39m[90m 194 |[39m         [36mawait[39m ownerClient[33m.[39mrealtime[33m.[39mdisconnect()[33m;[39m
+     [90m     |[39m                                    [31m[1m^[22m[39m
+     [90m 195 |[39m       }
+     [90m 196 |[39m       [36mawait[39m adminClient[33m.[39mauth[33m.[39madmin[33m.[39mdeleteUser(userId)[33m;[39m
+     [90m 197 |[39m     }[0m
+
+      at node_modules/@supabase/realtime-js/src/phoenix/socketAdapter.ts:97:7
+      at Object.disconnect (__tests__/hooks/useDeviceStatus.live.test.tsx:194:36)
+      at TimerLeakEnvironment.<anonymous> (jest.timerLeakEnv.js:105:17)
+
+
+Test Suites: 1 failed, 32 passed, 33 total
+Tests:       129 passed, 129 total
+Snapshots:   0 total
+Time:        12.304 s, estimated 34 s
+Ran all test suites.

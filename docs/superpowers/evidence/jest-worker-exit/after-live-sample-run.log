@@ -1,0 +1,40 @@
+PASS __tests__/containers/ArchiveContainer.test.tsx
+PASS __tests__/screens/ReonboardScreen.test.tsx
+PASS __tests__/hooks/useSignedUrl.test.tsx
+PASS __tests__/logic/timeline.test.ts
+PASS __tests__/containers/RawFootageContainer.test.tsx
+PASS __tests__/screens/AuthScreen.test.tsx
+PASS __tests__/components/SegmentPreview.test.tsx
+PASS __tests__/containers/ReonboardContainer.test.tsx
+PASS __tests__/components/TimelineScrubber.test.tsx
+PASS __tests__/hooks/useAuth.test.tsx
+PASS __tests__/components/ReelPlayer.test.tsx
+PASS __tests__/hooks/useDevice.test.tsx
+PASS __tests__/hooks/useSegments.test.tsx
+PASS __tests__/lib/videoThumbnails.web.test.ts
+PASS __tests__/containers/AuthContainer.test.tsx
+PASS __tests__/App.test.tsx
+PASS __tests__/hooks/useDeviceStatus.live.test.tsx
+PASS __tests__/containers/TodayReelContainer.test.tsx
+PASS __tests__/screens/DeviceScreen.test.tsx
+PASS __tests__/containers/DeviceContainer.test.tsx
+PASS __tests__/hooks/useDeviceStatus.test.tsx
+PASS __tests__/jest/timerLeakEnv.test.ts
+PASS __tests__/hooks/useSlotThumbnails.test.tsx
+PASS __tests__/logic/regeneratePreferences.test.ts
+PASS __tests__/logic/segmentExport.test.ts
+PASS __tests__/logic/authValidation.test.ts
+PASS __tests__/lib/supabase.test.ts
+PASS __tests__/hooks/useSlotThumbnails.moduleMissing.test.tsx
+PASS __tests__/logic/heatmap.test.ts
+PASS __tests__/logic/dates.test.ts
+PASS __tests__/lib/mediaSave.web.test.ts
+PASS __tests__/hooks/useReel.test.tsx
+PASS __tests__/screens/ArchiveScreen.test.tsx
+PASS __tests__/lib/webColorScheme.test.ts
+
+Test Suites: 34 passed, 34 total
+Tests:       133 passed, 133 total
+Snapshots:   0 total
+Time:        6.483 s, estimated 45 s
+Ran all test suites.

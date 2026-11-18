@@ -1,5 +1,8 @@
 module.exports = {
   preset: 'jest-expo',
+  // The preset's environment plus a per-file check that no live timer
+  // outlives the file; see the file for why.
+  testEnvironment: '<rootDir>/jest.timerLeakEnv.js',
   // Appended after the preset's own setupFiles; see the file for why.
   setupFiles: ['<rootDir>/jest.preload.js'],
   // node-fetch 3 and its three runtime deps ship ESM only; jest-expo runs
