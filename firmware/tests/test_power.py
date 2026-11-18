@@ -4,7 +4,6 @@ from tests.fakes import FakeCommandRunner, FakePiJuicePower, RaisingCommandRunne
 from visio_recorder.power import (
     PIJUICE_POWER_OFF_DELAY_SEC,
     POWEROFF_COMMAND,
-    DisabledPowerController,
     PiJuicePowerController,
     SystemdPowerController,
 )
@@ -81,13 +80,3 @@ def test_a_pijuice_call_that_reports_an_error_is_logged_and_does_not_stop_it(cap
 
     assert "COMMUNICATION_ERROR" in caplog.text
     assert runner.calls == [list(POWEROFF_COMMAND)]
-
-
-# --- bench mode --------------------------------------------------------------
-
-
-def test_the_disabled_controller_touches_nothing(caplog):
-    with caplog.at_level(logging.WARNING):
-        DisabledPowerController().power_off(wake_on_charge_pct=25)
-
-    assert "VISIO_BATTERY_POWEROFF=off" in caplog.text

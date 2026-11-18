@@ -34,9 +34,10 @@ def open_pijuice() -> Any | None:
     One object for the whole daemon: the battery reader and the power
     controller both need it, and opening the bus twice would be two I2C
     handles to the same device. Returns None rather than raising when the
-    library or the bus is absent, so a pendant running from a USB power bank
-    still starts - the battery source then reports a fixed percentage and the
-    power controller falls back to ``systemctl poweroff``.
+    library or the bus is absent, so the power controller can fall back to
+    ``systemctl poweroff``. ``PiJuiceBatteryReader`` still refuses None, so a
+    device with no HAT does not start until it has a battery source that does
+    not read one.
     """
     try:
         from pijuice import PiJuice
@@ -59,6 +60,19 @@ _EXTERNAL_POWER_PRESENT = "PRESENT"
 _BATTERY_ABSENT = "NOT_PRESENT"
 
 
+def _data(name: str, result: dict) -> Any:
+    """The ``data`` of a PiJuice status call, or a RuntimeError naming why not.
+
+    The vendor library reports a failed I2C transfer as a dict carrying an
+    ``error`` and no ``data`` rather than raising, so indexing it blindly turns
+    a bus fault into a KeyError that says nothing about the bus.
+    """
+    error = result.get("error")
+    if error not in (None, "NO_ERROR") or "data" not in result:
+        raise RuntimeError(f"pijuice {name} failed: {error}")
+    return result["data"]
+
+
 class PiJuiceBatteryReader:
     """Charge, terminal voltage and external-power state from a PiJuice HAT.
 
@@ -68,8 +82,7 @@ class PiJuiceBatteryReader:
     down.
     """
 
-    def __init__(self, pijuice: Any | None = None) -> None:
-        pijuice = open_pijuice() if pijuice is None else pijuice
+    def __init__(self, pijuice: Any | None) -> None:
         if pijuice is None:
             raise RuntimeError(
                 "no PiJuice on I2C bus 1; a pendant without one needs a "
@@ -78,10 +91,10 @@ class PiJuiceBatteryReader:
         self._pijuice: Any = pijuice
 
     def get_charge_pct(self) -> int:
-        return self._pijuice.status.GetChargeLevel()["data"]
+        return _data("GetChargeLevel", self._pijuice.status.GetChargeLevel())
 
     def get_battery_voltage_mv(self) -> int:
-        return self._pijuice.status.GetBatteryVoltage()["data"]
+        return _data("GetBatteryVoltage", self._pijuice.status.GetBatteryVoltage())
 
     def is_externally_powered(self) -> bool:
         """True when the pendant is running on something other than the cell.
@@ -90,7 +103,7 @@ class PiJuiceBatteryReader:
         nothing to protect and nothing that can go flat, so halting would only
         turn a working mains-powered device off.
         """
-        status = self._pijuice.status.GetStatus()["data"]
+        status = _data("GetStatus", self._pijuice.status.GetStatus())
         if status.get("battery") == _BATTERY_ABSENT:
             return True
         return _EXTERNAL_POWER_PRESENT in (

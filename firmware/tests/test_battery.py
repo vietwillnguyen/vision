@@ -336,6 +336,26 @@ def test_the_state_folds_every_sample_into_one_shared_debounce():
     assert state.sample().should_halt is True
 
 
+def test_a_failed_reading_keeps_the_published_verdict():
+    # An I2C fault is most likely exactly when the cell is sagging; it must
+    # neither crash the sampler nor undo a halt already confirmed.
+    class FailsAfterSeeding(FakeTelemetryBatteryReader):
+        broken = False
+
+        def get_charge_pct(self) -> int:
+            if self.broken:
+                raise RuntimeError("pijuice GetChargeLevel failed: COMM_ERROR")
+            return super().get_charge_pct()
+
+    reader = FailsAfterSeeding(pct=5)
+    state = BatteryState(reader, BatteryMonitor(halt_confirmations=1))
+    confirmed = state.current()
+    reader.broken = True
+
+    assert state.sample() is confirmed
+    assert state.current().should_halt is True
+
+
 @pytest.mark.parametrize("pct", [0, 100])
 def test_the_extremes_are_read_without_special_casing(pct):
     verdict = BatteryMonitor().observe(on_battery(pct))

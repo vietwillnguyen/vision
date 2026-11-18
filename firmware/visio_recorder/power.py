@@ -125,19 +125,3 @@ class PiJuicePowerController:
         error = (result or {}).get("error")
         if error not in (None, "NO_ERROR"):
             _logger.error("pijuice %s(%d) returned %s", name, argument, error)
-
-
-class DisabledPowerController:
-    """Logs what it would have done. ``VISIO_BATTERY_POWEROFF=off``.
-
-    For bench work: the whole halt path - the drain, the status push, the red
-    LED, the wake level - can be watched on a real device without the device
-    going dark before it can be read.
-    """
-
-    def power_off(self, *, wake_on_charge_pct: int) -> None:
-        _logger.warning(
-            "battery halt: power-off suppressed by VISIO_BATTERY_POWEROFF=off "
-            "(would have armed wake-on-charge at %d%%)",
-            wake_on_charge_pct,
-        )

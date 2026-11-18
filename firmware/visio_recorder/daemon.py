@@ -45,7 +45,6 @@ from visio_recorder.onboarding import (
     run_onboarding,
 )
 from visio_recorder.power import (
-    DisabledPowerController,
     PiJuicePowerController,
     PowerController,
     SystemdPowerController,
@@ -194,27 +193,15 @@ def resolve_audio(
 
 
 def resolve_power_controller(
-    env: Mapping[str, str],
     runner: CommandRunner,
     pijuice: Any | None,
 ) -> PowerController:
     """How this device powers itself off at the end of a battery halt.
 
-    ``VISIO_BATTERY_POWEROFF=off`` is for bench work: the whole halt path -
-    the drain, the final status push, the red LED, the wake level - can be
-    watched on a real device without the device going dark before it can be
-    read. Any other value powers off for real.
-
-    With a PiJuice present the HAT's own sequence runs first and the OS halt
-    last; without one there is nothing to arm and ``systemctl poweroff`` is
-    the whole story.
+    A confirmed halt always powers off. With a PiJuice present the HAT's own
+    sequence runs first and the OS halt last; without one there is nothing to
+    arm and ``systemctl poweroff`` is the whole story.
     """
-    if env.get("VISIO_BATTERY_POWEROFF", "on").strip().lower() == "off":
-        _logger.warning(
-            "VISIO_BATTERY_POWEROFF=off: a battery halt will stop recording "
-            "but leave this device powered"
-        )
-        return DisabledPowerController()
     if pijuice is None:
         return SystemdPowerController(runner)
     return PiJuicePowerController(pijuice.power, runner)
@@ -300,6 +287,12 @@ class LoopDeps:
     upload_drain_timeout_sec: float = UPLOAD_DRAIN_TIMEOUT_SEC
     # The charge level the PiJuice is told to wake the Pi back up at.
     wake_on_charge_pct: int = WAKE_ON_CHARGE_PCT
+    # Upload state that outlives one run of the recording loop, so a loop
+    # re-entered after a cancelled halt keeps the Critical latch and the
+    # day's upload count. Written only by the upload worker; read by the main
+    # thread only once that worker has been joined.
+    upload_health: UploadHealth = field(default_factory=UploadHealth)
+    segments_uploaded_today: int = 0
 
 
 def _push_recording_status(
@@ -368,7 +361,12 @@ def _complete_battery_halt(
         if worker_thread.is_alive():
             worker_thread.join()
         apply_led_state(
-            deps.led_driver, next_led_state(recovery.is_low, is_uploading=False)
+            deps.led_driver,
+            next_led_state(
+                recovery.is_low,
+                is_uploading=False,
+                upload_critical=deps.upload_health.is_critical,
+            ),
         )
         return LoopOutcome.RECOVERED
 
@@ -431,19 +429,15 @@ def run_recording_loop(
     filename never collides with the failed capture's.
     """
     work: queue.Queue[Path | None] = queue.Queue()
-    # Written only by the worker; read by the main thread only after join().
-    uploaded_today = [0]
     # Set before the sentinel is queued, so a retry round in flight can give
     # up on the rest of its backlog instead of uploading through a halt.
     stopping = threading.Event()
 
     def worker() -> None:
-        segments_uploaded_today = 0
-        upload_health = UploadHealth()
+        upload_health = deps.upload_health
         retry_at: float | None = None
 
         def retry_round() -> None:
-            nonlocal segments_uploaded_today
             try:
                 outcome = retry_pending_segments(
                     queue_dir=deps.queue_dir,
@@ -458,8 +452,7 @@ def run_recording_loop(
             except Exception:
                 _logger.exception("queue retry round failed; worker continuing")
                 return
-            segments_uploaded_today += outcome.uploaded
-            uploaded_today[0] = segments_uploaded_today
+            deps.segments_uploaded_today += outcome.uploaded
 
         while True:
             now = deps.monotonic()
@@ -495,7 +488,7 @@ def run_recording_loop(
                     led_driver=deps.led_driver,
                     battery=deps.battery,
                     device_id=deps.device_id,
-                    segments_uploaded_today=segments_uploaded_today,
+                    segments_uploaded_today=deps.segments_uploaded_today,
                     framerate=deps.video.framerate,
                     disk_stats_reader=deps.disk_stats_reader,
                     data_dir=deps.data_dir,
@@ -508,13 +501,12 @@ def run_recording_loop(
                     item,
                 )
                 continue
-            segments_uploaded_today = result.segments_uploaded_today
-            uploaded_today[0] = segments_uploaded_today
+            deps.segments_uploaded_today = result.segments_uploaded_today
 
     audio = deps.audio
     _push_recording_status(
         deps,
-        segments_uploaded_today=0,
+        segments_uploaded_today=deps.segments_uploaded_today,
         recording_active=True,
         audio_active=audio is not None,
     )
@@ -584,7 +576,7 @@ def run_recording_loop(
                 )
         _push_recording_status(
             deps,
-            segments_uploaded_today=uploaded_today[0],
+            segments_uploaded_today=deps.segments_uploaded_today,
             recording_active=False,
             audio_active=audio is not None,
         )
@@ -613,7 +605,7 @@ def main() -> int:
     pijuice = open_pijuice()
     battery_reader = PiJuiceBatteryReader(pijuice)
     led_driver = Ws2812LedDriver()
-    power_controller = resolve_power_controller(os.environ, command_runner, pijuice)
+    power_controller = resolve_power_controller(command_runner, pijuice)
 
     startup = run_startup_sequence(battery_reader, led_driver)
     if not startup.proceed:

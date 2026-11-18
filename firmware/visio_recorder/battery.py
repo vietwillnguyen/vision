@@ -259,9 +259,17 @@ class BatteryState:
         """Take a reading, fold it into the debounce, and publish the verdict.
 
         Only the owning thread may call this; every other thread calls
-        ``current``.
+        ``current``. A reading that fails - an I2C transfer is most likely to
+        fail exactly when the cell is sagging - is logged and returns the
+        verdict already published, untouched. That keeps a halt confirmed
+        before the failure confirmed, so a failed read can never cancel or
+        crash the power-off that follows it.
         """
-        verdict = self._monitor.read(self._reader)
+        try:
+            verdict = self._monitor.read(self._reader)
+        except Exception:
+            _logger.exception("battery reading failed; keeping the last verdict")
+            return self.current()
         with self._lock:
             self._current = verdict
         return verdict

@@ -384,7 +384,7 @@ The old behaviour - stop recording, flash red, exit 0 - left an idle Pi powered 
 2. Drain the upload queue, bounded by `UPLOAD_DRAIN_TIMEOUT_SEC`. The worker is joined with that timeout rather than indefinitely: a dying battery is exactly when an upload is most likely to hang on a weak signal, and waiting forever for it is how the Pi ends up browning out instead of powering off. Whatever is left stays queued for the next boot.
 3. Push the final `device_status` row, `recording_active = false`, as it does for any loop exit.
 4. Apply the Critical red LED - priority 1 in the ladder above, applied after the join so nothing can overwrite it.
-5. Re-read the battery once more. If external power has appeared during the drain, the halt is cancelled: see Recovery below.
+5. Re-read the battery once more. If external power has appeared during the drain, the halt is cancelled: see Recovery below. A re-read that fails keeps the confirmed halt, so a failed battery reading never prevents the power-off.
 6. Otherwise power off cleanly, and arm the wake.
 
 **Powering off.**
@@ -395,14 +395,14 @@ Where no PiJuice is present, the sequence is `systemctl poweroff` alone and ther
 
 `systemctl poweroff` is a privileged call and the daemon does not run as root, so the service user needs a polkit grant for `org.freedesktop.login1.power-off`.
 That rule ships beside the systemd unit in `firmware/systemd/` and provisioning installs it; without it the halt logs a failure and the PiJuice's 60-second timer becomes the only thing that stops the device.
-`VISIO_BATTERY_POWEROFF=off` suppresses the power-off for bench work, so the whole halt path can be watched on a real device without the device going dark; the default is `on`.
+A confirmed halt always powers off; there is no switch to suppress it, because a device with one mis-set would skip exactly the shutdown that protects its SD card.
 
 #### Recovery
 
 A pendant that halts must come back on its own.
 Two mechanisms cover the two cases, and they are deliberately different:
 
-- **Charge returns before the power-off.** The re-read at step 5 sees external power, the halt is cancelled, the Critical LED gives way to the live state, and the recording loop is re-entered with a fresh upload worker. Plugging a pendant in during the drain therefore keeps it running rather than powering it off and waiting for the wake.
+- **Charge returns before the power-off.** The re-read at step 5 sees external power, the halt is cancelled, the Critical LED gives way to the live state, and the recording loop is re-entered with a fresh upload worker that inherits the upload-failure streak and the day's upload count, so the Critical latch and `segments_uploaded_today` carry across the restart. Plugging a pendant in during the drain therefore keeps it running rather than powering it off and waiting for the wake.
 - **Charge returns after the power-off.** `SetWakeUpOnCharge(25)` was armed in step 6, so the PiJuice powers the Pi back up once the pack reaches 25 %, and the ordinary boot sequence runs. Nothing waits for a human to press anything.
 
 Neither path needs a manual reboot, which was the behaviour this replaces.

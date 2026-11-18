@@ -80,3 +80,26 @@ def test_the_reader_reads_the_status_word_once_per_question():
     assert battery.is_externally_powered() is False
     status.power_input = "PRESENT"
     assert battery.is_externally_powered() is True
+
+
+@pytest.mark.parametrize(
+    "method, call",
+    [
+        ("get_charge_pct", "GetChargeLevel"),
+        ("get_battery_voltage_mv", "GetBatteryVoltage"),
+        ("is_externally_powered", "GetStatus"),
+    ],
+)
+def test_a_failed_i2c_transfer_is_a_named_error_not_a_key_error(method, call):
+    # The vendor library reports a bus fault as {'error': ...} with no 'data'.
+    status = FakePiJuiceStatus()
+    setattr(status, call, lambda: {"error": "COMMUNICATION_ERROR"})
+    battery = PiJuiceBatteryReader(fake_pijuice(status=status))
+
+    with pytest.raises(RuntimeError, match=f"{call}.*COMMUNICATION_ERROR"):
+        getattr(battery, method)()
+
+
+def test_a_device_with_no_pijuice_is_refused_without_reopening_the_bus():
+    with pytest.raises(RuntimeError, match="no PiJuice"):
+        PiJuiceBatteryReader(None)

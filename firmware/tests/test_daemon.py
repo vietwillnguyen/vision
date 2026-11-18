@@ -46,7 +46,6 @@ from visio_recorder.daemon import (
 from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.led import LedPattern
 from visio_recorder.power import (
-    DisabledPowerController,
     PiJuicePowerController,
     SystemdPowerController,
 )
@@ -710,6 +709,122 @@ def test_charge_returning_during_the_drain_cancels_the_power_off(tmp_path):
     # live state once it is cancelled - a resuming pendant must not sit red.
     assert CRITICAL_LED in led.calls
     assert led.calls[-1] == RECORDING_LED
+
+
+def test_a_cancelled_halt_resumes_with_the_upload_critical_latch_still_red(tmp_path):
+    # Uploads were already failing when the halt was declared; plugging in
+    # cancels the halt, but must not quietly clear the red the failures earned.
+    stop = threading.Event()
+    led = FakeLedDriver()
+    battery = FakeTelemetryBatteryReader(pct=85, voltage_mv=3900)
+
+    class PlugInWhileDrainingAndDown(FailingStorageClient):
+        def upload(self, bucket, object_path, local_path):
+            battery.pct = 30
+            battery.external_power = True
+            super().upload(bucket, object_path, local_path)
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(
+            on_record=lambda count: setattr(battery, "pct", 5)
+        ),
+        battery=responsive_battery(battery),
+        led_driver=led,
+        storage_client=PlugInWhileDrainingAndDown(),
+    )
+    deps.upload_health.consecutive_failures = 3
+
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+
+    assert outcome is LoopOutcome.RECOVERED
+    assert led.calls[-1] == CRITICAL_LED
+
+
+def test_a_re_entered_loop_keeps_the_day_count_and_the_failure_streak(tmp_path):
+    # The daemon re-enters the loop with the same deps after a cancelled halt;
+    # a fresh worker must not reset device_status.segments_uploaded_today to 0
+    # or forget how many uploads have failed in a row.
+    stop = threading.Event()
+    status = FakeStatusClient()
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(
+            on_record=lambda n: stop.set() if n >= 2 else None
+        ),
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        status_client=status,
+    )
+    clock = FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    assert run_recording_loop(deps, stop, clock=clock) is LoopOutcome.STOPPED
+    assert deps.segments_uploaded_today == 2
+
+    status.upserts.clear()
+    stop.clear()
+    led = FakeLedDriver()
+    deps.led_driver = led
+    deps.storage_client = FailingStorageClient()
+    deps.command_runner = FakeCommandRunner(
+        on_record=lambda n: stop.set() if n >= 3 else None
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 13, 0, 0)))
+    first_run_failures = deps.upload_health.consecutive_failures
+
+    assert status.upserts[0]["segments_uploaded_today"] == 2
+    assert status.upserts[-1]["segments_uploaded_today"] == 2
+    assert first_run_failures == 3
+
+    stop.clear()
+    led = FakeLedDriver()
+    deps.led_driver = led
+    deps.command_runner = FakeCommandRunner(
+        on_record=lambda n: stop.set() if n >= 1 else None
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 14, 0, 0)))
+
+    # The streak carried in, so this run's lone failure is shown red from its
+    # upload onward rather than starting the count again from zero.
+    assert UPLOADING_LED not in led.calls
+    assert CRITICAL_LED in led.calls
+
+
+def test_a_failed_reading_after_the_drain_still_powers_off(tmp_path):
+    # The recovery re-read is the last thing between a confirmed halt and the
+    # power-off. An I2C fault there must not crash the daemon into a restart
+    # loop that never powers off and browns out instead.
+    stop = threading.Event()
+    power = FakePowerController()
+
+    class FailsAfterTheHalt(FakeTelemetryBatteryReader):
+        # Reads: the seed, the sample before the first segment, the sample
+        # that confirms the halt, then the recovery re-read.
+        def __init__(self):
+            super().__init__(pct=85)
+            self.reads = 0
+
+        def get_charge_pct(self):
+            self.reads += 1
+            if self.reads >= 4:
+                raise RuntimeError("pijuice GetChargeLevel failed: COMM_ERROR")
+            return 5 if self.reads == 3 else 85
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(),
+        battery=responsive_battery(FailsAfterTheHalt()),
+        led_driver=FakeLedDriver(),
+        power_controller=power,
+    )
+
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+
+    assert outcome is LoopOutcome.HALTED
+    assert power.power_offs == [WAKE_ON_CHARGE_PCT]
 
 
 def test_a_wedged_upload_cannot_hold_a_dying_battery_open_forever(tmp_path):
@@ -1490,33 +1605,13 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
 def test_a_pijuice_device_powers_off_through_the_hat():
     pijuice = SimpleNamespace(power=FakePiJuicePower())
 
-    controller = resolve_power_controller({}, FakeCommandRunner(), pijuice)
+    controller = resolve_power_controller(FakeCommandRunner(), pijuice)
 
     assert isinstance(controller, PiJuicePowerController)
 
 
 def test_a_device_without_a_pijuice_falls_back_to_systemctl():
-    controller = resolve_power_controller({}, FakeCommandRunner(), None)
-
-    assert isinstance(controller, SystemdPowerController)
-
-
-def test_the_bench_switch_suppresses_the_power_off():
-    # So the whole halt path can be watched on a real device without the
-    # device going dark before it can be read.
-    controller = resolve_power_controller(
-        {"VISIO_BATTERY_POWEROFF": "off"},
-        FakeCommandRunner(),
-        SimpleNamespace(power=FakePiJuicePower()),
-    )
-
-    assert isinstance(controller, DisabledPowerController)
-
-
-def test_anything_but_off_powers_off_for_real():
-    controller = resolve_power_controller(
-        {"VISIO_BATTERY_POWEROFF": "on"}, FakeCommandRunner(), None
-    )
+    controller = resolve_power_controller(FakeCommandRunner(), None)
 
     assert isinstance(controller, SystemdPowerController)
 

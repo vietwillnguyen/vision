@@ -1118,15 +1118,15 @@ If the sag is large enough that a healthy cell transiently reads under 3300 mV, 
 
 - [ ] **Step 13: Confirm the halt drains, powers off, and wakes on charge**
 
-Set the thresholds temporarily high so a charged pack trips them, leave `VISIO_BATTERY_POWEROFF=on`, and watch the sequence:
+Run the pendant on its pack, charger disconnected, until the cell is genuinely discharged to the halt threshold, and follow the journal the whole way down:
 
 ```bash
-sudo journalctl -u visio-recorder -f &
-# in another shell, with the thresholds raised in the env file and the daemon restarted
+sudo journalctl -u visio-recorder -f
 ```
 
-Expected, in order: recording stops, the upload queue drains (or the 120 s drain timeout is logged), a final `device_status` row with `recording_active=false`, the Critical red LED, `SetWakeUpOnCharge` and `SetPowerOff` logged, and the Pi halting.
-Then confirm the wake: leave the pack discharged below 25 %, connect the charger, and confirm the Pi powers up on its own at about 25 % with no button press and no manual reboot.
+Expected, in order: the LED turns low-battery yellow once the smoothed charge falls under 20 %; a `confirmed below 10%` line (or `confirmed below the 3300 mV floor`, if the voltage gets there first) naming the halt reason; recording stops and the upload queue drains, or `did not drain within 120 s` is logged; the LED goes Critical red; `battery halt: powering off`; and the Pi halts.
+No `pijuice SetWakeUpOnCharge`, `SetSystemPowerSwitch` or `SetPowerOff` error line appears - those calls log only when the HAT refuses them.
+Then confirm the wake: leave the pack where it halted, connect the charger, and confirm the Pi powers up on its own at about 25 % with no button press and no manual reboot, and boots into recording with a green rather than yellow LED.
 This is the step the whole feature exists for, and the wake is the half that cannot be faked at all - `SetWakeUpOnCharge` writes a register the HAT acts on after the Pi is already off.
 
 - [ ] **Step 14: Confirm `systemctl poweroff` succeeds as the service user**
@@ -1143,14 +1143,16 @@ On a unit still running as root this passes trivially; it is the non-root unit i
 
 - [ ] **Step 15: Confirm a charging pendant never halts**
 
-With the charger connected and the thresholds raised so the gauge reads below them:
+With a pack discharged under 10 % (the end state of Step 13 works), connect the charger and let the pendant boot and record for at least five minutes while the gauge still reads under the halt threshold.
+Read what the HAT reports alongside the journal:
 
 ```bash
-sudo journalctl -u visio-recorder --since "5 minutes ago" | grep -i "halt\|poweroff\|external power"
+sudo /opt/visio-recorder/.venv/bin/python3 -c "from pijuice import PiJuice; s=PiJuice(1,0x14).status; print(s.GetStatus()['data'], s.GetChargeLevel()['data'])"
+sudo journalctl -u visio-recorder --since "5 minutes ago" | grep -i "halt\|powering off"
 ```
 
-Expected: the firmware logs that it is externally powered and keeps recording; no halt, no power-off.
-Then disconnect the charger and confirm the halt proceeds after the confirmation count, which is the same check from the other side.
+Expected: `GetStatus` reports `powerInput` (or `powerInput5vIo`) as `PRESENT` and `battery` as a `CHARGING_FROM_*` state while the charge reads under 10 %; the LED stays low-battery yellow, never Critical red; new segments keep arriving in the app; and the journal grep is empty - no halt and no power-off.
+Then, still under 10 %, disconnect the charger and confirm the halt proceeds after the confirmation count, ending in the same sequence as Step 13, which is the same check from the other side.
 
 - [ ] **Step 16: Record the outcome**
 
