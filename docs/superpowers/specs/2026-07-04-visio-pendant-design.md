@@ -288,7 +288,8 @@ The one exception is the flag acknowledgement, a short overlay that plays over w
 |---|---|---|---|---|
 | Off | Dark | No | Daemon not running: stopped, crashed, or no power | Not guaranteed: the WS2812B latches its last frame, so a crash leaves the last colour lit |
 | Halted | Red, solid | No | Battery under the 10% halt threshold, QR onboarding gave up, Wi-Fi activation failed, or the capture loop stopped on an error | New (today the battery halt and a Wi-Fi activation failure show Critical, while onboarding giving up or a capture error leaves the last colour lit, usually Recording green) |
-| Scanning | Cyan, pulsing | No | Looking for an onboarding QR code (first boot, or re-onboarding triggered by a long-press or `visio-reonboard`) | New (today onboarding shows Recording green) |
+| Paused | Dark | No | The wearer double-pressed the button to pause; a double press resumes | New |
+| Scanning | Cyan, pulsing | No | Looking for an onboarding QR code (first boot, or re-onboarding triggered by holding the button about 10 s, or by `visio-reonboard`) | New (today onboarding shows Recording green) |
 | Starting | White, dim solid | No | Daemon started, preflight and boot steps running, first capture not yet begun | New (today startup shows Recording green before onboarding) |
 | Critical | Red, flashing | Yes | Needs you now, or recording will stop: the SD card has under 1 GB free (about 30 minutes left), or the pendant is online yet 3+ consecutive uploads failed (latched by `UploadHealth`) | Partly built: today every failure counts, offline included, and there is no free-space check |
 | Low battery | Yellow, pulsing | Yes | Battery under 20% | Built |
@@ -296,7 +297,7 @@ The one exception is the flag acknowledgement, a short overlay that plays over w
 | Recording | Green, solid | Yes | Capturing; offline is normal and footage queues for later | Built |
 | Flag saved (overlay) | White, 2 quick blinks (~0.6 s) | Yes | A flag press was accepted (after the 2 s cooldown) | New |
 
-Priority, highest first: Halted, Scanning, Starting (the non-recording phases, which exclude each other), then Critical, Low battery, Uploading, Recording (the recording states, as `next_led_state` ranks them today).
+Priority, highest first: Halted, Scanning, Starting, Paused (the non-recording phases, which exclude each other), then Critical, Low battery, Uploading, Recording (the recording states, as `next_led_state` ranks them today).
 Red solid versus red flashing is the only same-colour pair, which is why patterns must actually animate (see below).
 
 ```mermaid
@@ -308,7 +309,7 @@ stateDiagram-v2
     Starting --> Recording: session on disk, first capture begins
     Scanning --> Starting: QR decoded, activating Wi-Fi
     Scanning --> Halted: 60 attempts, first boot
-    Scanning --> Recording: re-onboard timed out, keep old network
+    Scanning --> Recording: re-onboard timed out (login already saved)
     Starting --> Halted: Wi-Fi activation failed
     state RecordingFamily {
         Recording --> Uploading: upload starts
@@ -318,7 +319,10 @@ stateDiagram-v2
         Recording --> Critical: under 1 GB free
         Critical --> Recording: any upload success
     }
-    RecordingFamily --> Scanning: long-press or visio-reonboard
+    RecordingFamily --> Paused: double press
+    Paused --> Recording: double press
+    Paused --> Scanning: hold 10 s
+    RecordingFamily --> Scanning: hold 10 s or visio-reonboard
     RecordingFamily --> Halted: halt or capture error
     RecordingFamily --> Off: SIGTERM stop
     Halted --> Off: daemon exits (after a 30 s hold)
@@ -329,6 +333,13 @@ Inside the recording family the drawn edges are illustrative: the state is resol
 
 Transition rules:
 - Scanning needs the camera, so entering it from the Recording family ends the current segment cleanly first, and recording resumes as soon as scanning ends either way.
+- Recording always requires `session.json`: no path reaches the recording states without a saved login.
+  The only Scanning to Recording edge is a re-onboard that timed out, which can only start from a device that already has `session.json`.
+- The button has three gestures, told apart by timing instead of the current 2 s flag cooldown: a single press flags a moment, a double press (two presses within about 0.5 s) pauses or resumes recording, and holding about 10 s starts re-onboarding.
+  A single press waits out the double-press window before it counts as a flag, and a flag press while paused is ignored, since nothing is being recorded.
+- Paused shows a dark LED, so "dark means not recording" holds for the wearer and anyone nearby, and pausing ends the current segment cleanly (a short segment is valid under the Segment Duration Contract).
+  The pendant reports `recording_active = false` while paused, and a planned `recording_changed_at` field lets the app show "Paused since 14:05".
+  Pausing survives neither a reboot nor a power cycle: the pendant always starts recording again on boot.
 - Re-onboarding never strands the device: if no QR code is read within the attempt limit, the pendant goes back to recording on its existing network rather than halting; only first boot, which has no network to fall back to, halts.
 - Halted holds solid red for 30 s before the daemon exits, so the reason is visible, then the LED goes off.
 - Every exit, clean or not, ends with the LED off: the systemd unit gains an `ExecStopPost=` helper that writes an all-off frame, which also covers crashes and `SIGKILL` (only power loss bypasses it, and that turns the LED off anyway).

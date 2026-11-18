@@ -102,7 +102,7 @@
         <td><ul><li>Device decodes the QR within 60 attempts</li><li>NetworkManager keyfile written, connection comes up</li></ul></td>
         <td><span class="ok">Done (#25)</span></td><td><span class="ok">Yes</span></td></tr>
       <tr><td class="id">J12</td><td><b>Change Wi-Fi</b><br><span class="muted">New router, password change, or moving house</span></td><td><span class="pill p0">P0</span></td>
-        <td><ul><li>No SSH needed</li><li>Manual trigger only: long-press the flag button (M2) to enter scan mode; the LED shows scanning</li><li>Bench fallback until the button exists (M1): one CLI command over SSH, e.g. <code>visio-reonboard</code></li><li>Never triggered automatically: the pendant is offline most of the day by design</li><li>The app's Re-onboard QR code then works and recording resumes</li></ul></td>
+        <td><ul><li>No SSH needed</li><li>Manual trigger only: hold the button about 10 s (M2) to enter scan mode; the LED shows scanning</li><li>Bench fallback until the button exists (M1): one CLI command over SSH, e.g. <code>visio-reonboard</code></li><li>Never triggered automatically: the pendant is offline most of the day by design</li><li>The app's Re-onboard QR code then works and recording resumes</li></ul></td>
         <td><span class="no">Gap: the device only scans on first boot (no <code>session.json</code>), so the app's QR code does nothing today</span></td><td><span class="warn">CLI fallback only</span></td></tr>
       <tr><td class="id">J13</td><td><b>Keep the raw footage and re-edit a day</b><br><span class="muted">If a reel is bad, re-run it with another editor or AI later</span></td><td><span class="pill p1">P1</span></td>
         <td><ul><li>Raw segments are kept 30 days, then deleted; flagged and "always include" clips, and all reels, are kept forever</li><li>Re-running the pipeline for any past day replaces that day's reel</li><li>One command downloads a whole day's raw footage</li></ul></td>
@@ -119,6 +119,9 @@
       <tr><td class="id">J6</td><td><b>Check the device</b><br><span class="muted">Device tab, live status</span></td><td><span class="pill p1">P1</span></td>
         <td><ul><li>Storage, pending and uploaded counts update live via Realtime</li><li>Recording indicator matches reality</li><li>Shows how much footage is waiting to upload and since when; a push notification if it has waited over 24 h</li><li>Battery shown when a meter is fitted</li></ul></td>
         <td><span class="warn">Partly: live status done. Planned: <code>device_status.oldest_pending_at</code>, the Device tab backlog view and the 24 h push from the nightly pipeline</span></td><td><span class="warn">Yes, no battery reading</span></td></tr>
+      <tr><td class="id">J14</td><td><b>Pause and resume recording</b><br><span class="muted">Bathroom, a private conversation, a place that does not allow filming</span></td><td><span class="pill p0">P0</span></td>
+        <td><ul><li>Double-press the button to pause; double-press again to resume</li><li>LED is dark while paused, so anyone nearby can tell nothing is recorded</li><li>The app shows "Paused since 14:05"</li><li>A reboot always resumes recording</li></ul></td>
+        <td><span class="no">Not built: power is the only control today; the app shows a Recording / Paused label with no control behind it</span></td><td><span class="no">No, needs a button</span></td></tr>
       <tr><td class="id">J7</td><td><b>Flag a moment</b><br><span class="muted">Something good just happened: press the pendant's physical button so that moment is far more likely to make tonight's reel</span></td><td><span class="pill p1">P1</span></td>
         <td><ul><li>A press writes a <code>FLAG_*.marker</code> that uploads</li><li>The matching segment is <code>manually_flagged</code> and boosted 1.5x</li><li>LED acknowledges the press</li></ul></td>
         <td><span class="ok">Done</span></td><td><span class="no">No, needs a button</span></td></tr>
@@ -144,6 +147,7 @@
     <thead><tr><th>Priority</th><th>State</th><th>Look</th><th>Means</th><th>Status</th></tr></thead>
     <tbody>
       <tr><td>1 (wins)</td><td><b>Halted</b></td><td><span class="no">Red, solid</span></td><td>Stopped because of a problem: battery under 10%, onboarding gave up, Wi-Fi activation failed, or capture failed; not recording, held 30 s, then off</td><td><span class="no">Missing</span>: battery halt and Wi-Fi activation failure show Critical today; the others leave the last colour lit</td></tr>
+      <tr><td>-</td><td><b>Paused</b></td><td class="muted">Dark</td><td>You double-pressed to pause; not recording</td><td><span class="no">Missing</span></td></tr>
       <tr><td>2</td><td><b>Scanning for QR</b></td><td>Cyan, pulsing</td><td>Waiting for a Wi-Fi QR code; not recording (the camera is busy)</td><td><span class="no">Missing</span>: onboarding shows Recording green today</td></tr>
       <tr><td>3</td><td><b>Starting up</b></td><td>Dim white, solid</td><td>Booting and running preflight, not recording yet</td><td><span class="no">Missing</span>: startup shows Recording green today</td></tr>
       <tr><td>4</td><td><b>Critical</b></td><td><span class="no">Red, flashing</span></td><td>Needs you now, or recording will stop: SD card under 1 GB free, or on Wi-Fi yet 3+ uploads failed in a row. Still recording. Being offline on a walk never turns it red; footage just waits to upload.</td><td><span class="warn">Partly built</span>: today offline failures also turn it red, and there is no free-space check</td></tr>
@@ -161,10 +165,10 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Component</th><th>Have it?</th><th>Journeys it unlocks</th><th>Its own acceptance check</th></tr></thead>
     <tbody>
-      <tr><td><b>Pi Zero 2W + camera</b></td><td><span class="ok">Yes</span></td><td>J1, J2, J3, J12</td><td>Provisioning converges, QR decodes, segments upload, long-press or <code>visio-reonboard</code> enters scan mode</td></tr>
+      <tr><td><b>Pi Zero 2W + camera</b></td><td><span class="ok">Yes</span></td><td>J1, J2, J3, J12</td><td>Provisioning converges, QR decodes, segments upload, a 10 s hold or <code>visio-reonboard</code> enters scan mode</td></tr>
       <tr><td><b>Pipeline</b> (GitHub Actions)</td><td><span class="ok">Yes</span></td><td>J4, J6 backlog push, J8 scoring, J7 boost</td><td>Manual dispatch on a recorded day makes a 60-120 s reel and sends a push; a backlog over 24 h sends a push (planned)</td></tr>
       <tr><td><b>App</b> (Expo)</td><td><span class="ok">Yes</span></td><td>J2, J5, J6, J12 QR</td><td>Reel plays, archive opens, Device tab updates live, Re-onboard QR scans</td></tr>
-      <tr><td><b>Flag button</b></td><td><span class="no">No</span></td><td>J7, J12 long-press</td><td>Press writes a marker; long-press enters scan mode</td></tr>
+      <tr><td><b>Flag button</b></td><td><span class="no">No</span></td><td>J7, J12, J14</td><td>Single press writes a marker; double press pauses or resumes; a 10 s hold enters scan mode</td></tr>
       <tr><td><b>WS2812B LED</b></td><td><span class="no">No</span></td><td>All journeys (status), J7 ack, J9</td><td>Each state (starting, scanning, recording, uploading, low battery, critical, halted, flag saved, off) is distinct</td></tr>
       <tr><td><b>INMP441 mic</b></td><td><span class="no">No</span></td><td>J8</td><td>Segments carry an audio stream; unplugging falls back with a warning</td></tr>
       <tr><td><b>Battery</b> (power bank or PiJuice)</td><td><span class="no">No</span></td><td>J9, all-day wear (v2)</td><td>7-8 h per charge; thresholds trigger with a real meter</td></tr>
@@ -213,7 +217,7 @@
       <p class="muted" style="margin-top:8px">Estimate: 1-2 hands-on days, about a week elapsed.</p></div>
     <div class="card ms"><h3><span>M2</span> Feature-complete device = <b>v1 done</b></h3>
       <p class="muted">Adds button, WS2812B LED, INMP441 mic.</p>
-      <ul><li>J7, J8 and J12 long-press pass</li><li>LED states visible to bystanders</li><li>Exit: 5 test days, at least 4 reels judged worth watching</li></ul></div>
+      <ul><li>J7, J8, J12 (10 s hold) and J14 pass</li><li>LED states visible to bystanders</li><li>Exit: 5 test days, at least 4 reels judged worth watching</li></ul></div>
     <div class="card ms"><h3><span>M3</span> Wearable (v2)</h3>
       <p class="muted">Adds battery (power bank or PiJuice) and an enclosure.</p>
       <ul><li>J9 passes; 7-8 h on one charge</li><li>BOM under $110 confirmed</li><li>J10 and J11</li></ul></div>
@@ -234,7 +238,8 @@
     <li><b>v1 is for you only</b>, but setup must still be seamless: one CLI command plus app onboarding.</li>
     <li><b>J10 (teach the reel) is v2</b>, and the long-press stays in the app as is.</li>
     <li><b>J11 (regenerate) is v2.</b></li>
-    <li><b>J12 (change Wi-Fi) is P0</b>: manual only: long-press on the flag button (M2), with an SSH command as the bench fallback, plus the QR code from the app. No automatic trigger, because the pendant records offline on walks most of the day, and scanning would also take the camera away from recording. <b>Bluetooth is v2</b> (D5): it needs an Expo dev build and a GATT service on the Pi, while the QR path already exists and also carries the login session.</li>
+    <li><b>J14 (pause and resume) is P0 for M2</b>: double press on the button, LED dark while paused. The app cannot control it because the pendant is offline most of the day.</li>
+    <li><b>J12 (change Wi-Fi) is P0</b>: manual only: a 10 s hold on the button (M2), with an SSH command as the bench fallback, plus the QR code from the app. No automatic trigger, because the pendant records offline on walks most of the day, and scanning would also take the camera away from recording. <b>Bluetooth is v2</b> (D5): it needs an Expo dev build and a GATT service on the Pi, while the QR path already exists and also carries the login session.</li>
   <li><b>Raw footage is kept 30 days</b> (D6); flagged and "always include" clips, and every reel, are kept forever.</li>
   </ul></div>
   

@@ -28,7 +28,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 6bba420be2eda21bfbf2671876812074ada9c8f463d81fa3ef58a602bc6e691b  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: a82eb213e11ba6db8497d7197dcbdb3d02558e315f46927105e2c25f17abdc8a  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-18 (LED state machine design; Critical means needs you now) -->
@@ -254,6 +254,7 @@ flowchart TD
           <tbody>
             <tr><td>Off</td><td>dark</td><td>no</td><td>daemon not running</td><td>new: <span class="font-mono text-xs bg-base-200 rounded px-1">ExecStopPost=</span> all-off frame, since the WS2812B latches its last colour</td></tr>
             <tr><td>Halted</td><td>red, solid</td><td>no</td><td>battery halt, onboarding gave up, Wi-Fi activation failed, capture error; held 30 s, then exit</td><td>new (today battery halt and Wi-Fi activation failure show Critical; onboarding giving up or a capture error leaves the last colour, usually Recording green)</td></tr>
+            <tr><td>Paused</td><td>dark</td><td>no</td><td>double press pauses, double press resumes</td><td>new</td></tr>
             <tr><td>Scanning</td><td>cyan, pulsing</td><td>no</td><td>looking for an onboarding QR code</td><td>new (shows green today)</td></tr>
             <tr><td>Starting</td><td>white, dim</td><td>no</td><td>boot steps before the first capture</td><td>new (shows green today)</td></tr>
             <tr><td>Critical</td><td>red, flashing</td><td>yes</td><td>needs you now: SD card under 1 GB free, or online yet 3+ consecutive upload failures (latched); offline failures never count</td><td>partly built (today offline failures count; no free-space check)</td></tr>
@@ -273,7 +274,7 @@ stateDiagram-v2
     Starting --> Recording: session on disk
     Scanning --> Starting: QR decoded
     Scanning --> Halted: 60 attempts, first boot
-    Scanning --> Recording: re-onboard timed out
+    Scanning --> Recording: re-onboard timed out (login already saved)
     Starting --> Halted: Wi-Fi activation failed
     state RecordingFamily {
         Recording --> Uploading: upload starts
@@ -283,13 +284,16 @@ stateDiagram-v2
         Recording --> Critical: under 1 GB free
         Critical --> Recording: any upload success
     }
-    RecordingFamily --> Scanning: long-press or visio-reonboard
+    RecordingFamily --> Paused: double press
+    Paused --> Recording: double press
+    Paused --> Scanning: hold 10 s
+    RecordingFamily --> Scanning: hold 10 s or visio-reonboard
     RecordingFamily --> Halted: halt or capture error
     RecordingFamily --> Off: SIGTERM stop
     Halted --> Off: exit after 30 s hold
     Off --> Starting: systemd restart on failure
       </pre>
-      <p class="text-xs text-base-content/70 mt-2">Pulsing and flashing need a new LED renderer thread that owns the driver; today every pattern renders solid, so red flashing and red solid would look the same. Re-onboarding never strands the device: on timeout it returns to recording on the old network. Offline is normal: with no connection up, a segment just stays queued and the failure counter is untouched, so a walk never turns the LED red. Backup problems that can wait go to the phone instead: <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.oldest_pending_at</span> feeds the Device tab, and the nightly pipeline pushes a notification after 24 h of unuploaded footage. Inside the recording family the drawn edges are illustrative: the state is resolved by priority, not by the edges.</p>
+      <p class="text-xs text-base-content/70 mt-2">Pulsing and flashing need a new LED renderer thread that owns the driver; today every pattern renders solid, so red flashing and red solid would look the same. Recording always requires <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span>; the only Scanning to Recording edge is a timed-out re-onboard of a device that already has one. Button gestures: single press flags, double press pauses or resumes (LED dark while paused), a 10 s hold re-onboards. Re-onboarding never strands the device: on timeout it returns to recording on the old network. Offline is normal: with no connection up, a segment just stays queued and the failure counter is untouched, so a walk never turns the LED red. Backup problems that can wait go to the phone instead: <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.oldest_pending_at</span> feeds the Device tab, and the nightly pipeline pushes a notification after 24 h of unuploaded footage. Inside the recording family the drawn edges are illustrative: the state is resolved by priority, not by the edges.</p>
     </div>
 
     <div class="card bg-base-100 shadow p-4">
