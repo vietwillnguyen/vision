@@ -1,0 +1,148 @@
+name: dependabot-relock
+
+# Keep integration/uv.lock current on Dependabot's firmware/ and pipeline/ pull
+# requests.
+#
+# integration/pyproject.toml declares ../firmware and ../pipeline as
+# [tool.uv.sources] path dependencies, and integration/uv.lock records their
+# `requires-dist` metadata verbatim, so a specifier bump in either sibling
+# invalidates it. Dependabot only relocks the directory it bumps, so those pull
+# requests arrive with a stale integration lock and the integration jobs in
+# tests.yml and lint.yml fail at `uv run --locked`. #79 and #81 both failed that
+# way and were relocked by hand in #90; this workflow does that relock.
+#
+# Why pull_request_target rather than pull_request
+# ------------------------------------------------
+# The relock has to be pushed back to Dependabot's branch, which needs a token
+# with `contents: write`. Dependabot-triggered runs get a read-only GITHUB_TOKEN
+# by default, which the `permissions:` key below raises - but on a
+# `pull_request` run the workflow file itself comes from the pull request's own
+# head, and this repo's dependabot.yml configures the `github-actions`
+# ecosystem, so Dependabot opens pull requests that edit .github/workflows/. A
+# `pull_request` workflow would hand a write token to a definition the pull
+# request supplied. `pull_request_target` always evaluates the definition from
+# the base branch, so what runs with that token is only ever what is on main.
+#
+# What this job is allowed to see and do
+# --------------------------------------
+# `pull_request_target` moves the danger from the workflow file to the checkout,
+# so there are two of them. The base checkout supplies the script, from main.
+# The head checkout is sparse and non-cone: exactly the four manifest files
+# `uv lock` reads land on disk, so no source file, test fixture or build script
+# from the pull request is present to execute. Locking needs nothing more than
+# those four, and `uv lock --no-build` resolves them without building any source
+# distribution, so no dependency build backend runs either (verified on a cold
+# uv cache; it produces a byte-identical lock to a full-tree relock).
+# relock-integration.sh then refuses to commit anything but integration/uv.lock,
+# so the only thing this job can push is a lock change.
+#
+# Action refs are pinned to commit SHAs here rather than to the version tags the
+# other workflows use, because this is the one workflow that runs with a write
+# token: a tag is mutable and would let a compromised action repository move
+# what this job executes. Dependabot keeps SHA pins current the same way it
+# keeps tags current.
+#
+# Known limitation, provable only on a real Dependabot pull request
+# ----------------------------------------------------------------
+# A push made with GITHUB_TOKEN does not create new workflow runs, so the relock
+# commit may not re-run tests.yml and lint.yml by itself. Per GitHub's docs a
+# `pull_request` `synchronize` caused by a GITHUB_TOKEN push is the documented
+# exception and creates runs in an approval-required state, needing one click
+# from a maintainer; if that exception does not apply to Dependabot's own pull
+# requests, the checks stay pending and the reviewer re-runs them by closing and
+# reopening the pull request. Either way the lock itself is already fixed, which
+# is the part that previously had to be done by hand. To make the re-run
+# automatic, add a fine-grained token with `contents: write` on this repository
+# as *both* an Actions secret and a Dependabot secret named
+# DEPENDABOT_RELOCK_TOKEN (GitHub's own recommendation for workflows triggered
+# by Dependabot and by others); this workflow picks it up with no edit.
+
+on:
+  pull_request_target:
+    branches: [main]
+    # Only a sibling's manifest can invalidate integration/uv.lock. A bump that
+    # changes only firmware/uv.lock or pipeline/uv.lock cannot, since
+    # integration/uv.lock embeds their pyproject metadata and resolves its own
+    # transitive set - but both are listed anyway so a bump never slips past on
+    # a lock-only diff.
+    paths:
+      - firmware/pyproject.toml
+      - firmware/uv.lock
+      - pipeline/pyproject.toml
+      - pipeline/uv.lock
+
+# Only what the push needs. No pull-requests, packages or id-token scope.
+permissions:
+  contents: write
+
+concurrency:
+  # Serialize per pull request: two relock jobs racing would have one push
+  # rejected as a non-fast-forward for no reason.
+  group: dependabot-relock-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  relock:
+    # Dependabot's branches live in this repository, so a fork pull request can
+    # never be one however it names its branch; the head-repo check makes that
+    # explicit rather than resting on the actor name alone.
+    if: >-
+      github.actor == 'dependabot[bot]'
+      && startsWith(github.head_ref, 'dependabot/')
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the base branch for the relock script
+        # actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: base
+          persist-credentials: false
+
+      - name: Check out only the manifests from the pull request head
+        # actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: head
+          # The head SHA, not github.head_ref: the job must relock and push on
+          # top of the exact commit it read, so a Dependabot force-push landing
+          # mid-run is rejected by the push rather than silently overwritten.
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Needed to push the relock commit back to the branch.
+          persist-credentials: true
+          token: ${{ secrets.DEPENDABOT_RELOCK_TOKEN || secrets.GITHUB_TOKEN }}
+          sparse-checkout: |
+            firmware/pyproject.toml
+            pipeline/pyproject.toml
+            integration/pyproject.toml
+            integration/uv.lock
+          # Cone mode would widen these to whole directories.
+          sparse-checkout-cone-mode: false
+          # allow-unsafe-pr-checkout is deliberately left at its default of
+          # false. checkout v7 refuses to check out a *fork* pull request's code
+          # from a pull_request_target workflow unless it is set, and skips that
+          # guard when the head repository is this one - which Dependabot's
+          # branches always are. So the default both permits this job and keeps
+          # the action refusing if the trigger ever widened to fork pull
+          # requests, the same thing the job's `if:` asserts.
+
+      - name: Install uv
+        # astral-sh/setup-uv@v10.3.3
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          # The floor the three packages declare, same as tests.yml and lint.yml.
+          python-version: "3.11"
+          # Deliberately off. The other workflows cache because they run on
+          # every pull request; this one runs rarely, and a privileged job that
+          # writes a cache keyed off a pull request's manifests could poison the
+          # cache the unprivileged jobs restore.
+          enable-cache: false
+
+      - name: Relock integration/uv.lock and push
+        working-directory: head
+        run: ../base/scripts/ci/relock-integration.sh "$HEAD_REF"
+        env:
+          # Through the environment, not an inline expression: a branch name is
+          # attacker-influenced text in the general case and must never be
+          # interpolated into a shell command.
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}

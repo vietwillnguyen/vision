@@ -40,9 +40,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Test scripts/ci
+      - name: Test scripts/ci/supabase-images.sh
         # Stubbed docker; no daemon or network.
         run: scripts/ci/tests/test-supabase-images.sh
+      - name: Test scripts/ci/relock-integration.sh
+        # Stubbed uv and a local bare remote; no network, no uv install and no
+        # push to a real branch.
+        run: scripts/ci/tests/test-relock-integration.sh
 
   firmware:
     runs-on: ubuntu-latest
