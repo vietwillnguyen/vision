@@ -150,6 +150,7 @@ A single Python systemd service manages the full device lifecycle.
    On restart boots (session file already on disk), the same reload/up runs again as a best-effort retry whenever the keyfile exists, so a first boot whose activation failed is not stranded offline; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
 4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
 5. Flush any pending upload queue left over from a previous run, then recover orphaned captures that an unclean stop (SIGTERM mid-capture, power cut, crash) left at the top level of the data dir, and flush again only if anything was recovered.
+   The flush drains flag markers before segments (`markers_before_segments`), so a boot that cannot finish a backlog never sends a day's segments and leaves their flags behind; see Manual flag button.
    A lone or interrupted `.h264` is (re-)muxed and queued, and a lone `.mp4` is queued as is.
    On a mux failure the partial `.mp4` is removed, but the `.h264` is deleted only when it is zero bytes; a non-empty capture is kept for the next boot, since the failure may be transient (for example a full SD card).
    Recovery runs here because no capture is in flight yet; see `recover_orphaned_segments` in `firmware/visio_recorder/recording_loop.py`.
@@ -167,13 +168,14 @@ A single Python systemd service manages the full device lifecycle.
   A new segment or the shutdown sentinel still wakes it at once, so the retry never delays either.
   Each deadline is set that far after it is armed, doubling per consecutive failure from 30 s and capped at 480 s, read from the same consecutive-failure counter as the Critical LED, so the success that clears the red also brings the next deadline back to 30 s.
   A brief WiFi drop is therefore recovered inside one segment period, while an outage lasting hours settles into one attempt every eight minutes rather than spending radio power on a dead network.
-  The *next process startup's* flush (step 5 above) remains the backstop for anything a run could not drain, and is still the only retry for flag markers, which their own worker owns while the daemon runs.
+  The *next process startup's* flush (step 5 above) remains the backstop for anything a run could not drain, including the flag markers that their own worker now retries in process on this same schedule (see Manual flag button).
 - A retry round goes through the same upload path a segment does, so the 50 MB upload limit behaves identically: an oversized segment is split and its parts uploaded, and one that cannot be split under the limit is moved to `rejected/` and so leaves the queue for good, which is what keeps the limit from becoming a retry loop.
   A round's outcome feeds the same consecutive-failure counter a segment's own upload does, so retry failures escalate to Critical and a retry success clears it.
   A round that tries no file, because the queue emptied or the round was cancelled before its first file, is a no-op that deliberately leaves that counter and the LED alone, since reporting "nothing failed" would clear Critical without anything having reached storage.
   A stopping worker does not start a round at all; it goes straight to collecting the shutdown sentinel.
   A round in flight is abandoned when the daemon is stopping or the battery has hit the halt threshold, so a backlog is never uploaded on a dying battery; whatever is left stays queued.
   A round pushes no `device_status` row of its own - the next segment completes within one segment period and reports the new `segments_pending` and `segments_uploaded_today` then.
+  Before its own segment, and before each retry round, the worker has the flag-upload worker flush whatever markers are pending and waits for it, so a segment never reaches storage ahead of its flags (see Manual flag button).
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
   Critical is a latched condition rather than a momentary one, so it is derived from the consecutive-failure counter (`UploadHealth`) instead of being applied once at the moment of escalation.
   That makes the red survive the following segments: while the counter is at or past the threshold, the segment's own upload shows red too, not the Uploading blue and the restored Recording green, and only the resetting success returns the LED to green or yellow.
@@ -269,11 +271,35 @@ A single press inserts a `FLAG_YYYYMMDD_HHMMSS.marker` file into the upload queu
 The cloud pipeline reads this marker and boosts the composite score for the surrounding timestamp.
 Flagged moments are always included in the highlight reel.
 
-**As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler only debounces, writes the marker, and hands the path to a dedicated flag-upload worker thread, keeping gpiozero's callback thread off the network so later presses are never delayed by a slow upload.
+**Local-first contract (as-built).** The device is the source of truth for a flag and the network is an opportunistic sync, so a press is complete the moment the marker is durable on the SD card and nothing about it waits on WiFi.
+`write_flag_marker` creates the marker and fsyncs both the file and the queue directory before returning.
+The directory sync is the load-bearing one: the file is empty, so syncing its data costs almost nothing, while an unsynced directory entry is exactly what a power cut loses.
+The wearer learns the press landed from a short LED acknowledgement blink applied once that sync has returned, never gated on an upload (see the LED state machine).
+
+**As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler only debounces, writes and syncs the marker, asks the LED owner for the acknowledgement blink, and hands the path to a dedicated flag-upload worker thread.
+That keeps gpiozero's callback thread off the network and off the LED, so a slow upload or a blink in progress can never delay detection of a later press.
 The worker uploads each marker immediately as it arrives, so it reaches the pipeline before that night's run.
 Presses within a 2-second cooldown of the last accepted press are dropped (switch bounce and accidental double-taps).
-If the immediate upload fails, the marker stays in the upload queue and the next boot's flush retries it.
-Unlike a segment it gets no in-process retry, since the upload worker's retry rounds skip markers so they never race the flag-upload worker.
+
+**In-process retry (as-built).** A failed marker upload no longer waits for the next boot.
+The flag-upload worker retries whatever markers are still queued for as long as the daemon runs, on the same schedule segments use: while markers are pending it blocks on its work queue only until a retry deadline, and that deadline comes from the same `RetryBackoff` (30 s, doubling per consecutive failure, capped at 480 s) through the same `next_worker_step` decision the upload worker uses.
+It keeps its own consecutive-failure count rather than sharing the upload worker's `UploadHealth`, for two reasons.
+Two threads must not write one counter, and a marker is metadata rather than footage: one that cannot be sent costs a score boost, which must not on its own escalate the Critical LED that means this device is losing video.
+A real outage fails the segments alongside it and escalates there anyway.
+A round stops at its first failure, because markers are empty files and one refusal already proves the network is down, so trying the rest would spend radio power to learn the same thing.
+A new press or the shutdown sentinel still wakes the worker at once, so the retry delays neither, and the next boot's flush remains the backstop.
+
+**Flags travel with their footage (as-built).** The pipeline matches a marker against the segments of the day it is processing, so a segment that reaches storage while its marker is still queued is scored unflagged and the marker falls to the DLQ's late-marker retry.
+Keeping that the exception rather than the rule needs the device to upload every pending marker before any segment:
+
+- the startup flush drains the queue markers-first (`markers_before_segments`), which is the reboot-mid-backlog case;
+- while the daemon runs, the upload worker asks the flag-upload worker to flush its pending markers and waits for that flush - before the segment it has just recorded, and before each in-process retry round.
+  The flush is a request on the flag-upload worker's own work queue, so markers still have exactly one uploader and the two threads never race one.
+  The wait is bounded at 30 s; if it elapses, or the flush could not send everything, the segment is uploaded anyway, because footage is worth more than marker ordering and the pipeline's late-marker handling is the backstop.
+
+The rule is deliberately coarser than the pipeline's matching window: rather than work out which segment each marker belongs to, every pending marker goes first.
+That covers both a marker inside a segment and one in the 3 s restart gap, which the pipeline attaches to the segment that just ended.
+Markers stay out of `pending_segments`, so the upload worker's own retry rounds still never touch one.
 
 **LED state machine:**
 
@@ -283,6 +309,22 @@ Unlike a segment it gets no in-process retry, since the upload worker's retry ro
 | Uploading | Pulsing blue |
 | Low battery (<20%) | Pulsing yellow |
 | Critical battery / error | Red flash |
+| Flag acknowledged (momentary) | Magenta, 150 ms |
+
+The first four are *conditions*: exactly one holds at a time, and `next_led_state` ranks them Critical > low battery > uploading > recording.
+Those are the states that exist today.
+`vision-stop-recording-control` adds Stopped (dim white, solid) and Shutting down (white, pulsing), which makes the order Shutting down > Critical > low battery > uploading > recording or stopped; `vision-battery-hardening` is still pending and its states will slot into the battery rungs of that same order.
+
+The flag acknowledgement is not a condition and has no rung in that order.
+It is a momentary overlay: the LED owner writes magenta, waits `FLAG_ACK_BLINK_SEC`, then rewrites whatever state the conditions last called for, so the blink carries no state of its own and discards none.
+Magenta is the last unused primary pair and the complement of the green the wearer sees most of the time, so the blink reads against its usual background, and it stays clear of the white and dim white the next two states take.
+The blink is applied even while Critical red is latched.
+That is deliberate: a long outage is exactly the case the local-first contract exists for, the press still has to be acknowledged, and Critical is itself a flashing state, so a 150 ms interruption at most once per 2 s press cooldown removes nothing the wearer needs.
+
+**LED ownership (as built).** `LedController` wraps the real driver and is the single owner of the pixel.
+Every condition-derived write goes through its `set`, which also records that state as the one a blink returns to, and the acknowledgement blink runs on the controller's own thread rather than at any caller's: the gpiozero callback thread only asks for a blink and returns, never sleeping and never touching the driver, and the upload worker keeps the exclusive ownership `UploadHealth` relies on.
+The blink's wait is held outside the controller's lock, so a real state change landing mid-blink cuts the blink short and wins, and the restore then re-reads the newest state instead of the one captured when the blink began.
+The battery-halt Critical stays the last word: the recording loop applies it after joining the upload worker, `main` then stops the flag worker and closes the controller, and a blink that races that window still restores Critical when it ends.
 
 **LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour.
 `Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).

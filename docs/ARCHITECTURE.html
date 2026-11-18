@@ -28,10 +28,11 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 16618ecaf15a7a37f0c0cdf99a0a7ce0a5779bdf75199bee174845c0a76d77d0  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 32ad83a797cf2c4857ba744dcd8e8c93086b57cacb9c02715a9f27dbccd79955  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-17 (latched Critical LED + in-process upload retry) -->
+<!-- regenerated-at: 2026-11-18 (local-first flag markers: in-process marker retry,
+     the acknowledgement blink, and markers uploaded before their segments) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -51,7 +52,7 @@
     </ul>
   </div>
   <div class="navbar-end">
-    <span class="badge badge-ghost text-xs">regenerated 2026-07-23</span>
+    <span class="badge badge-ghost text-xs">regenerated 2026-11-18</span>
   </div>
 </div>
 
@@ -201,11 +202,11 @@ flowchart TD
   E --> F{"device_registered marker exists?"}
   F -- no --> G["register_device, then touch marker"]
   F -- yes --> H
-  G --> H["flush_pending queue"]
+  G --> H["flush_pending queue\n(flag markers before segments)"]
   H --> R["recover_orphaned_segments\n(mux + queue leftover .h264/.mp4;\nkeep non-empty captures on mux failure)"]
   R -- "recovered any" --> H2["flush_pending again"]
   R -- none --> I0
-  H2 --> I0["start flag-upload worker,\nregister GPIO 17 flag-button listener"]
+  H2 --> I0["start flag-upload worker,\nregister GPIO 17 flag-button listener\n(press handler acks on the LedController)"]
   I0 --> I["run_recording_loop"]
         </pre>
       </div>
@@ -214,8 +215,10 @@ flowchart TD
         <pre class="mermaid">
 flowchart TD
   M["main thread"] -- "rpicam-vid per 1-min segment" --> Q["queue.Queue"]
-  Q -- "get(timeout=until deadline)" --> W["worker thread\n(sole owner of upload state + LED)"]
-  W -- "mux + upload" --> S["Supabase Storage"]
+  Q -- "get(timeout=until deadline)" --> W["upload worker thread\n(sole owner of upload state)"]
+  W -- "flush pending markers first,\nwait up to 30 s" --> FW["flag-upload worker thread\n(sole owner of every marker upload)"]
+  FW --> S["Supabase Storage"]
+  W -- "mux + upload" --> S
   W -- "retry deadline passed,\nnew segments or not;\nnever while stopping" --> R["retry everything still queued\n(30 s doubling to 480 s)"]
   R --> S
   W --> H["UploadHealth\n(consecutive-failure counter)"]
@@ -237,12 +240,31 @@ flowchart TD
             <tr><td class="font-mono">2, 3 (3, 5)</td><td>I2C1 SDA/SCL</td><td>PiJuice or replacement fuel gauge</td></tr>
             <tr><td class="font-mono">7, 8, 9, 11</td><td>SPI0 CE1/CE0/MISO/SCLK</td><td>claimed by <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, nothing connected</td></tr>
             <tr><td class="font-mono font-semibold">10 (19)</td><td class="font-semibold">SPI0 MOSI - WS2812B data</td><td>moved from GPIO 18 (PWM0) in the LED SPI rewire</td></tr>
-            <tr><td class="font-mono">17 (11)</td><td>Flag button</td><td>to ground, internal pull-up</td></tr>
+            <tr><td class="font-mono">17 (11)</td><td>Flag button</td><td>to ground, internal pull-up; a press acks on the LED and never drives it from the callback thread</td></tr>
             <tr><td class="font-mono font-semibold">18, 19, 20 (12, 35, 38)</td><td class="font-semibold">I2S microphone (INMP441)</td><td>PCM_CLK, PCM_FS, PCM_DIN; GPIO 21 (PCM_DOUT) is claimed by the same pin group. Never enable SPI1 (CE0/CE1 = GPIO 18/17).</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="text-sm text-base-content/80 mt-2"><span class="font-mono text-xs bg-base-200 rounded px-1">Ws2812LedDriver</span> writes one SPI transfer per colour to <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/spidev0.0</span> through py-spidev (<span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>: no root, no <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span>, nothing compiled on the device). Each WS2812B bit is one byte at a 6.4 MHz request - <span class="font-mono text-xs bg-base-200 rounded px-1">0xC0</span> for a 0, <span class="font-mono text-xs bg-base-200 rounded px-1">0xF0</span> for a 1 - sent green, red, blue, MSB first, between two 240-byte zero resets (300 us latch). Both Zero 2W core clocks divide to a real 6.25 MHz, giving 320/960 ns and 640/640 ns pulses, at least 40 ns inside the WS2812B-V5 datasheet windows (legacy pre-V5 parts fall 10-40 ns outside theirs, a bench check). Pulsing and flashing render solid on the single pixel. The device needs <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> (the kernel caches the core clock at probe, so a scaling core clock would skew the SPI rate) and the daemon user in the <span class="font-mono text-xs bg-base-200 rounded px-1">spi</span> group.</p>
+      <p class="text-sm text-base-content/80 mt-2"><span class="font-mono text-xs bg-base-200 rounded px-1">Ws2812LedDriver</span> writes one SPI transfer per colour to <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/spidev0.0</span> through py-spidev (<span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>: no root, no <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span>, nothing compiled on the device). Each WS2812B bit is one byte at a 6.4 MHz request - <span class="font-mono text-xs bg-base-200 rounded px-1">0xC0</span> for a 0, <span class="font-mono text-xs bg-base-200 rounded px-1">0xF0</span> for a 1 - sent green, red, blue, MSB first, between two 240-byte zero resets (300 us latch). Both Zero 2W core clocks divide to a real 6.25 MHz, giving 320/960 ns and 640/640 ns pulses, at least 40 ns inside the WS2812B-V5 datasheet windows (legacy pre-V5 parts fall 10-40 ns outside theirs, a bench check). Pulsing and flashing render solid on the single pixel. Four condition states hold one at a time - CRITICAL red flash &gt; low-battery yellow pulse &gt; uploading blue pulse &gt; recording green solid - and <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> wraps the driver as their single owner; a flag acknowledgement is a 150 ms magenta overlay outside that order, restored to the condition state afterwards. <span class="font-mono text-xs bg-base-200 rounded px-1">vision-stop-recording-control</span> adds STOPPED (dim white, solid) and SHUTTING_DOWN (white, pulsing) above CRITICAL; <span class="font-mono text-xs bg-base-200 rounded px-1">vision-battery-hardening</span> is still pending and lands on the battery rungs. The device needs <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> (the kernel caches the core clock at probe, so a scaling core clock would skew the SPI rate) and the daemon user in the <span class="font-mono text-xs bg-base-200 rounded px-1">spi</span> group.</p>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">Flag press path (local-first)</h3>
+      <p class="text-sm text-base-content/80 mb-2">The device is the source of truth for a flag; the network is an opportunistic sync. A press is complete once the marker is durable, and the wearer is told so on the LED without waiting for WiFi.</p>
+      <pre class="mermaid">
+flowchart TD
+  P["short press\n(gpiozero callback thread)"] --> C{"within the\n2 s cooldown?"}
+  C -- yes --> X["dropped\n(bounce, double-tap)"]
+  C -- no --> WR["write the marker file,\nfsync it and the queue dir"]
+  WR --> ACK["ack_flag(): magenta 150 ms\non the controller's thread,\nthen restore the state"]
+  ACK --> SUB["submit it to the\nflag-upload worker\n(callback thread returns)"]
+  SUB --> U{"upload\nthe marker"}
+  U -- ok --> DEL["unlink it\nfrom the queue"]
+  U -- fails --> RET["stays queued; retried\nin process, 30 s to 480 s,\nown failure counter,\na round stops at\nits first failure"]
+  RET --> U
+  SEG["upload worker, before\nany segment and before\neach retry round"] -. "flush request" .-> U
+      </pre>
+      <p class="text-sm text-base-content/80 mt-2">Three properties are load-bearing. The acknowledgement blink is a momentary overlay rather than a state, so it has no rung in the LED precedence and returns the pixel to whatever the conditions last called for - including a latched CRITICAL red, which it is deliberately allowed to interrupt, since a long outage is exactly when a press most needs acknowledging. Marker retry lives in <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> and uses the shared <span class="font-mono text-xs bg-base-200 rounded px-1">RetryBackoff</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">next_worker_step</span>, but its own consecutive-failure counter: a marker is metadata, so failing to send one must not by itself escalate the CRITICAL that means lost video. And every pending marker is uploaded before any segment - markers-first in the startup flush, and through that flush request while the daemon runs - so the nightly run rarely sees a segment whose flags have not arrived; the pipeline's late-marker DLQ retry stays the backstop for when it does.</p>
     </div>
 
     <div class="card bg-base-100 shadow p-4">
@@ -250,7 +272,9 @@ flowchart TD
       <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
         <li>Segment size is pinned, not defaulted: <span class="font-mono text-xs bg-base-200 rounded px-1">--width 1280 --height 720 --framerate 30 --bitrate 4000000</span> are passed explicitly, and the default segment length (60 s) is derived from the bitrate so a segment fits the hosted 50 MiB upload limit with a 1.66x margin. See the segment size contract below.</li>
-        <li>Upload retry is <em>in-process</em>, owned by the existing upload worker: while segments are queued it blocks on its work queue only until a retry deadline, armed when the queue becomes non-empty and again after each round, and retries everything still queued once that deadline passes. A segment arriving does not restart the deadline, so a steady stream of segments cannot postpone a round. Each deadline is set from the backoff when armed, doubling per consecutive failure from 30 s to a 480 s cap and indexed by the same <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter that drives the CRITICAL LED, so retry failures escalate and a retry success clears it. The decision is the pure <span class="font-mono text-xs bg-base-200 rounded px-1">next_worker_step</span>, unit-tested without threads. A stopping worker never starts a round, and a round that tries no file (the queue emptied, or it was cancelled before its first file) leaves the counter and the LED untouched. No second thread and no scheduler; a new segment or the shutdown sentinel still wakes the worker at once, and a round in flight stops early once the loop is shutting down so a backlog is never uploaded through a battery halt. The startup flush is now the backstop rather than the only retry - and remains the only retry for flag markers, which <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> owns while the daemon runs.</li>
+        <li>Upload retry is <em>in-process</em>, owned by the existing upload worker: while segments are queued it blocks on its work queue only until a retry deadline, armed when the queue becomes non-empty and again after each round, and retries everything still queued once that deadline passes. A segment arriving does not restart the deadline, so a steady stream of segments cannot postpone a round. Each deadline is set from the backoff when armed, doubling per consecutive failure from 30 s to a 480 s cap and indexed by the same <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter that drives the CRITICAL LED, so retry failures escalate and a retry success clears it. The decision is the pure <span class="font-mono text-xs bg-base-200 rounded px-1">next_worker_step</span>, unit-tested without threads. A stopping worker never starts a round, and a round that tries no file (the queue emptied, or it was cancelled before its first file) leaves the counter and the LED untouched. No second thread and no scheduler; a new segment or the shutdown sentinel still wakes the worker at once, and a round in flight stops early once the loop is shutting down so a backlog is never uploaded through a battery halt. The startup flush is now the backstop rather than the only retry, for flag markers too: <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> runs the same decision over its own queue (see the flag press path above).</li>
+        <li>A flag press is durable before it is acknowledged and acknowledged before it is uploaded: <span class="font-mono text-xs bg-base-200 rounded px-1">write_flag_marker</span> fsyncs the marker and the queue directory, the press handler then asks <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> for a 150 ms magenta blink, and only then hands the path to the flag-upload worker. The blink runs on the controller's own thread with its wait outside the controller's lock, so the gpiozero callback thread neither sleeps nor touches the driver, and a real state change landing mid-blink wins.</li>
+        <li>Flag markers travel with their footage. <span class="font-mono text-xs bg-base-200 rounded px-1">flush_pending</span> drains markers before segments (<span class="font-mono text-xs bg-base-200 rounded px-1">markers_before_segments</span>), and while the daemon runs the upload worker asks the flag-upload worker to flush its pending markers - before the segment it just recorded and before each retry round - and waits, bounded at 30 s. Markers keep exactly one uploader, so the two threads never race one, and if the flush cannot finish the segment is still uploaded: footage outranks marker ordering, and the pipeline's late-marker handling is the backstop.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
@@ -296,7 +320,7 @@ flowchart TD
     <h2 class="text-2xl font-bold">As-built gaps</h2>
     <p class="text-base-content/70 max-w-3xl">Known, tracked deviations from the spec — not hidden, not yet fixed. Both previously tracked firmware gaps are closed; one hardware substitution and the LED SPI rewire's follow-ups are open:</p>
     <div class="alert alert-success alert-soft" role="alert">
-      <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, and hands it to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread never touches the network); a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for next-boot flush; unlike segments it gets no in-process retry, so it never races the upload worker.</span>
+      <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, fsyncs the file and the queue directory, asks the <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> for a 150 ms magenta acknowledgement blink, and hands the path to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread touches neither the network nor the driver); a 2s cooldown drops bounce/double-taps. A failed upload is retried in process on the segments' backoff by that same worker, which stays the only uploader of a marker, and the next boot's markers-first flush is the backstop.</span>
     </div>
     <div class="alert alert-success alert-soft" role="alert">
       <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
