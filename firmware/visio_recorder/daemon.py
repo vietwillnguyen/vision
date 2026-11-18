@@ -9,8 +9,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-from visio_recorder.battery import BatteryReader, read_battery_status
+from visio_recorder.battery import (
+    BATTERY_BOOT_SAMPLE_INTERVAL_SEC,
+    BATTERY_BOOT_SAMPLES,
+    WAKE_ON_CHARGE_PCT,
+    BatteryMonitor,
+    BatteryReader,
+    BatteryState,
+    BatteryVerdict,
+)
 from visio_recorder.capture import (
     AudioSettings,
     VideoSettings,
@@ -23,9 +32,10 @@ from visio_recorder.drivers import (
     GpioZeroFlagButton,
     PiJuiceBatteryReader,
     Ws2812LedDriver,
+    open_pijuice,
 )
 from visio_recorder.flag_button import FlagUploadWorker, make_flag_press_handler
-from visio_recorder.led import LedDriver, LedState, apply_led_state
+from visio_recorder.led import LedDriver, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
 from visio_recorder.onboarding import (
     NmcliConnectionActivator,
@@ -34,8 +44,16 @@ from visio_recorder.onboarding import (
     reactivate_connection_if_configured,
     run_onboarding,
 )
+from visio_recorder.power import (
+    DisabledPowerController,
+    PiJuicePowerController,
+    PowerController,
+    SystemdPowerController,
+)
 from visio_recorder.recording_loop import (
+    UPLOAD_DRAIN_TIMEOUT_SEC,
     DiskStatsReader,
+    LoopOutcome,
     RetryBackoff,
     ShutilDiskStatsReader,
     StatusClient,
@@ -43,6 +61,7 @@ from visio_recorder.recording_loop import (
     WorkerAction,
     build_device_status,
     flush_pending,
+    next_led_state,
     next_worker_step,
     on_segment_complete,
     pending_segments,
@@ -174,24 +193,81 @@ def resolve_audio(
     return None
 
 
+def resolve_power_controller(
+    env: Mapping[str, str],
+    runner: CommandRunner,
+    pijuice: Any | None,
+) -> PowerController:
+    """How this device powers itself off at the end of a battery halt.
+
+    ``VISIO_BATTERY_POWEROFF=off`` is for bench work: the whole halt path -
+    the drain, the final status push, the red LED, the wake level - can be
+    watched on a real device without the device going dark before it can be
+    read. Any other value powers off for real.
+
+    With a PiJuice present the HAT's own sequence runs first and the OS halt
+    last; without one there is nothing to arm and ``systemctl poweroff`` is
+    the whole story.
+    """
+    if env.get("VISIO_BATTERY_POWEROFF", "on").strip().lower() == "off":
+        _logger.warning(
+            "VISIO_BATTERY_POWEROFF=off: a battery halt will stop recording "
+            "but leave this device powered"
+        )
+        return DisabledPowerController()
+    if pijuice is None:
+        return SystemdPowerController(runner)
+    return PiJuicePowerController(pijuice.power, runner)
+
+
 @dataclass
 class StartupResult:
     proceed: bool
     battery_pct: int
+    # The debounced battery the boot samples built, handed to the loop so its
+    # moving average starts from real readings rather than from nothing.
+    battery: BatteryState
 
 
 def run_startup_sequence(
-    battery_reader: BatteryReader, led_driver: LedDriver
+    battery_reader: BatteryReader,
+    led_driver: LedDriver,
+    sleep: Callable[[float], None] = time.sleep,
+    samples: int = BATTERY_BOOT_SAMPLES,
+    sample_interval_sec: float = BATTERY_BOOT_SAMPLE_INTERVAL_SEC,
+    monitor: BatteryMonitor | None = None,
 ) -> StartupResult:
-    status = read_battery_status(battery_reader)
-    if status.should_halt:
-        apply_led_state(led_driver, LedState.CRITICAL)
-        return StartupResult(proceed=False, battery_pct=status.pct)
-    if status.is_low:
-        apply_led_state(led_driver, LedState.LOW_BATTERY)
-    else:
-        apply_led_state(led_driver, LedState.RECORDING)
-    return StartupResult(proceed=True, battery_pct=status.pct)
+    """Decide whether this boot may record, on more than one reading.
+
+    The boot check used to halt a whole day's recording on a single sample. It
+    now takes ``samples`` of them, ``sample_interval_sec`` apart, and stops
+    early the moment one confirms a halt - so a genuinely flat pendant is
+    still caught in about as long as it used to be, while a pendant whose
+    gauge reported one bad value at power-on goes on to record.
+
+    Three seconds is the whole cost against a day of recording. Returns the
+    ``BatteryState`` the samples went into, so the recording loop inherits a
+    warm moving average instead of starting blind.
+    """
+    battery = BatteryState(battery_reader, monitor)
+    verdict = battery.current()
+    for _ in range(max(0, samples - 1)):
+        if verdict.should_halt:
+            break
+        sleep(sample_interval_sec)
+        verdict = battery.sample()
+
+    if verdict.should_halt:
+        _logger.error(
+            "battery halt confirmed at boot (%d%%, reason %s); not recording",
+            verdict.pct,
+            verdict.halt_reason.value if verdict.halt_reason else "unknown",
+        )
+        apply_led_state(led_driver, next_led_state(False, False, battery_halted=True))
+        return StartupResult(proceed=False, battery_pct=verdict.pct, battery=battery)
+
+    apply_led_state(led_driver, next_led_state(verdict.is_low, is_uploading=False))
+    return StartupResult(proceed=True, battery_pct=verdict.pct, battery=battery)
 
 
 @dataclass
@@ -200,7 +276,10 @@ class LoopDeps:
     storage_client: StorageClient
     status_client: StatusClient
     led_driver: LedDriver
-    battery_reader: BatteryReader
+    # The debounced battery. The main loop is its only sampler; the upload
+    # worker reads the published verdict.
+    battery: BatteryState
+    power_controller: PowerController
     disk_stats_reader: DiskStatsReader
     data_dir: Path
     queue_dir: Path
@@ -214,6 +293,13 @@ class LoopDeps:
     retry_backoff: RetryBackoff = field(default_factory=RetryBackoff)
     # The clock the upload worker measures its retry deadline against.
     monotonic: Callable[[], float] = time.monotonic
+    # How long a battery halt waits for the queue to drain before powering
+    # off. Bounded, unlike the stop path's join: a dying battery is exactly
+    # when an upload is most likely to hang on a weak signal, and waiting
+    # forever for it ends in a brownout rather than a power-off.
+    upload_drain_timeout_sec: float = UPLOAD_DRAIN_TIMEOUT_SEC
+    # The charge level the PiJuice is told to wake the Pi back up at.
+    wake_on_charge_pct: int = WAKE_ON_CHARGE_PCT
 
 
 def _push_recording_status(
@@ -233,7 +319,7 @@ def _push_recording_status(
     try:
         status = build_device_status(
             device_id=deps.device_id,
-            battery_pct=read_battery_status(deps.battery_reader).pct,
+            battery_pct=deps.battery.current().pct,
             disk_stats_reader=deps.disk_stats_reader,
             data_dir=deps.data_dir,
             queue_dir=deps.queue_dir,
@@ -248,12 +334,54 @@ def _push_recording_status(
         )
 
 
+def _complete_battery_halt(
+    deps: LoopDeps,
+    halt_verdict: BatteryVerdict,
+    worker_thread: threading.Thread,
+) -> LoopOutcome:
+    """Show the halt, then either cancel it or power the pendant off.
+
+    The Critical red comes first and is the final LED state of a real halt: it
+    is applied after the worker join, so nothing a drained segment does can
+    paint over it, and it is the pendant's only chance to tell the wearer why
+    it is about to go dark.
+
+    Then one more reading. A charger connected while the queue was draining
+    means the halt's premise is gone, so the power-off is cancelled and the
+    loop is re-entered - plugging a pendant in keeps it running rather than
+    powering it off and waiting for the charge wake. The bounded drain is also
+    abandoned at that point: the bound existed because the battery was dying,
+    and on external power there is no hurry, so a worker still in flight is
+    joined properly before the loop restarts rather than racing a second one.
+    """
+    apply_led_state(
+        deps.led_driver,
+        next_led_state(halt_verdict.is_low, is_uploading=False, battery_halted=True),
+    )
+    recovery = deps.battery.sample()
+    if recovery.external_power:
+        _logger.warning(
+            "external power returned during the battery halt drain at %d%%; "
+            "cancelling the power-off and resuming",
+            recovery.pct,
+        )
+        if worker_thread.is_alive():
+            worker_thread.join()
+        apply_led_state(
+            deps.led_driver, next_led_state(recovery.is_low, is_uploading=False)
+        )
+        return LoopOutcome.RECOVERED
+
+    deps.power_controller.power_off(wake_on_charge_pct=deps.wake_on_charge_pct)
+    return LoopOutcome.HALTED
+
+
 def run_recording_loop(
     deps: LoopDeps,
     stop: threading.Event,
     clock: Callable[[], datetime] = datetime.now,
     sleep: Callable[[float], None] = time.sleep,
-) -> None:
+) -> LoopOutcome:
     """Record segments on the main thread; upload them on one background worker.
 
     The main thread only records and enqueues. A single worker thread owns all
@@ -321,7 +449,7 @@ def run_recording_loop(
                     queue_dir=deps.queue_dir,
                     storage_client=deps.storage_client,
                     led_driver=deps.led_driver,
-                    battery_reader=deps.battery_reader,
+                    battery=deps.battery,
                     device_id=deps.device_id,
                     upload_limit=deps.upload_limit,
                     upload_health=upload_health,
@@ -365,7 +493,7 @@ def run_recording_loop(
                     storage_client=deps.storage_client,
                     status_client=deps.status_client,
                     led_driver=deps.led_driver,
-                    battery_reader=deps.battery_reader,
+                    battery=deps.battery,
                     device_id=deps.device_id,
                     segments_uploaded_today=segments_uploaded_today,
                     framerate=deps.video.framerate,
@@ -392,13 +520,13 @@ def run_recording_loop(
     )
     worker_thread = threading.Thread(target=worker)
     worker_thread.start()
-    halted = False
+    halt_verdict: BatteryVerdict | None = None
     not_before: datetime | None = None
     try:
         while True:
-            battery_status = read_battery_status(deps.battery_reader)
-            if battery_status.should_halt:
-                halted = True
+            verdict = deps.battery.sample()
+            if verdict.should_halt:
+                halt_verdict = verdict
                 break
             if stop.is_set():
                 break
@@ -438,15 +566,26 @@ def run_recording_loop(
     finally:
         stopping.set()
         work.put(None)
-        worker_thread.join()
+        if halt_verdict is None:
+            worker_thread.join()
+        else:
+            worker_thread.join(timeout=deps.upload_drain_timeout_sec)
+            if worker_thread.is_alive():
+                _logger.warning(
+                    "the upload queue did not drain within %.0f s of the "
+                    "battery halt; whatever is left stays queued for the next "
+                    "boot",
+                    deps.upload_drain_timeout_sec,
+                )
         _push_recording_status(
             deps,
             segments_uploaded_today=uploaded_today[0],
             recording_active=False,
             audio_active=audio is not None,
         )
-    if halted:
-        apply_led_state(deps.led_driver, LedState.CRITICAL)
+    if halt_verdict is None:
+        return LoopOutcome.STOPPED
+    return _complete_battery_halt(deps, halt_verdict, worker_thread)
 
 
 def main() -> int:
@@ -465,11 +604,17 @@ def main() -> int:
     queue_dir = config.data_dir / "queue"
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
-    battery_reader = PiJuiceBatteryReader()
+    command_runner = SubprocessCommandRunner()
+    pijuice = open_pijuice()
+    battery_reader = PiJuiceBatteryReader(pijuice)
     led_driver = Ws2812LedDriver()
+    power_controller = resolve_power_controller(os.environ, command_runner, pijuice)
 
     startup = run_startup_sequence(battery_reader, led_driver)
     if not startup.proceed:
+        # A confirmed halt at boot must not leave the Pi powered and
+        # discharging; that is what used to corrupt SD cards.
+        power_controller.power_off(wake_on_charge_pct=WAKE_ON_CHARGE_PCT)
         return 0
 
     if not session_path.exists():
@@ -502,7 +647,6 @@ def main() -> int:
         register_device(clients.registration, device_id, _DEVICE_NAME)
         registered_marker_path.touch()
 
-    command_runner = SubprocessCommandRunner()
     audio = resolve_audio(command_runner, config.audio)
     upload_limit = UploadLimit(
         max_bytes=config.max_upload_bytes,
@@ -548,7 +692,8 @@ def main() -> int:
         storage_client=clients.storage,
         status_client=clients.status,
         led_driver=led_driver,
-        battery_reader=battery_reader,
+        battery=startup.battery,
+        power_controller=power_controller,
         disk_stats_reader=ShutilDiskStatsReader(),
         data_dir=config.data_dir,
         queue_dir=queue_dir,
@@ -559,7 +704,11 @@ def main() -> int:
         audio=audio,
     )
     try:
-        run_recording_loop(deps, stop)
+        while run_recording_loop(deps, stop) is LoopOutcome.RECOVERED:
+            # Charge came back while a halt was draining its queue, so the
+            # power-off was cancelled. Re-enter with a fresh upload worker
+            # rather than exiting and waiting for the PiJuice's charge wake.
+            _logger.warning("battery recovered; restarting the recording loop")
     finally:
         flag_upload_worker.stop()
     return 0

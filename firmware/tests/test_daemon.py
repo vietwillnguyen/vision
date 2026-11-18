@@ -3,6 +3,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,26 +14,43 @@ from tests.fakes import (
     FakeCommandRunner,
     FakeDiskStatsReader,
     FakeLedDriver,
+    FakePiJuicePower,
+    FakePowerController,
     FakeStatusClient,
     FakeStorageClient,
+    FakeTelemetryBatteryReader,
+    ScriptedBatteryReader,
     ScriptedStatusClient,
     ScriptedStorageClient,
     SimulatedSpiDevice,
     TriggerableBatteryReader,
+    battery_state,
+    responsive_battery,
     unlimited_upload_limit,
 )
 from tests.ws2812_waveform import decode_frame
+from visio_recorder.battery import (
+    WAKE_ON_CHARGE_PCT,
+    BatteryMonitor,
+    BatteryState,
+)
 from visio_recorder.capture import AudioSettings, VideoSettings
 from visio_recorder.daemon import (
     LoopDeps,
     load_config,
     resolve_audio,
+    resolve_power_controller,
     run_recording_loop,
     run_startup_sequence,
 )
 from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.led import LedPattern
-from visio_recorder.recording_loop import DiskStats, RetryBackoff
+from visio_recorder.power import (
+    DisabledPowerController,
+    PiJuicePowerController,
+    SystemdPowerController,
+)
+from visio_recorder.recording_loop import DiskStats, LoopOutcome, RetryBackoff
 from visio_recorder.upload_queue import list_pending
 
 CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)
@@ -134,20 +152,24 @@ def _make_deps(
     tmp_path,
     *,
     command_runner,
-    battery_reader,
+    battery,
     led_driver,
     storage_client=None,
     status_client=None,
     audio=None,
     retry_backoff=None,
     monotonic=None,
+    power_controller=None,
+    upload_drain_timeout_sec=None,
 ) -> LoopDeps:
     return LoopDeps(
         command_runner=command_runner,
         storage_client=storage_client or FakeStorageClient(),
         status_client=status_client or FakeStatusClient(),
         led_driver=led_driver,
-        battery_reader=battery_reader,
+        battery=battery,
+        # Never a real one: no test may reach systemctl poweroff.
+        power_controller=power_controller or FakePowerController(),
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=1.0, free_gb=9.0)),
         data_dir=tmp_path / "data",
         queue_dir=tmp_path / "queue",
@@ -158,6 +180,11 @@ def _make_deps(
         audio=audio,
         **({} if retry_backoff is None else {"retry_backoff": retry_backoff}),
         **({} if monotonic is None else {"monotonic": monotonic}),
+        **(
+            {}
+            if upload_drain_timeout_sec is None
+            else {"upload_drain_timeout_sec": upload_drain_timeout_sec}
+        ),
     )
 
 
@@ -173,7 +200,7 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
         status_client=status,
@@ -191,10 +218,11 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
     assert [u["segments_uploaded_today"] for u in status.upserts] == [0, 1, 2, 3, 3]
 
 
-def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
+def test_halt_battery_sets_critical_led_drains_queue_and_powers_off(tmp_path):
     stop = threading.Event()
     led = FakeLedDriver()
     storage = FakeStorageClient()
+    power = FakePowerController()
     battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
 
     # The mux gate holds the worker back until both segments are recorded and
@@ -211,13 +239,17 @@ def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=battery,
+        battery=responsive_battery(battery),
         led_driver=led,
         storage_client=storage,
+        power_controller=power,
     )
 
-    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
 
+    assert outcome is LoopOutcome.HALTED
     assert runner.record_count == 2
     # Both recorded-before-halt segments were drained by the worker.
     assert len(storage.uploaded) == 2
@@ -226,6 +258,9 @@ def test_halt_battery_sets_critical_led_drains_queue_and_exits(tmp_path):
     # a battery-halted device finishes red, never green/yellow.
     assert led.calls == [LOW_BATTERY_LED] * 4 + [CRITICAL_LED]
     assert led.calls[-1] == CRITICAL_LED
+    # And the halt ends in a power-off rather than leaving the Pi powered and
+    # discharging, with the wake armed so nothing needs a human to come back.
+    assert power.power_offs == [WAKE_ON_CHARGE_PCT]
 
 
 def test_halt_join_waits_for_slow_worker_before_applying_critical_led(tmp_path):
@@ -262,7 +297,7 @@ def test_halt_join_waits_for_slow_worker_before_applying_critical_led(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=battery,
+        battery=responsive_battery(battery),
         led_driver=led,
         storage_client=storage,
     )
@@ -303,7 +338,7 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
     )
@@ -350,7 +385,7 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
         status_client=status,
@@ -389,7 +424,7 @@ def test_setting_stop_exits_after_in_flight_cycle_and_joins_worker(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
     )
@@ -402,40 +437,106 @@ def test_setting_stop_exits_after_in_flight_cycle_and_joins_worker(tmp_path):
     assert len(storage.uploaded) == 2
 
 
+def _startup(reader, led, **kwargs):
+    """Run the boot check with its inter-sample sleep stubbed out."""
+    slept: list[float] = []
+    result = run_startup_sequence(reader, led, sleep=slept.append, **kwargs)
+    return result, slept
+
+
 def test_healthy_battery_proceeds_and_shows_recording_led():
     led = FakeLedDriver()
-    result = run_startup_sequence(FakeBatteryReader(85), led)
+    result, _ = _startup(FakeTelemetryBatteryReader(pct=85), led)
 
     assert result.proceed is True
     assert result.battery_pct == 85
-    assert led.calls == [((0, 255, 0), LedPattern.SOLID)]
+    assert led.calls == [RECORDING_LED]
 
 
 def test_low_battery_proceeds_and_shows_low_battery_led():
     led = FakeLedDriver()
-    result = run_startup_sequence(FakeBatteryReader(15), led)
+    result, _ = _startup(FakeTelemetryBatteryReader(pct=15), led)
 
     assert result.proceed is True
     assert result.battery_pct == 15
-    assert led.calls == [((255, 255, 0), LedPattern.PULSING)]
+    assert led.calls == [LOW_BATTERY_LED]
 
 
 def test_battery_at_warn_threshold_shows_recording_led():
     led = FakeLedDriver()
-    result = run_startup_sequence(FakeBatteryReader(20), led)
+    result, _ = _startup(FakeTelemetryBatteryReader(pct=20), led)
 
     assert result.proceed is True
     assert result.battery_pct == 20
-    assert led.calls == [((0, 255, 0), LedPattern.SOLID)]
+    assert led.calls == [RECORDING_LED]
 
 
-def test_critical_battery_halts_and_shows_critical_led():
+def test_a_battery_flat_across_every_boot_sample_halts_and_shows_critical():
     led = FakeLedDriver()
-    result = run_startup_sequence(FakeBatteryReader(5), led)
+
+    result, slept = _startup(FakeTelemetryBatteryReader(pct=5), led)
 
     assert result.proceed is False
     assert result.battery_pct == 5
-    assert led.calls == [((255, 0, 0), LedPattern.FLASHING)]
+    assert led.calls == [CRITICAL_LED]
+    # Three samples, so two waits: the whole cost of not trusting one reading.
+    assert slept == [1.0, 1.0]
+
+
+def test_one_bad_reading_at_power_on_does_not_cost_the_day():
+    # The regression this exists for: the boot check used to halt a whole day
+    # of recording on a single sample, and a gauge reporting one bad value at
+    # power-on is exactly what it would halt on.
+    led = FakeLedDriver()
+    reader = ScriptedBatteryReader([(2, 3900, False), (80, 3900, False)])
+
+    result, _ = _startup(reader, led)
+
+    assert result.proceed is True
+    assert led.calls == [RECORDING_LED]
+
+
+def test_a_charging_pendant_never_halts_at_boot():
+    # Plugged in at 3 %: it is charging, so it has to come up and record.
+    led = FakeLedDriver()
+    reader = FakeTelemetryBatteryReader(pct=3, voltage_mv=3200, external_power=True)
+
+    result, _ = _startup(reader, led)
+
+    assert result.proceed is True
+    assert result.battery_pct == 3
+    assert led.calls == [LOW_BATTERY_LED]
+
+
+def test_the_boot_check_stops_sampling_as_soon_as_a_halt_is_confirmed():
+    # A genuinely flat pendant is still caught in about the time the single
+    # sample used to take, rather than always paying for the full window.
+    led = FakeLedDriver()
+
+    result, slept = _startup(
+        FakeTelemetryBatteryReader(pct=5),
+        led,
+        samples=6,
+        monitor=BatteryMonitor(halt_confirmations=2),
+    )
+
+    assert result.proceed is False
+    assert slept == [1.0]
+
+
+def test_the_boot_samples_seed_the_loop_s_moving_average():
+    # The loop inherits a warm window instead of starting blind, so its first
+    # iteration is already debounced against three real readings.
+    led = FakeLedDriver()
+    reader = FakeTelemetryBatteryReader(pct=85)
+
+    result, _ = _startup(reader, led)
+    reader.pct = 5
+
+    # Two more readings fold into a window that already holds three 85s, so
+    # the smoothed value is nowhere near the halt threshold.
+    result.battery.sample()
+    assert result.battery.sample().should_halt is False
 
 
 def test_loop_reports_recording_active_before_the_first_segment(tmp_path):
@@ -453,7 +554,7 @@ def test_loop_reports_recording_active_before_the_first_segment(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=FakeCommandRunner(on_record=on_record),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         status_client=status,
     )
@@ -475,7 +576,7 @@ def test_stop_reports_recording_inactive_as_the_final_status(tmp_path):
         command_runner=FakeCommandRunner(
             on_record=lambda count: stop.set() if count >= 2 else None
         ),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         status_client=status,
     )
@@ -505,7 +606,7 @@ def test_battery_halt_reports_recording_inactive_after_the_drain(tmp_path):
         command_runner=FakeCommandRunner(
             on_record=lambda count: battery.trigger_halt() if count >= 1 else None
         ),
-        battery_reader=battery,
+        battery=responsive_battery(battery),
         led_driver=led,
         status_client=status,
     )
@@ -515,6 +616,144 @@ def test_battery_halt_reports_recording_inactive_after_the_drain(tmp_path):
     assert status.upserts[-1]["recording_active"] is False
     assert status.upserts[-1]["battery_pct"] == 5
     assert led.calls[-1] == CRITICAL_LED
+
+
+def test_a_confirmed_voltage_floor_halts_the_loop_the_same_way_a_flat_one_does(
+    tmp_path,
+):
+    # The gauge still reads 55 %; only the rail has collapsed. That is the
+    # case the percentage alone cannot catch, and it has to end in the same
+    # drain, the same red, and the same power-off.
+    stop = threading.Event()
+    led = FakeLedDriver()
+    power = FakePowerController()
+    battery = FakeTelemetryBatteryReader(pct=55, voltage_mv=3900)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(
+            on_record=lambda count: setattr(battery, "voltage_mv", 3100)
+        ),
+        battery=responsive_battery(battery),
+        led_driver=led,
+        power_controller=power,
+    )
+
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+
+    assert outcome is LoopOutcome.HALTED
+    assert led.calls[-1] == CRITICAL_LED
+    assert power.power_offs == [WAKE_ON_CHARGE_PCT]
+
+
+def test_a_charging_pendant_keeps_recording_through_a_flat_gauge(tmp_path):
+    # Decision 4, end to end: 2 % and 3.0 V, but plugged in, so the loop runs
+    # until something else stops it and nothing powers the device off.
+    stop = threading.Event()
+    power = FakePowerController()
+    battery = FakeTelemetryBatteryReader(pct=2, voltage_mv=3000, external_power=True)
+    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 3 else None)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery=responsive_battery(battery),
+        led_driver=FakeLedDriver(),
+        power_controller=power,
+    )
+
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+
+    assert outcome is LoopOutcome.STOPPED
+    assert runner.record_count == 3
+    assert power.power_offs == []
+
+
+def test_charge_returning_during_the_drain_cancels_the_power_off(tmp_path):
+    # Plugging a pendant in while its queue is draining keeps it running
+    # rather than powering it off and waiting for the charge wake. The loop
+    # reports RECOVERED so the daemon re-enters it.
+    stop = threading.Event()
+    led = FakeLedDriver()
+    power = FakePowerController()
+    battery = FakeTelemetryBatteryReader(pct=85, voltage_mv=3900)
+
+    class PlugInWhileDraining(FakeStorageClient):
+        def upload(self, bucket, object_path, local_path):
+            super().upload(bucket, object_path, local_path)
+            battery.pct = 30
+            battery.external_power = True
+
+    deps = _make_deps(
+        tmp_path,
+        # One segment recorded, then the pack reads flat: the halt is
+        # declared with that segment still queued, so the charger lands
+        # while the drain is in flight.
+        command_runner=FakeCommandRunner(
+            on_record=lambda count: setattr(battery, "pct", 5)
+        ),
+        battery=responsive_battery(battery),
+        led_driver=led,
+        storage_client=PlugInWhileDraining(),
+        power_controller=power,
+    )
+
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+
+    assert outcome is LoopOutcome.RECOVERED
+    assert power.power_offs == []
+    # The red is shown while the halt is still a halt, then given up for the
+    # live state once it is cancelled - a resuming pendant must not sit red.
+    assert CRITICAL_LED in led.calls
+    assert led.calls[-1] == RECORDING_LED
+
+
+def test_a_wedged_upload_cannot_hold_a_dying_battery_open_forever(tmp_path):
+    # The bounded drain. Without it the loop waits on an upload that will
+    # never return while the pack empties, and the Pi browns out mid-write
+    # instead of powering off.
+    stop = threading.Event()
+    power = FakePowerController()
+    battery = FakeTelemetryBatteryReader(pct=85, voltage_mv=3900)
+    release = threading.Event()
+    wedged = threading.Event()
+
+    class WedgedStorageClient:
+        def upload(self, bucket, object_path, local_path):
+            wedged.set()
+            assert release.wait(timeout=10), "the test never released the upload"
+
+    def on_record(count: int) -> None:
+        # Declare the battery flat only once an upload is provably stuck, so
+        # the halt always meets a drain that cannot finish.
+        if count == 1:
+            return
+        assert wedged.wait(timeout=5), "the worker never reached the upload"
+        battery.pct = 5
+
+    deps = _make_deps(
+        tmp_path,
+        command_runner=FakeCommandRunner(on_record=on_record),
+        battery=responsive_battery(battery),
+        led_driver=FakeLedDriver(),
+        storage_client=WedgedStorageClient(),
+        power_controller=power,
+        upload_drain_timeout_sec=0.2,
+    )
+
+    try:
+        outcome = run_recording_loop(
+            deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+        )
+
+        assert outcome is LoopOutcome.HALTED
+        assert power.power_offs == [WAKE_ON_CHARGE_PCT]
+    finally:
+        release.set()
 
 
 def test_capture_failure_reports_recording_inactive_and_still_raises(tmp_path):
@@ -528,7 +767,7 @@ def test_capture_failure_reports_recording_inactive_and_still_raises(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=FailingCapture(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         status_client=status,
     )
@@ -552,7 +791,7 @@ def test_status_push_failures_at_start_and_exit_never_stop_the_daemon(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=FakeCommandRunner(on_record=lambda count: stop.set()),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         status_client=AlwaysFailingStatus(),
@@ -637,7 +876,7 @@ def test_loop_records_audio_segments_and_reports_audio_active(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         status_client=status,
@@ -677,7 +916,7 @@ def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         status_client=status,
@@ -727,7 +966,7 @@ def test_a_failed_audio_capture_uploads_its_partial_ts_the_same_run(
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         audio=AudioSettings(),
@@ -758,7 +997,7 @@ def test_the_capture_after_a_failed_audio_one_waits_for_a_new_second(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=DiesAtOnce(on_record=lambda n: stop.set()),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         audio=AudioSettings(),
@@ -803,7 +1042,7 @@ def test_a_clock_stepping_back_after_the_fallback_never_stalls_recording(tmp_pat
     deps = _make_deps(
         tmp_path,
         command_runner=DiesOnce(on_record=lambda n: stop.set() if n >= 2 else None),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         audio=AudioSettings(),
@@ -829,7 +1068,7 @@ def test_a_failing_video_only_capture_still_escapes_the_loop(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=Killed(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
     )
 
@@ -843,37 +1082,33 @@ def test_startup_and_loop_drive_the_spi_led_through_every_colour(tmp_path):
     # The real led.py and the real SPI driver, with only /dev/spidev0.0
     # simulated: the colours a WS2812B on GPIO 10 would latch, decoded from the
     # wire bytes at the clock the SPI block really produces.
+    #
+    # The battery is healthy for the whole run. It used to go low part way
+    # through, triggered from inside the worker's own upload so that the
+    # worker's own battery read would see it - but the worker no longer reads
+    # the battery at all. It reads the verdict the main loop published, and
+    # with an instant fake capture the loop runs several segments ahead of the
+    # worker, so which segment first sees a mid-run change is a race. The
+    # low-battery colours are pinned in their own test below, where the
+    # battery is low from the start and there is no ordering question.
     spi = SimulatedSpiDevice()
     led = Ws2812LedDriver(spi=spi)
-    # 15% once triggered: low battery, but above the halt threshold.
-    battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=15)
-
-    class OutageThenLowBattery(ScriptedStorageClient):
-        # Uploads 2-4 fail; the battery reads low from upload 5 on. The worker
-        # reads the battery before each upload, so segment 6 is the first to
-        # see it - deterministic, unlike a main-loop trigger.
-        def upload(self, bucket, object_path, local_path):
-            try:
-                super().upload(bucket, object_path, local_path)
-            finally:
-                if self.attempts == 5:
-                    battery.trigger_halt()
-
-    storage = OutageThenLowBattery(fail_on_attempts={2, 3, 4})
+    battery = FakeTelemetryBatteryReader(pct=85)
+    storage = ScriptedStorageClient(fail_on_attempts={2, 3, 4})
     stop = threading.Event()
     runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 6 else None)
 
-    assert run_startup_sequence(battery, led).proceed
+    assert _startup(battery, led)[0].proceed
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=battery,
+        battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
     )
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
 
-    green, blue, yellow, red = (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 0)
+    green, blue, red = (0, 255, 0), (0, 0, 255), (255, 0, 0)
     colours = [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
     assert spi.overlapping_writes == 0
     upload = [blue, green]
@@ -884,8 +1119,35 @@ def test_startup_and_loop_drive_the_spi_led_through_every_colour(tmp_path):
         + upload  # 3 fails
         + [blue, red]  # 4 fails: third in a row
         + [red, green]  # 5 uploads: red held until the success clears it
-        + [yellow, yellow]  # 6 uploads on a low battery
+        + upload  # 6 uploads normally again
     )
+
+
+def test_a_low_battery_paints_startup_and_every_upload_yellow_on_the_wire(tmp_path):
+    # The fourth colour, decoded off the same simulated wire: a pendant that
+    # is already low at boot shows yellow at startup and keeps showing it
+    # through each segment's upload, instead of the blue and green a healthy
+    # one would.
+    spi = SimulatedSpiDevice()
+    led = Ws2812LedDriver(spi=spi)
+    battery = FakeTelemetryBatteryReader(pct=15)
+    stop = threading.Event()
+    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 2 else None)
+
+    assert _startup(battery, led)[0].proceed
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery=responsive_battery(battery),
+        led_driver=led,
+        storage_client=FakeStorageClient(),
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+
+    yellow = (255, 255, 0)
+    colours = [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+    assert spi.overlapping_writes == 0
+    assert colours == [yellow] * 5
 
 
 def test_critical_red_survives_the_next_segments_upload_colours(tmp_path):
@@ -908,7 +1170,7 @@ def test_critical_red_survives_the_next_segments_upload_colours(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=runner,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
     )
@@ -971,7 +1233,7 @@ def test_a_failed_segment_is_retried_in_process_without_a_restart(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=FakeCommandRunner(on_record=on_record),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         retry_backoff=RetryBackoff(base_sec=0.01, max_sec=0.04),
@@ -1025,7 +1287,7 @@ def test_a_retry_round_still_runs_while_segments_arrive_faster_than_the_backoff(
     deps = _make_deps(
         tmp_path,
         command_runner=FakeCommandRunner(on_record=on_record),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         retry_backoff=RetryBackoff(),
@@ -1071,7 +1333,7 @@ def test_a_stop_with_a_lapsed_retry_deadline_leaves_the_critical_led_red(tmp_pat
     deps = _make_deps(
         tmp_path,
         command_runner=FakeCommandRunner(on_record=on_record),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
         retry_backoff=RetryBackoff(),
@@ -1128,7 +1390,7 @@ def test_the_worker_waits_longer_after_each_failed_retry_round(tmp_path):
     deps = _make_deps(
         tmp_path,
         command_runner=FakeCommandRunner(on_record=on_record),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         retry_backoff=backoff,
@@ -1167,7 +1429,7 @@ def test_retry_rounds_escalate_to_the_critical_led_without_a_new_segment(tmp_pat
     deps = _make_deps(
         tmp_path,
         command_runner=FakeCommandRunner(on_record=on_record),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=led,
         storage_client=FailUntilRed(),
         retry_backoff=RetryBackoff(base_sec=0.01, max_sec=0.02),
@@ -1210,7 +1472,7 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
     deps = _make_deps(
         tmp_path,
         command_runner=FakeCommandRunner(on_record=on_record),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
         retry_backoff=RetryBackoff(base_sec=0.01, max_sec=0.02),
@@ -1220,3 +1482,83 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
 
     assert "device-abc/20260703_235900.mp4" in storage.uploaded
     assert list_pending(queue_dir) == []
+
+
+# --- choosing how this device powers itself off ------------------------------
+
+
+def test_a_pijuice_device_powers_off_through_the_hat():
+    pijuice = SimpleNamespace(power=FakePiJuicePower())
+
+    controller = resolve_power_controller({}, FakeCommandRunner(), pijuice)
+
+    assert isinstance(controller, PiJuicePowerController)
+
+
+def test_a_device_without_a_pijuice_falls_back_to_systemctl():
+    controller = resolve_power_controller({}, FakeCommandRunner(), None)
+
+    assert isinstance(controller, SystemdPowerController)
+
+
+def test_the_bench_switch_suppresses_the_power_off():
+    # So the whole halt path can be watched on a real device without the
+    # device going dark before it can be read.
+    controller = resolve_power_controller(
+        {"VISIO_BATTERY_POWEROFF": "off"},
+        FakeCommandRunner(),
+        SimpleNamespace(power=FakePiJuicePower()),
+    )
+
+    assert isinstance(controller, DisabledPowerController)
+
+
+def test_anything_but_off_powers_off_for_real():
+    controller = resolve_power_controller(
+        {"VISIO_BATTERY_POWEROFF": "on"}, FakeCommandRunner(), None
+    )
+
+    assert isinstance(controller, SystemdPowerController)
+
+
+# --- an unmetered power source is untouched by all of the above --------------
+
+
+def test_a_fixed_full_percentage_only_source_never_halts_or_warns(tmp_path):
+    # VISIO_BATTERY_SOURCE=none, the USB power bank used while the PiJuice is
+    # unavailable: a reader that reports a fixed 100 % and implements no
+    # telemetry at all. It must behave exactly as it did before any of this
+    # existed - no low-battery latch, no halt, no power-off, and no voltage to
+    # compare against a floor.
+    stop = threading.Event()
+    led = FakeLedDriver()
+    power = FakePowerController()
+    unmetered = FakeBatteryReader(100)
+    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 3 else None)
+    deps = _make_deps(
+        tmp_path,
+        command_runner=runner,
+        battery=BatteryState(unmetered),
+        led_driver=led,
+        power_controller=power,
+    )
+
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+
+    assert outcome is LoopOutcome.STOPPED
+    assert runner.record_count == 3
+    assert power.power_offs == []
+    assert LOW_BATTERY_LED not in led.calls
+    assert CRITICAL_LED not in led.calls
+
+
+def test_a_fixed_full_percentage_only_source_boots_straight_into_recording():
+    led = FakeLedDriver()
+
+    result, _ = _startup(FakeBatteryReader(100), led)
+
+    assert result.proceed is True
+    assert result.battery_pct == 100
+    assert led.calls == [RECORDING_LED]
