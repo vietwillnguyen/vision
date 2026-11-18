@@ -202,6 +202,13 @@ class FlagUploadWorker:
         return True
 
     def _upload(self, marker_path: Path) -> bool:
+        if not marker_path.exists():
+            # A flush or a retry round reads the queue rather than the work
+            # item, so it can reach a marker before the press's own hand-off
+            # is dequeued. Everything here runs on one thread, so a path that
+            # is gone is one this worker has already sent: re-uploading it
+            # would push the same object twice and then fail on the unlink.
+            return True
         try:
             upload_segment(self._storage_client, self._device_id, marker_path)
         except Exception:

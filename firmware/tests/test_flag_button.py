@@ -494,3 +494,27 @@ def test_a_stopping_worker_starts_no_retry_round(tmp_path):
 
     assert len(storage.attempts) <= attempts_at_stop + 1
     assert len(pending_markers(queue_dir)) == 1
+
+
+def test_a_marker_a_round_already_sent_is_not_sent_again(tmp_path):
+    # Found by the offline simulation. A press hands its path to the worker,
+    # but a flush or a retry round can reach the same marker first - they
+    # read the queue, not the work item. The second pass used to re-upload it
+    # and then crash on unlinking a file that was already gone, killing the
+    # only thread that uploads markers for the rest of the run.
+    queue_dir = tmp_path / "queue"
+    storage = FakeStorageClient()
+    worker = FlagUploadWorker(storage, "dev-1", queue_dir, retry_backoff=_NO_RETRY)
+    marker = write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 0))
+
+    assert worker.flush_markers() is True  # the round sends and unlinks it
+    worker.submit(marker)  # the press's own hand-off arrives afterwards
+    # A later press still goes up, so the worker survived the stale path.
+    worker.submit(write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 5)))
+    worker.stop()
+
+    assert storage.uploaded == [
+        "dev-1/FLAG_20260704_120000.marker",
+        "dev-1/FLAG_20260704_120005.marker",
+    ]
+    assert pending_markers(queue_dir) == []
