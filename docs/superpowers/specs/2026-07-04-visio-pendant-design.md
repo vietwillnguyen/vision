@@ -319,7 +319,7 @@ stateDiagram-v2
         Critical --> Recording: any upload success
     }
     RecordingFamily --> Scanning: long-press or visio-reonboard
-    RecordingFamily --> Halted: battery halt or capture error
+    RecordingFamily --> Halted: halt or capture error
     RecordingFamily --> Off: SIGTERM stop
     Halted --> Off: daemon exits (after a 30 s hold)
     Off --> Starting: systemd restart on failure
