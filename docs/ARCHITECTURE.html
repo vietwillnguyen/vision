@@ -28,7 +28,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: d2c05f871e8c88a3e1c7f48a79a9193b5b207af03f8c8686816b2863856e12e5  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: f5f38c05193ffb3a147283a29596aec66aff037af1df247ea14d6fa59706fce5  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-18 (LED state machine design) -->
@@ -253,7 +253,7 @@ flowchart TD
           <thead><tr><th>State</th><th>Look</th><th>Recording?</th><th>Condition</th><th>Status</th></tr></thead>
           <tbody>
             <tr><td>Off</td><td>dark</td><td>no</td><td>daemon not running</td><td>new: <span class="font-mono text-xs bg-base-200 rounded px-1">ExecStopPost=</span> all-off frame, since the WS2812B latches its last colour</td></tr>
-            <tr><td>Halted</td><td>red, solid</td><td>no</td><td>battery halt, onboarding gave up, Wi-Fi activation failed, capture error; held 30 s, then exit</td><td>new (shows Critical today)</td></tr>
+            <tr><td>Halted</td><td>red, solid</td><td>no</td><td>battery halt, onboarding gave up, Wi-Fi activation failed, capture error; held 30 s, then exit</td><td>new (today battery halt and Wi-Fi activation failure show Critical; onboarding giving up or a capture error leaves the last colour, usually Recording green)</td></tr>
             <tr><td>Scanning</td><td>cyan, pulsing</td><td>no</td><td>looking for an onboarding QR code</td><td>new (shows green today)</td></tr>
             <tr><td>Starting</td><td>white, dim</td><td>no</td><td>boot steps before the first capture</td><td>new (shows green today)</td></tr>
             <tr><td>Critical</td><td>red, flashing</td><td>yes</td><td>3+ consecutive upload failures, latched</td><td>built</td></tr>
@@ -288,7 +288,7 @@ stateDiagram-v2
     Halted --> Off: exit after 30 s hold
     Off --> Starting: systemd restart on failure
       </pre>
-      <p class="text-xs text-base-content/70 mt-2">Pulsing and flashing need a new LED renderer thread that owns the driver; today every pattern renders solid, so red flashing and red solid would look the same. Re-onboarding never strands the device: on timeout it returns to recording on the old network.</p>
+      <p class="text-xs text-base-content/70 mt-2">Pulsing and flashing need a new LED renderer thread that owns the driver; today every pattern renders solid, so red flashing and red solid would look the same. Re-onboarding never strands the device: on timeout it returns to recording on the old network. Inside the recording family the drawn edges are illustrative: the state is resolved by priority, not by the edges.</p>
     </div>
 
     <div class="card bg-base-100 shadow p-4">

@@ -286,7 +286,7 @@ The one exception is the flag acknowledgement, a short overlay that plays over w
 | State | Look | Recording? | Condition | Status |
 |---|---|---|---|---|
 | Off | Dark | No | Daemon not running: stopped, crashed, or no power | Not guaranteed: the WS2812B latches its last frame, so a crash leaves the last colour lit |
-| Halted | Red, solid | No | Battery under the 10% halt threshold, QR onboarding gave up, Wi-Fi activation failed, or the capture loop stopped on an error | New (today these show Critical) |
+| Halted | Red, solid | No | Battery under the 10% halt threshold, QR onboarding gave up, Wi-Fi activation failed, or the capture loop stopped on an error | New (today the battery halt and a Wi-Fi activation failure show Critical, while onboarding giving up or a capture error leaves the last colour lit, usually Recording green) |
 | Scanning | Cyan, pulsing | No | Looking for an onboarding QR code (first boot, or re-onboarding triggered by a long-press or `visio-reonboard`) | New (today onboarding shows Recording green) |
 | Starting | White, dim solid | No | Daemon started, preflight and boot steps running, first capture not yet begun | New (today startup shows Recording green before onboarding) |
 | Critical | Red, flashing | Yes | 3+ consecutive upload failures (latched by `UploadHealth`) | Built |
@@ -322,6 +322,8 @@ stateDiagram-v2
     Halted --> Off: daemon exits (after a 30 s hold)
     Off --> Starting: systemd restart on failure
 ```
+
+Inside the recording family the drawn edges are illustrative: the state is resolved by priority, not by the edges, so any recording state can move to any other.
 
 Transition rules:
 - Scanning needs the camera, so entering it from the Recording family ends the current segment cleanly first, and recording resumes as soon as scanning ends either way.

@@ -143,29 +143,29 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Priority</th><th>State</th><th>Look</th><th>Means</th><th>Status</th></tr></thead>
     <tbody>
-      <tr><td>1 (wins)</td><td><b>Critical</b></td><td><span class="no">Red, flashing</span></td><td>Needs you: 3+ uploads failed in a row, Wi-Fi activation failed, or battery under 10% (stops recording)</td><td><span class="ok">Built</span></td></tr>
-      <tr><td>2</td><td><b>Low battery</b></td><td><span class="warn">Yellow, pulsing</span></td><td>Under 20%, still recording</td><td><span class="ok">Built</span></td></tr>
-      <tr><td>1 (non-recording)</td><td><b>Halted</b></td><td><span class="no">Red, solid</span></td><td>Stopped because of a problem (battery halt, onboarding gave up, Wi-Fi activation or capture failed); held 30 s, then off</td><td><span class="no">Missing</span>: shows Critical today</td></tr>
-      <tr><td>3</td><td><b>Scanning for QR</b></td><td>Cyan, pulsing</td><td>Waiting for a Wi-Fi QR code; not recording (the camera is busy)</td><td><span class="no">Missing</span>: onboarding shows no LED today</td></tr>
-      <tr><td>4</td><td><b>Flag saved</b></td><td>White, 2 quick blinks, then back</td><td>Your button press was recorded (J7)</td><td><span class="no">Missing</span></td></tr>
-      <tr><td>5</td><td><b>Uploading</b></td><td style="color:var(--accent)">Blue, pulsing</td><td>Recording and sending footage over Wi-Fi</td><td><span class="ok">Built</span></td></tr>
-      <tr><td>6</td><td><b>Recording</b></td><td><span class="ok">Green, solid</span></td><td>Recording; offline is normal, footage queues for later</td><td><span class="ok">Built</span></td></tr>
-      <tr><td>7</td><td><b>Starting up</b></td><td>Dim white, solid</td><td>Booting and running preflight, not recording yet</td><td><span class="no">Missing</span></td></tr>
+      <tr><td>1 (wins)</td><td><b>Halted</b></td><td><span class="no">Red, solid</span></td><td>Stopped because of a problem: battery under 10%, onboarding gave up, Wi-Fi activation failed, or capture failed; not recording, held 30 s, then off</td><td><span class="no">Missing</span>: battery halt and Wi-Fi activation failure show Critical today; the others leave the last colour lit</td></tr>
+      <tr><td>2</td><td><b>Scanning for QR</b></td><td>Cyan, pulsing</td><td>Waiting for a Wi-Fi QR code; not recording (the camera is busy)</td><td><span class="no">Missing</span>: onboarding shows Recording green today</td></tr>
+      <tr><td>3</td><td><b>Starting up</b></td><td>Dim white, solid</td><td>Booting and running preflight, not recording yet</td><td><span class="no">Missing</span>: startup shows Recording green today</td></tr>
+      <tr><td>4</td><td><b>Critical</b></td><td><span class="no">Red, flashing</span></td><td>Needs you: 3+ uploads failed in a row; still recording</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>5</td><td><b>Low battery</b></td><td><span class="warn">Yellow, pulsing</span></td><td>Under 20%, still recording</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>6</td><td><b>Uploading</b></td><td style="color:var(--accent)">Blue, pulsing</td><td>Recording and sending footage over Wi-Fi</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>7</td><td><b>Recording</b></td><td><span class="ok">Green, solid</span></td><td>Recording; offline is normal, footage queues for later</td><td><span class="ok">Built</span></td></tr>
+      <tr><td>Overlay</td><td><b>Flag saved</b></td><td>White, 2 quick blinks, then back</td><td>Your button press was recorded (J7); plays over the current state without changing it</td><td><span class="no">Missing</span></td></tr>
       <tr><td>-</td><td><b>Off</b></td><td class="muted">Dark</td><td>Not recording: stopped, crashed, or no power</td><td><span class="warn">Not guaranteed</span>: a crash may leave the last colour lit</td></tr>
     </tbody>
   </table></div>
-  <p class="muted" style="margin-top:8px">Colours for the 3 new states are proposals. All of this can only be checked once the LED is fitted (M2).</p>
+  <p class="muted" style="margin-top:8px">Colours for the new states (cyan pulsing, dim white, red solid) are approved. All of this can only be checked once the LED is fitted (M2).</p>
 
   <h2>Journeys by component</h2>
   <p class="muted">The journeys stay user-facing because each one crosses several parts. This view shows what each part must deliver, and what you can test once that part's hardware arrives.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Component</th><th>Have it?</th><th>Journeys it unlocks</th><th>Its own acceptance check</th></tr></thead>
     <tbody>
-      <tr><td><b>Pi Zero 2W + camera</b></td><td><span class="ok">Yes</span></td><td>J1, J2, J3, J12</td><td>Provisioning converges, QR decodes, segments upload, auto-scan when offline</td></tr>
+      <tr><td><b>Pi Zero 2W + camera</b></td><td><span class="ok">Yes</span></td><td>J1, J2, J3, J12</td><td>Provisioning converges, QR decodes, segments upload, long-press or <code>visio-reonboard</code> enters scan mode</td></tr>
       <tr><td><b>Pipeline</b> (GitHub Actions)</td><td><span class="ok">Yes</span></td><td>J4, J8 scoring, J7 boost</td><td>Manual dispatch on a recorded day makes a 60-120 s reel and sends a push</td></tr>
       <tr><td><b>App</b> (Expo)</td><td><span class="ok">Yes</span></td><td>J2, J5, J6, J12 QR</td><td>Reel plays, archive opens, Device tab updates live, Re-onboard QR scans</td></tr>
       <tr><td><b>Flag button</b></td><td><span class="no">No</span></td><td>J7, J12 long-press</td><td>Press writes a marker; long-press enters scan mode</td></tr>
-      <tr><td><b>WS2812B LED</b></td><td><span class="no">No</span></td><td>All journeys (status), J7 ack, J9</td><td>Each state (recording, uploading, low battery, critical, scanning) is distinct</td></tr>
+      <tr><td><b>WS2812B LED</b></td><td><span class="no">No</span></td><td>All journeys (status), J7 ack, J9</td><td>Each state (starting, scanning, recording, uploading, low battery, critical, halted, flag saved, off) is distinct</td></tr>
       <tr><td><b>INMP441 mic</b></td><td><span class="no">No</span></td><td>J8</td><td>Segments carry an audio stream; unplugging falls back with a warning</td></tr>
       <tr><td><b>Battery</b> (power bank or PiJuice)</td><td><span class="no">No</span></td><td>J9, all-day wear (v2)</td><td>7-8 h per charge; thresholds trigger with a real meter</td></tr>
     </tbody>
