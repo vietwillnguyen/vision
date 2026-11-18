@@ -1,0 +1,93 @@
+# The tests this change adds, run against the firmware before it
+# (visio_recorder/ from 5073cce, this branch's tests/).
+
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_daemon.py _____________________
+ImportError while importing test module '/tmp/before-pkg/tests/test_daemon.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/home/viet/.local/share/uv/python/cpython-3.14.2-linux-x86_64-gnu/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_daemon.py:34: in <module>
+    from visio_recorder.flag_button import (
+E   ImportError: cannot import name 'FLAG_UPLOAD_THREAD_NAME' from 'visio_recorder.flag_button' (/tmp/before-pkg/visio_recorder/flag_button.py)
+__________________ ERROR collecting tests/test_flag_button.py __________________
+ImportError while importing test module '/tmp/before-pkg/tests/test_flag_button.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/home/viet/.local/share/uv/python/cpython-3.14.2-linux-x86_64-gnu/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_flag_button.py:16: in <module>
+    from visio_recorder.upload_queue import pending_markers
+E   ImportError: cannot import name 'pending_markers' from 'visio_recorder.upload_queue' (/tmp/before-pkg/visio_recorder/upload_queue.py)
+______________________ ERROR collecting tests/test_led.py ______________________
+ImportError while importing test module '/tmp/before-pkg/tests/test_led.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/home/viet/.local/share/uv/python/cpython-3.14.2-linux-x86_64-gnu/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_led.py:4: in <module>
+    from visio_recorder.led import (
+E   ImportError: cannot import name 'FLAG_ACK_BLINK_SEC' from 'visio_recorder.led' (/tmp/before-pkg/visio_recorder/led.py)
+_________________ ERROR collecting tests/test_upload_queue.py __________________
+ImportError while importing test module '/tmp/before-pkg/tests/test_upload_queue.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/home/viet/.local/share/uv/python/cpython-3.14.2-linux-x86_64-gnu/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_upload_queue.py:3: in <module>
+    from visio_recorder.upload_queue import (
+E   ImportError: cannot import name 'is_flag_marker' from 'visio_recorder.upload_queue' (/tmp/before-pkg/visio_recorder/upload_queue.py)
+__________________ ERROR collecting tests/test_ws2812_spi.py ___________________
+tests/test_ws2812_spi.py:41: in <module>
+    LedState.FLAG_ACK: _frame(ALL_ZERO, ALL_ONE, ALL_ONE),  # magenta
+    ^^^^^^^^^^^^^^^^^
+E   AttributeError: type object 'LedState' has no attribute 'FLAG_ACK'
+=========================== short test summary info ============================
+ERROR tests/test_daemon.py
+ERROR tests/test_flag_button.py
+ERROR tests/test_led.py
+ERROR tests/test_upload_queue.py
+ERROR tests/test_ws2812_spi.py - AttributeError: type object 'LedState' has n...
+!!!!!!!!!!!!!!!!!!! Interrupted: 5 errors during collection !!!!!!!!!!!!!!!!!!!!
+5 errors in 0.61s
+
+# The one module that still collects against the old code, on its own:
+# the marker-ordering behaviours, which are failures rather than
+# import errors.
+
+            disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+            data_dir=tmp_path,
+            upload_limit=unlimited_upload_limit(),
+            upload_health=health,
+            flush_markers=lambda: False,
+        )
+E       TypeError: on_segment_complete() got an unexpected keyword argument 'flush_markers'
+
+tests/test_recording_loop.py:1144: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_recording_loop.py::test_the_worker_waits_for_a_segment_with_nothing_queued
+FAILED tests/test_recording_loop.py::test_a_stopping_worker_never_starts_a_retry_round_even_with_a_lapsed_deadline
+FAILED tests/test_recording_loop.py::test_a_newly_queued_backlog_arms_the_deadline_from_the_live_failure_count
+FAILED tests/test_recording_loop.py::test_an_armed_deadline_is_kept_rather_than_restarted
+FAILED tests/test_recording_loop.py::test_a_passed_deadline_retries_now - Typ...
+FAILED tests/test_recording_loop.py::test_retry_pending_segments_drains_the_queue_and_clears_critical
+FAILED tests/test_recording_loop.py::test_retry_failures_feed_the_same_counter_that_drives_critical
+FAILED tests/test_recording_loop.py::test_retry_pending_segments_on_an_empty_queue_leaves_critical_latched
+FAILED tests/test_recording_loop.py::test_a_retry_round_cancelled_before_its_first_file_leaves_critical_latched
+FAILED tests/test_recording_loop.py::test_retry_moves_an_unsplittable_oversized_segment_aside_exactly_once
+FAILED tests/test_recording_loop.py::test_retry_after_a_crash_between_upload_and_unlink_is_idempotent
+FAILED tests/test_recording_loop.py::test_retry_refuses_to_overwrite_a_different_file_under_an_existing_key
+FAILED tests/test_recording_loop.py::test_a_cancelled_retry_round_leaves_the_rest_of_the_backlog_queued
+FAILED tests/test_recording_loop.py::test_flush_pending_sends_every_flag_marker_before_any_segment
+FAILED tests/test_recording_loop.py::test_a_retry_round_flushes_the_markers_before_its_first_segment
+FAILED tests/test_recording_loop.py::test_a_retry_round_with_nothing_queued_does_not_flush_markers
+FAILED tests/test_recording_loop.py::test_a_cancelled_retry_round_does_not_flush_markers
+FAILED tests/test_recording_loop.py::test_on_segment_complete_flushes_the_markers_before_its_own_upload
+FAILED tests/test_recording_loop.py::test_a_marker_flush_that_could_not_finish_still_uploads_the_segment
+19 failed, 31 passed in 0.51s
