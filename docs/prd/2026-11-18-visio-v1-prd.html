@@ -118,7 +118,7 @@
         <td><span class="ok">Done</span></td><td><span class="ok">Yes</span></td></tr>
       <tr><td class="id">J6</td><td><b>Check the device</b><br><span class="muted">Device tab, live status</span></td><td><span class="pill p1">P1</span></td>
         <td><ul><li>Storage, pending and uploaded counts update live via Realtime</li><li>Recording indicator matches reality</li><li>Shows how much footage is waiting to upload and since when; a push notification if it has waited over 24 h</li><li>Battery shown when a meter is fitted</li></ul></td>
-        <td><span class="ok">Done</span></td><td><span class="warn">Yes, no battery reading</span></td></tr>
+        <td><span class="warn">Partly: live status done. Planned: <code>device_status.oldest_pending_at</code>, the Device tab backlog view and the 24 h push from the nightly pipeline</span></td><td><span class="warn">Yes, no battery reading</span></td></tr>
       <tr><td class="id">J7</td><td><b>Flag a moment</b><br><span class="muted">Something good just happened: press the pendant's physical button so that moment is far more likely to make tonight's reel</span></td><td><span class="pill p1">P1</span></td>
         <td><ul><li>A press writes a <code>FLAG_*.marker</code> that uploads</li><li>The matching segment is <code>manually_flagged</code> and boosted 1.5x</li><li>LED acknowledges the press</li></ul></td>
         <td><span class="ok">Done</span></td><td><span class="no">No, needs a button</span></td></tr>
@@ -162,7 +162,7 @@
     <thead><tr><th>Component</th><th>Have it?</th><th>Journeys it unlocks</th><th>Its own acceptance check</th></tr></thead>
     <tbody>
       <tr><td><b>Pi Zero 2W + camera</b></td><td><span class="ok">Yes</span></td><td>J1, J2, J3, J12</td><td>Provisioning converges, QR decodes, segments upload, long-press or <code>visio-reonboard</code> enters scan mode</td></tr>
-      <tr><td><b>Pipeline</b> (GitHub Actions)</td><td><span class="ok">Yes</span></td><td>J4, J8 scoring, J7 boost</td><td>Manual dispatch on a recorded day makes a 60-120 s reel and sends a push</td></tr>
+      <tr><td><b>Pipeline</b> (GitHub Actions)</td><td><span class="ok">Yes</span></td><td>J4, J6 backlog push, J8 scoring, J7 boost</td><td>Manual dispatch on a recorded day makes a 60-120 s reel and sends a push; a backlog over 24 h sends a push (planned)</td></tr>
       <tr><td><b>App</b> (Expo)</td><td><span class="ok">Yes</span></td><td>J2, J5, J6, J12 QR</td><td>Reel plays, archive opens, Device tab updates live, Re-onboard QR scans</td></tr>
       <tr><td><b>Flag button</b></td><td><span class="no">No</span></td><td>J7, J12 long-press</td><td>Press writes a marker; long-press enters scan mode</td></tr>
       <tr><td><b>WS2812B LED</b></td><td><span class="no">No</span></td><td>All journeys (status), J7 ack, J9</td><td>Each state (starting, scanning, recording, uploading, low battery, critical, halted, flag saved, off) is distinct</td></tr>
