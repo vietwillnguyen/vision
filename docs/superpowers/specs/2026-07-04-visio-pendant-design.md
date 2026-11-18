@@ -277,14 +277,63 @@ Unlike a segment it gets no in-process retry, since the upload worker's retry ro
 
 **LED state machine:**
 
-| State | Color / Pattern |
-|---|---|
-| Recording | Solid green |
-| Uploading | Pulsing blue |
-| Low battery (<20%) | Pulsing yellow |
-| Critical battery / error | Red flash |
+Requirement (PRD v1, 2026-11-18): whenever the pendant has power, the LED shows exactly one state, and every state answers one question for the wearer and anyone nearby: is the camera recording?
+Off always means not recording.
 
-**LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour.
+The LED shows the highest-priority state whose condition holds, resolved by one pure function in the spirit of today's `next_led_state`, so no code path sets a colour directly.
+The one exception is the flag acknowledgement, a short overlay that plays over whatever state is showing and then gives it back.
+
+| State | Look | Recording? | Condition | Status |
+|---|---|---|---|---|
+| Off | Dark | No | Daemon not running: stopped, crashed, or no power | Not guaranteed: the WS2812B latches its last frame, so a crash leaves the last colour lit |
+| Halted | Red, solid | No | Battery under the 10% halt threshold, QR onboarding gave up, Wi-Fi activation failed, or the capture loop stopped on an error | New (today these show Critical) |
+| Scanning | Cyan, pulsing | No | Looking for an onboarding QR code (first boot, or re-onboarding triggered by a long-press or `visio-reonboard`) | New (today onboarding shows Recording green) |
+| Starting | White, dim solid | No | Daemon started, preflight and boot steps running, first capture not yet begun | New (today startup shows Recording green before onboarding) |
+| Critical | Red, flashing | Yes | 3+ consecutive upload failures (latched by `UploadHealth`) | Built |
+| Low battery | Yellow, pulsing | Yes | Battery under 20% | Built |
+| Uploading | Blue, pulsing | Yes | A segment upload or retry round is in flight | Built |
+| Recording | Green, solid | Yes | Capturing; offline is normal and footage queues for later | Built |
+| Flag saved (overlay) | White, 2 quick blinks (~0.6 s) | Yes | A flag press was accepted (after the 2 s cooldown) | New |
+
+Priority, highest first: Halted, Scanning, Starting (the non-recording phases, which exclude each other), then Critical, Low battery, Uploading, Recording (the recording states, as `next_led_state` ranks them today).
+Red solid versus red flashing is the only same-colour pair, which is why patterns must actually animate (see below).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Off
+    Off --> Starting: power on / systemd start
+    Starting --> Halted: battery below halt threshold
+    Starting --> Scanning: no session.json
+    Starting --> Recording: session on disk, first capture begins
+    Scanning --> Starting: QR decoded, activating Wi-Fi
+    Scanning --> Halted: 60 attempts, first boot
+    Scanning --> Recording: re-onboard timed out, keep old network
+    Starting --> Halted: Wi-Fi activation failed
+    state RecordingFamily {
+        Recording --> Uploading: upload starts
+        Uploading --> Recording: upload done
+        Recording --> LowBattery: battery under 20%
+        Uploading --> Critical: 3rd consecutive failure
+        Critical --> Recording: any upload success
+    }
+    RecordingFamily --> Scanning: long-press or visio-reonboard
+    RecordingFamily --> Halted: battery halt or capture error
+    RecordingFamily --> Off: SIGTERM stop
+    Halted --> Off: daemon exits (after a 30 s hold)
+    Off --> Starting: systemd restart on failure
+```
+
+Transition rules:
+- Scanning needs the camera, so entering it from the Recording family ends the current segment cleanly first, and recording resumes as soon as scanning ends either way.
+- Re-onboarding never strands the device: if no QR code is read within the attempt limit, the pendant goes back to recording on its existing network rather than halting; only first boot, which has no network to fall back to, halts.
+- Halted holds solid red for 30 s before the daemon exits, so the reason is visible, then the LED goes off.
+- Every exit, clean or not, ends with the LED off: the systemd unit gains an `ExecStopPost=` helper that writes an all-off frame, which also covers crashes and `SIGKILL` (only power loss bypasses it, and that turns the LED off anyway).
+- The flag overlay never changes the underlying state; if the state changes during the blinks, the new state shows when they end.
+
+Animation: pulsing (about 1 s breathe) and flashing (2 Hz on/off) need a small LED renderer thread that owns the driver, takes the resolved state from a queue, and animates it.
+That thread replaces direct `apply_led_state` calls; the resolver stays pure and unit-tested without threads, like `next_worker_step`.
+
+**LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour until the renderer thread above exists.
 `Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).
 Each WS2812B bit becomes one SPI byte at a 6.4 MHz request: `0xC0` (2 high, 6 low) for a 0 and `0xF0` (4 high, 4 low) for a 1, sent green, red, blue, most significant bit first, between two 240-byte all-zero resets (300 us latch).
 The BCM2835 SPI block runs at core clock / an even divider that the kernel rounds up, so both of the Zero 2W's core clocks (400 MHz / 64 and 250 MHz / 40) produce 6.25 MHz: 320 ns / 960 ns for a 0 and 640 ns / 640 ns for a 1 (312/938 ns and 625/625 ns at the requested 6.4 MHz).

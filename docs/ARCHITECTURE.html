@@ -28,10 +28,10 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 16618ecaf15a7a37f0c0cdf99a0a7ce0a5779bdf75199bee174845c0a76d77d0  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: d2c05f871e8c88a3e1c7f48a79a9193b5b207af03f8c8686816b2863856e12e5  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-17 (latched Critical LED + in-process upload retry) -->
+<!-- regenerated-at: 2026-11-18 (LED state machine design) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -51,7 +51,7 @@
     </ul>
   </div>
   <div class="navbar-end">
-    <span class="badge badge-ghost text-xs">regenerated 2026-07-23</span>
+    <span class="badge badge-ghost text-xs">regenerated 2026-11-18</span>
   </div>
 </div>
 
@@ -105,7 +105,7 @@ flowchart TD
     direction TB
     HW1["RPi Zero 2W + Camera Module 3 Wide<br/>PiJuice pHAT + 3000mAh LiPo"]
     HW2["rolling 5-min H.264 segments to SD card"]
-    HW3["WS2812B LED on SPI0 MOSI (GPIO 10):<br/>recording / uploading / low-battery / critical"]
+    HW3["WS2812B LED on SPI0 MOSI (GPIO 10):<br/>status LED state machine:<br/>off / starting / scanning / recording / uploading / low-battery / critical / halted"]
   end
   subgraph CLOUD["Cloud Storage + AI Pipeline"]
     direction TB
@@ -243,6 +243,52 @@ flowchart TD
         </table>
       </div>
       <p class="text-sm text-base-content/80 mt-2"><span class="font-mono text-xs bg-base-200 rounded px-1">Ws2812LedDriver</span> writes one SPI transfer per colour to <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/spidev0.0</span> through py-spidev (<span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>: no root, no <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span>, nothing compiled on the device). Each WS2812B bit is one byte at a 6.4 MHz request - <span class="font-mono text-xs bg-base-200 rounded px-1">0xC0</span> for a 0, <span class="font-mono text-xs bg-base-200 rounded px-1">0xF0</span> for a 1 - sent green, red, blue, MSB first, between two 240-byte zero resets (300 us latch). Both Zero 2W core clocks divide to a real 6.25 MHz, giving 320/960 ns and 640/640 ns pulses, at least 40 ns inside the WS2812B-V5 datasheet windows (legacy pre-V5 parts fall 10-40 ns outside theirs, a bench check). Pulsing and flashing render solid on the single pixel. The device needs <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> (the kernel caches the core clock at probe, so a scaling core clock would skew the SPI rate) and the daemon user in the <span class="font-mono text-xs bg-base-200 rounded px-1">spi</span> group.</p>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">LED state machine <span class="badge badge-warning badge-sm align-middle">designed 2026-11-18, partly built</span></h3>
+      <p class="text-sm text-base-content/80 mb-2">Whenever the pendant has power the LED shows exactly one state, and each state says whether the camera is recording. Off always means not recording. One pure resolver picks the highest-priority state that holds; only the flag acknowledgement overlays it briefly.</p>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>State</th><th>Look</th><th>Recording?</th><th>Condition</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Off</td><td>dark</td><td>no</td><td>daemon not running</td><td>new: <span class="font-mono text-xs bg-base-200 rounded px-1">ExecStopPost=</span> all-off frame, since the WS2812B latches its last colour</td></tr>
+            <tr><td>Halted</td><td>red, solid</td><td>no</td><td>battery halt, onboarding gave up, Wi-Fi activation failed, capture error; held 30 s, then exit</td><td>new (shows Critical today)</td></tr>
+            <tr><td>Scanning</td><td>cyan, pulsing</td><td>no</td><td>looking for an onboarding QR code</td><td>new (shows green today)</td></tr>
+            <tr><td>Starting</td><td>white, dim</td><td>no</td><td>boot steps before the first capture</td><td>new (shows green today)</td></tr>
+            <tr><td>Critical</td><td>red, flashing</td><td>yes</td><td>3+ consecutive upload failures, latched</td><td>built</td></tr>
+            <tr><td>Low battery</td><td>yellow, pulsing</td><td>yes</td><td>battery under 20%</td><td>built</td></tr>
+            <tr><td>Uploading</td><td>blue, pulsing</td><td>yes</td><td>upload or retry round in flight</td><td>built</td></tr>
+            <tr><td>Recording</td><td>green, solid</td><td>yes</td><td>capturing (offline is normal)</td><td>built</td></tr>
+            <tr><td>Flag saved</td><td>2 white blinks</td><td>yes</td><td>overlay after an accepted flag press</td><td>new</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Off
+    Off --> Starting: power on / systemd start
+    Starting --> Halted: battery below halt threshold
+    Starting --> Scanning: no session.json
+    Starting --> Recording: session on disk
+    Scanning --> Starting: QR decoded
+    Scanning --> Halted: 60 attempts, first boot
+    Scanning --> Recording: re-onboard timed out
+    Starting --> Halted: Wi-Fi activation failed
+    state RecordingFamily {
+        Recording --> Uploading: upload starts
+        Uploading --> Recording: upload done
+        Recording --> LowBattery: battery under 20%
+        Uploading --> Critical: 3rd consecutive failure
+        Critical --> Recording: any upload success
+    }
+    RecordingFamily --> Scanning: long-press or visio-reonboard
+    RecordingFamily --> Halted: battery halt or capture error
+    RecordingFamily --> Off: SIGTERM stop
+    Halted --> Off: exit after 30 s hold
+    Off --> Starting: systemd restart on failure
+      </pre>
+      <p class="text-xs text-base-content/70 mt-2">Pulsing and flashing need a new LED renderer thread that owns the driver; today every pattern renders solid, so red flashing and red solid would look the same. Re-onboarding never strands the device: on timeout it returns to recording on the old network.</p>
     </div>
 
     <div class="card bg-base-100 shadow p-4">
