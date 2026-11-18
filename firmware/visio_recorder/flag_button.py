@@ -193,7 +193,7 @@ class FlagUploadWorker:
             self._upload(item)
 
     def _retry_round(self) -> bool:
-        """Upload what is queued, oldest first; True if the queue came empty."""
+        """Upload what is queued, oldest first; True if nothing was left."""
         for marker_path in pending_markers(self._queue_dir):
             if self._stopping.is_set():
                 return False
