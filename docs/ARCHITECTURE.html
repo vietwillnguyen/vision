@@ -103,14 +103,14 @@
 flowchart TD
   subgraph HW["Pendant Hardware"]
     direction TB
-    HW1["RPi Zero 2W + Camera Module 3 Wide<br/>PiJuice pHAT + 3000mAh LiPo"]
+    HW1["RPi Zero 2W + Camera Module 3 Wide\nPiJuice pHAT + 3000mAh LiPo"]
     HW2["rolling 5-min H.264 segments to SD card"]
-    HW3["WS2812B LED on SPI0 MOSI (GPIO 10):<br/>recording / uploading / low-battery / critical"]
+    HW3["WS2812B LED on SPI0 MOSI (GPIO 10):\nrecording / uploading / low-battery / critical"]
   end
   subgraph CLOUD["Cloud Storage + AI Pipeline"]
     direction TB
     C1["Supabase Storage (S3-compatible)"]
-    C2["nightly scoring: Whisper speech,<br/>FFmpeg motion, Claude Haiku scene"]
+    C2["nightly scoring: Whisper speech,\nFFmpeg motion, Claude Haiku scene"]
     C3["highlight selection + FFmpeg assembly"]
   end
   subgraph APP["Mobile Companion App"]
@@ -188,24 +188,24 @@ flowchart TD
         <h3 class="font-semibold mb-2">Startup composition</h3>
         <pre class="mermaid">
 flowchart TD
-  A["systemd starts visio-recorder<br/>EnvironmentFile=/etc/visio-recorder.env"] --> B{"battery below 10%?"}
+  A["systemd starts visio-recorder\nEnvironmentFile=/etc/visio-recorder.env"] --> B{"battery below 10%?"}
   B -- yes --> B1["CRITICAL LED, exit 0"]
   B -- no --> C{"session.json exists?"}
-  C -- "no (first boot)" --> D["QR onboarding: WiFi NM keyfile<br/>+ Supabase auth, up to 60 attempts"]
+  C -- "no (first boot)" --> D["QR onboarding: WiFi NM keyfile\n+ Supabase auth, up to 60 attempts"]
   D -- "never succeeds" --> D1["exit 1"]
-  D -- "succeeds" --> D2["nmcli connection reload<br/>+ up visio"]
-  D2 -- "activation fails" --> D3["CRITICAL LED, exit 1<br/>(systemd retries)"]
+  D -- "succeeds" --> D2["nmcli connection reload\n+ up visio"]
+  D2 -- "activation fails" --> D3["CRITICAL LED, exit 1\n(systemd retries)"]
   D2 -- ok --> E
-  C -- yes --> C1["best-effort nmcli reload + up<br/>(if keyfile exists; never fatal)"]
+  C -- yes --> C1["best-effort nmcli reload + up\n(if keyfile exists; never fatal)"]
   C1 --> E["load_or_create_device_id"]
   E --> F{"device_registered marker exists?"}
   F -- no --> G["register_device, then touch marker"]
   F -- yes --> H
   G --> H["flush_pending queue"]
-  H --> R["recover_orphaned_segments<br/>(mux + queue leftover .h264/.mp4;<br/>keep non-empty captures on mux failure)"]
+  H --> R["recover_orphaned_segments\n(mux + queue leftover .h264/.mp4;\nkeep non-empty captures on mux failure)"]
   R -- "recovered any" --> H2["flush_pending again"]
   R -- none --> I0
-  H2 --> I0["start flag-upload worker,<br/>register GPIO 17 flag-button listener"]
+  H2 --> I0["start flag-upload worker,\nregister GPIO 17 flag-button listener"]
   I0 --> I["run_recording_loop"]
         </pre>
       </div>
@@ -214,15 +214,15 @@ flowchart TD
         <pre class="mermaid">
 flowchart TD
   M["main thread"] -- "rpicam-vid per 1-min segment" --> Q["queue.Queue"]
-  Q -- "get(timeout=until deadline)" --> W["worker thread<br/>(sole owner of upload state + LED)"]
+  Q -- "get(timeout=until deadline)" --> W["worker thread\n(sole owner of upload state + LED)"]
   W -- "mux + upload" --> S["Supabase Storage"]
-  W -- "retry deadline passed,<br/>new segments or not;<br/>never while stopping" --> R["retry everything still queued<br/>(30 s doubling to 480 s)"]
+  W -- "retry deadline passed,\nnew segments or not;\nnever while stopping" --> R["retry everything still queued\n(30 s doubling to 480 s)"]
   R --> S
-  W --> H["UploadHealth<br/>(consecutive-failure counter)"]
-  H -- "3 in a row: latched" --> CRIT["CRITICAL LED held through<br/>every following segment's upload"]
+  W --> H["UploadHealth\n(consecutive-failure counter)"]
+  H -- "3 in a row: latched" --> CRIT["CRITICAL LED held through\nevery following segment's upload"]
   H -- "any success" --> RESET["reset counter, LED back to green/yellow"]
   M -- "battery halt or stop signal" --> DRAIN["drain queue, join() worker"]
-  DRAIN --> OFF["upsert recording_active=false<br/>(any exit path; never raises)"]
+  DRAIN --> OFF["upsert recording_active=false\n(any exit path; never raises)"]
   OFF --> HALT["apply CRITICAL after worker fully joins (halt only)"]
         </pre>
       </div>
