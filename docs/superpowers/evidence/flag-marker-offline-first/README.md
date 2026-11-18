@@ -18,7 +18,7 @@ Nothing else is scaled.
 2. **The startup flush sent segments before their flags.** A boot with four segments and two markers queued, whose battery gave out three uploads in, put three segments in storage and neither flag. `list_pending` sorts by name and digits sort before `FLAG_`, so the footage always overtook the flags.
 3. **A press had no local feedback at all.** `make_flag_press_handler` took no acknowledgement hook, and `write_flag_marker` was `touch()` and return - the marker was only as durable as the page cache.
 
-[`unit-before.txt`](unit-before.txt): this branch's tests against that same firmware. Five modules fail to import (`FLAG_ACK_BLINK_SEC`, `LedState.FLAG_ACK`, `is_flag_marker`, `FLAG_UPLOAD_THREAD_NAME`), and `test_recording_loop.py`, the one module that still collects, fails 19.
+[`unit-before.txt`](unit-before.txt): this branch's tests against that same firmware. Six modules fail to collect, each on a symbol the base commit does not have (`FLAG_UPLOAD_THREAD_NAME`, `pending_markers`, `FLAG_ACK_BLINK_SEC`, `wait_out_restart_gap`, `is_flag_marker`, `LedState.FLAG_ACK`), so not one of their tests runs.
 
 ## After ([`after-scenarios.log`](after-scenarios.log), [`e2e_flag_offline.py`](e2e_flag_offline.py))
 
@@ -87,3 +87,14 @@ VISIO_FIRMWARE=/tmp/before python3 \
 ```
 
 It imports only `flag_button`, `recording_loop`, `upload_limit` and `upload_queue`, none of which pull in a third-party package, so a bare interpreter is enough.
+
+For [`unit-before.txt`](unit-before.txt), run this branch's tests against that same base package:
+
+```sh
+git archive 5073cce firmware/visio_recorder | tar -x -C /tmp/before-pkg --strip-components=1
+cp firmware/pyproject.toml firmware/uv.lock /tmp/before-pkg/ && cp -r firmware/tests /tmp/before-pkg/
+(cd /tmp/before-pkg && uv run --extra dev pytest -q)
+(cd /tmp/before-pkg && uv run --extra dev pytest -q tests/test_recording_loop.py)
+```
+
+[`unit-after.txt`](unit-after.txt) is `uv run --locked --extra dev pytest -q`, `ruff check .`, `ruff format --check .` and `mypy` from `firmware/`.
