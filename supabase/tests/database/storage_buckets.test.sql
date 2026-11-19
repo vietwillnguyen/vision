@@ -14,7 +14,7 @@ insert into storage.objects (bucket_id, name, owner_id) values
   ('segments', '00000000-0000-0000-0000-0000000000b1/earlier.mp4', '00000000-0000-0000-0000-0000000000e8'),
   ('reels', '00000000-0000-0000-0000-0000000000b1/reel1.mp4', null);
 
-select plan(23);
+select plan(28);
 
 select is(
   (select public from storage.buckets where id = 'segments'),
@@ -77,11 +77,60 @@ select throws_ok(
   'the device user should not be able to upload as somebody else'
 );
 
+-- Crafted keys: the folder check is an exact text match on the first folder.
+select throws_ok(
+  $$insert into storage.objects (bucket_id, name, owner_id) values
+    ('segments', 'no-folder.mp4', '00000000-0000-0000-0000-0000000000e1')$$,
+  '42501',
+  null,
+  'the device user should not be able to upload outside any folder'
+);
+
+select throws_ok(
+  $$insert into storage.objects (bucket_id, name, owner_id) values
+    ('segments', '00000000-0000-0000-0000-0000000000b1x/seg.mp4', '00000000-0000-0000-0000-0000000000e1')$$,
+  '42501',
+  null,
+  'the device user should not be able to upload under a folder that extends its device id'
+);
+
+select throws_ok(
+  $$insert into storage.objects (bucket_id, name, owner_id) values
+    ('segments', '00000000-0000-0000-0000-0000000000B1/seg.mp4', '00000000-0000-0000-0000-0000000000e1')$$,
+  '42501',
+  null,
+  'the device user should not be able to upload under an uppercased device id'
+);
+
 select isnt_empty(
   $$select 1 from storage.objects where bucket_id = 'segments'
     and name = '00000000-0000-0000-0000-0000000000b1/seg1.mp4'$$,
   'the device user should see the objects it uploaded'
 );
+
+-- Uploads are write-once for the pendant: no update or delete policy.
+select is_empty(
+  $$with u as (
+      update storage.objects set name = '00000000-0000-0000-0000-0000000000b1/renamed.mp4'
+      where bucket_id = 'segments' and name = '00000000-0000-0000-0000-0000000000b1/seg1.mp4'
+      returning 1
+    ) select * from u$$,
+  'the device user should not be able to update its own uploads'
+);
+
+-- storage-api sets this for its own deletes; without it the protect_delete
+-- trigger refuses every SQL delete, so RLS alone decides here, as it does for
+-- a delete through the API.
+set local storage.allow_delete_query = 'true';
+select is_empty(
+  $$with d as (
+      delete from storage.objects
+      where bucket_id = 'segments' and name = '00000000-0000-0000-0000-0000000000b1/seg1.mp4'
+      returning 1
+    ) select * from d$$,
+  'the device user should not be able to delete its own uploads'
+);
+set local storage.allow_delete_query = 'false';
 
 select is_empty(
   $$select 1 from storage.objects where bucket_id = 'segments'

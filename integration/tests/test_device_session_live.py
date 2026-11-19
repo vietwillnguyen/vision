@@ -17,6 +17,7 @@ import base64
 import hashlib
 import hmac
 import json
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -312,6 +313,48 @@ def test_a_used_pairing_code_is_refused_for_anyone_else(
 
     assert exc_info.value.code == "P0001"
     assert exc_info.value.message == "invalid pairing code"
+
+
+@pytest.mark.parametrize("attempt", range(3))
+def test_two_pendants_claiming_one_code_at_once_pair_exactly_one(
+    paired_device: PairedDevice, anonymous_user, attempt
+):
+    # claim_pairing locks the code row, so the second claim sees it claimed.
+    code = parse_onboarding_qr_payload(
+        make_pairing_qr(paired_device.owner, paired_device.device_id)
+    ).pairing_code
+    claimants = [anonymous_user(), anonymous_user()]
+    start = threading.Barrier(len(claimants))
+    results: list[object] = [None] * len(claimants)
+
+    def claim(i: int) -> None:
+        start.wait()
+        try:
+            results[i] = claimants[i].rpc(CLAIM_RPC, {CLAIM_ARG: code}).execute().data
+        except APIError as err:
+            results[i] = err
+
+    threads = [threading.Thread(target=claim, args=(i,)) for i in range(len(claimants))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    winners = [i for i, r in enumerate(results) if r == paired_device.device_id]
+    losers = [r for r in results if isinstance(r, APIError)]
+    assert len(winners) == 1, results
+    assert len(losers) == 1, results
+    assert losers[0].code == "P0001"
+    assert losers[0].message == "invalid pairing code"
+    winner_id = claimants[winners[0]].auth.get_user().user.id
+    rows = (
+        paired_device.admin.table("devices")
+        .select("device_user_id")
+        .eq("device_id", paired_device.device_id)
+        .execute()
+        .data
+    )
+    assert rows == [{"device_user_id": winner_id}]
 
 
 def test_an_anonymous_user_that_never_paired_can_do_nothing(

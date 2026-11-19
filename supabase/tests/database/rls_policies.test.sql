@@ -18,7 +18,7 @@ insert into public.reels (id, device_id, date, s3_key, duration_sec) values
 insert into public.score_weights (user_id) values
   ('00000000-0000-0000-0000-0000000000a1');
 
-select plan(40);
+select plan(43);
 
 -- The pendant's device user is in the authenticated role, so the grants stay;
 -- the policies decide which authenticated user they apply to.
@@ -237,6 +237,14 @@ select throws_ok(
   'the device user should not be able to insert status for another device'
 );
 
+select throws_ok(
+  $$update public.device_status set device_id = '00000000-0000-0000-0000-0000000000b2'
+    where device_id = '00000000-0000-0000-0000-0000000000b1'$$,
+  '42501',
+  null,
+  'the device user should not be able to move its status row to another device'
+);
+
 select is_empty(
   $$select 1 from public.devices$$,
   'the device user should see no devices'
@@ -306,6 +314,20 @@ select throws_ok(
   '42501',
   null,
   'an unpaired device user should not be able to upsert status any more'
+);
+
+select is_empty(
+  $$with u as (
+      update public.device_status set battery_pct = 11
+      where device_id = '00000000-0000-0000-0000-0000000000b1'
+      returning 1
+    ) select * from u$$,
+  'an unpaired device user should not be able to update status any more'
+);
+
+select is_empty(
+  $$select 1 from public.device_status$$,
+  'an unpaired device user should not see its device''s status any more'
 );
 
 select * from finish();
