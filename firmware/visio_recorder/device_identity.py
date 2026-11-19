@@ -9,7 +9,7 @@ session, so a pendant onboarded the old way is treated as unpaired.
 import json
 from pathlib import Path
 
-from visio_recorder.wifi_onboard import _write_private_text_atomic
+from visio_recorder.private_files import write_private_text_atomic
 
 PAIRING_MARKER = 2
 
@@ -38,7 +38,7 @@ def load_paired_device_id(state_path: Path) -> str | None:
 
 def store_paired_device_id(state_path: Path, device_id: str) -> None:
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_private_text_atomic(
+    write_private_text_atomic(
         state_path, json.dumps({"device_id": device_id, "pairing": PAIRING_MARKER})
     )
 
@@ -47,4 +47,4 @@ def drop_pairing_marker(state_path: Path) -> None:
     """Keep the device id for diagnosis but stop treating it as paired."""
     device_id = load_paired_device_id(state_path)
     if device_id is not None:
-        _write_private_text_atomic(state_path, json.dumps({"device_id": device_id}))
+        write_private_text_atomic(state_path, json.dumps({"device_id": device_id}))

@@ -23,8 +23,8 @@ from visio_recorder.device_identity import (
     load_paired_device_id,
     store_paired_device_id,
 )
-from visio_recorder.supabase_clients import _session_persister
-from visio_recorder.wifi_onboard import _write_private_text_atomic
+from visio_recorder.private_files import write_private_text_atomic
+from visio_recorder.session_store import read_saved_session, session_persister
 
 _logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class PairingState(Enum):
 
 
 def write_pending_pairing(path: Path, pairing_code: str) -> None:
-    _write_private_text_atomic(path, json.dumps({"pairing_code": pairing_code}))
+    write_private_text_atomic(path, json.dumps({"pairing_code": pairing_code}))
 
 
 def read_pending_pairing(path: Path) -> str | None:
@@ -112,7 +112,7 @@ def _is_definite_auth_rejection(err: AuthApiError) -> bool:
 
 
 def _sign_in(client: Any, session_path: Path) -> None:
-    saved = _read_saved_session(session_path)
+    saved = read_saved_session(session_path)
     if saved is not None:
         try:
             client.auth.set_session(saved["access_token"], saved["refresh_token"])
@@ -146,19 +146,6 @@ def _sign_in(client: Any, session_path: Path) -> None:
         ) from err
     except (AuthError, httpx.HTTPError) as err:
         raise PairingUnavailableError(f"anonymous sign-in failed: {err}") from err
-
-
-def _read_saved_session(session_path: Path) -> dict[str, str] | None:
-    try:
-        data = json.loads(session_path.read_text())
-        access_token, refresh_token = data["access_token"], data["refresh_token"]
-    except (OSError, ValueError, KeyError, TypeError):
-        session_path.unlink(missing_ok=True)
-        return None
-    if not isinstance(access_token, str) or not isinstance(refresh_token, str):
-        session_path.unlink(missing_ok=True)
-        return None
-    return {"access_token": access_token, "refresh_token": refresh_token}
 
 
 def _claim(client: Any, code: str, data_dir: Path) -> str:
@@ -209,7 +196,7 @@ def complete_pairing(
         clear_local_pairing(data_dir)
         raise PairingRejectedError("no pending pairing code to claim")
     client = client_factory(url, key)
-    client.auth.on_auth_state_change(_session_persister(session_path))
+    client.auth.on_auth_state_change(session_persister(session_path))
     _sign_in(client, session_path)
     device_id = _claim(client, code, data_dir)
     store_paired_device_id(data_dir / DEVICE_FILE, device_id)

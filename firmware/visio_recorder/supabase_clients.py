@@ -1,6 +1,5 @@
 import json
 import logging
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,8 +9,8 @@ from storage3.exceptions import StorageApiError
 from supabase import create_client
 from supabase_auth.errors import AuthApiError
 
+from visio_recorder.session_store import session_persister
 from visio_recorder.uploader import ObjectAlreadyStoredError, ObjectTooLargeError
-from visio_recorder.wifi_onboard import write_session_credentials
 
 _logger = logging.getLogger(__name__)
 
@@ -128,31 +127,6 @@ class SessionRevokedError(Exception):
     """The pendant's login no longer exists: removed in the app, or re-paired."""
 
 
-def _session_persister(session_path: Path) -> Callable[[str, Any], None]:
-    """An auth listener that keeps ``session.json`` on the newest tokens.
-
-    Supabase rotates the refresh token on every refresh and accepts only the
-    newest one (plus its immediate predecessor), so a pendant that kept only
-    the token it was onboarded with lost its login on the first reboot after
-    two refreshes - about two hours of running. Events without a session (a
-    sign-out) leave the file alone, so a transient revoke is not turned into
-    a deleted login. The lock serialises supabase-py's auto-refresh timer
-    thread with any other refresh.
-    """
-    lock = threading.Lock()
-
-    def persist(event: str, session: Any) -> None:
-        if session is None:
-            return
-        with lock:
-            write_session_credentials(
-                session_path, session.access_token, session.refresh_token
-            )
-        _logger.info("session %s; saved the rotated tokens", event.lower())
-
-    return persist
-
-
 def build_supabase_clients(
     url: str,
     key: str,
@@ -163,7 +137,7 @@ def build_supabase_clients(
     session = json.loads(session_path.read_text())
     # Registered before set_session, which refreshes an expired access token
     # before it returns: that first rotation has to be saved too.
-    client.auth.on_auth_state_change(_session_persister(session_path))
+    client.auth.on_auth_state_change(session_persister(session_path))
     try:
         client.auth.set_session(session["access_token"], session["refresh_token"])
     except AuthApiError as err:
