@@ -637,6 +637,45 @@ Vintage filter (user opt-in):
 Final reel uploaded to Supabase Storage.
 Push notification sent to mobile app via Expo Push Notifications: "Your [Date] highlight reel is ready."
 
+### Retention and Cleanup
+
+**Decision (2026-11-19, revises D6):** raw footage is kept 7 days by default, configurable by the user from 7 to 30; everything the wearer chose to keep is kept forever.
+Status: designed, not built. Today nothing in the cloud is ever deleted.
+
+This follows how cloud cameras handle continuous footage: retention follows how much the wearer cared, not when it was recorded.
+Continuous recording gets the shortest window (Nest Aware keeps 24/7 footage about 10 days, against 30-60 days for event clips), clips the user marked are exempt (a dashcam's locked event files, Nest's saved clips), deletion is soft with a recovery window (Axon evidence, Google Photos' trash), and the window is a setting (Ring).
+Seven days also cuts storage at rest from about 430 GB to about 100 GB per wearer (see `docs/research/2026-11-19-visio-market-research.md`, PR #104).
+
+| Category | Where | Kept | Removed by |
+|---|---|---|---|
+| Raw segments | `segments` bucket | The raw window: 7 days by default, 7-30 by user setting | The nightly cleanup step, in two phases (below) |
+| Flagged segments (`manually_flagged`) | `segments` bucket | Forever | Only an explicit delete in the app |
+| "Always include" segments (`user_feedback = include`) | `segments` bucket | Forever | Only an explicit delete in the app |
+| Reels | `reels` bucket | Forever | Only an explicit delete in the app |
+| `segments` and `reels` rows | Postgres | Forever, as metadata | Account or device deletion |
+| A deleted account's or device's footage | Both buckets | Deleted with the account | The deletion path (below) |
+| Uploaded segments and flag markers | SD card `queue/` | Until the upload succeeds | The upload worker (as built) |
+| Rejected segments | SD card `rejected/` | 30 days | The daemon at boot (planned) |
+| Footage not yet backed up | SD card `queue/` | Until it uploads | Never deleted automatically: a full card stops recording instead |
+
+**Nightly cleanup step.** It runs as a step of the existing nightly GitHub Actions workflow, which already holds the service-role key, after the reel step.
+Supabase Storage has no S3-style lifecycle rules, and deleting rows from `storage.objects` in SQL leaves the stored files behind, so every deletion goes through the Storage API.
+
+1. **Mark.** A raw segment becomes expired when it is older than the wearer's raw window, is not flagged or "always include", and its day either has a reel or has sat in `pipeline_dlq` for 30 days, so footage whose reel failed is never deleted before it can be re-run.
+   The step sets a planned `segments.raw_expires_at` (the deletion date, 7 days later) instead of deleting.
+2. **Warn.** The app shows "expires in N days" on a clip within 3 days of `raw_expires_at`, and one tap on Keep flags it, which takes it out of the expiry set.
+   The Device tab or Archive shows how many clips expire this week.
+3. **Delete.** A segment whose `raw_expires_at` has passed and is still not flagged or kept is removed from storage through the Storage API in batches of up to 1,000 keys, and its row gains a planned `raw_deleted_at` instead of being dropped, so the archive heat-map and history keep working and the app can say "raw footage expired".
+   A key that is already gone counts as deleted, so a re-run is safe.
+
+Safety: one run deletes at most a configurable cap (default one week of footage per device), `--dry-run` reports what it would mark and delete without changing anything, and the run summary records counts per device.
+Changing the raw window applies only to segments not yet marked, so shortening it never deletes something already promised more time.
+
+**Account and device deletion.** Deleting a device or account cascades its Postgres rows, but storage objects are not covered by that cascade, so the deletion path also removes every object under that device's keys in both buckets through the Storage API before the rows go.
+
+**On the device.** The pendant never deletes footage that has not reached the cloud: an uploaded file is deleted the moment its upload succeeds, and a full card stops recording (see the LED state machine) rather than evicting anything.
+The one exception is `rejected/`, which today grows forever: at boot the daemon deletes rejected segments older than 30 days, and `device_status.segments_rejected` lets the app show them before they go.
+
 ### Cost Estimate
 
 Per day of full 8-hour recording (~14.4GB raw footage at 4 Mbps, ~480 one-minute segments):
@@ -646,6 +685,7 @@ Per day of full 8-hour recording (~14.4GB raw footage at 4 Mbps, ~480 one-minute
 | Whisper transcription (~8 hrs audio) | ~$0.20 |
 | Claude Haiku vision (motion-gated, ~30% of segments) | ~$0.25-0.50 (five times the calls of 5-minute segments) |
 | Supabase Storage egress | ~$0.01 |
+| Storage at rest (7-day raw window, about 100 GB per wearer) | not yet priced against the current plan |
 | **Total** | **<$0.75/day** |
 
 ---
@@ -711,9 +751,11 @@ device_status    -- device_id, battery_pct, storage_used_gb, storage_free_gb,
 segments         -- id, device_id, recorded_at, duration_sec, s3_key,
                  --   motion_score, audio_score, scene_score, composite_score,
                  --   manually_flagged, user_feedback (include|exclude|null)
+                 --   planned: raw_expires_at, raw_deleted_at (see Retention and Cleanup)
 reels            -- id, device_id, date, s3_key, duration_sec, style, created_at
                  --   unique (device_id, date) so same-day pipeline re-runs upsert
 score_weights    -- user_id, scene_weight, audio_weight, motion_weight (defaults 0.4/0.3/0.2)
+                 --   planned: raw_retention_days (default 7, 7-30), or a user_settings table
 pipeline_dlq     -- device_id, key, kind (rejected|unmatched), attempts, escalated, updated_at
                  --   service_role-only (RLS enabled, no policies) nightly-pipeline DLQ
 ```

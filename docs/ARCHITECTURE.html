@@ -29,7 +29,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 8526819702db5476344ae5ffc36f7898d3a3329761bee1c0534077b40ab53099  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: b58d24b26ffde47b9bcabe0182a58327d011a7d4f1ce858f5b2fe8c82e405783  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-19 (LED state machine: two regions, recording control from PR #103, review fixes) -->
@@ -476,6 +476,27 @@ score = base_score * 1.5  (if manually flagged)
     </div>
     <div class="alert alert-success alert-soft text-sm" role="alert">
       <span><strong>Silent segments scored, not failed.</strong> A pendant without a working microphone records video only and <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg</span> refuses to extract audio from a file with no audio stream, which failed every real device day in Stage 1. A segment with no audio stream now scores as silence without a Whisper call.</span>
+    </div>
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">Retention and cleanup <span class="badge badge-warning badge-sm align-middle">designed 2026-11-19, not built</span></h3>
+      <p class="text-sm text-base-content/80 mb-2">Raw footage is kept 7 days by default (user-configurable 7-30; D6 revised from 30); everything the wearer chose to keep is kept forever. Today nothing in the cloud is deleted. Modelled on cloud cameras: continuous footage gets the shortest window (Nest keeps 24/7 footage about 10 days), marked clips are exempt (dashcam locked files), deletion is soft (Axon, Google Photos trash), and the window is a setting (Ring).</p>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>Category</th><th>Where</th><th>Kept</th><th>Removed by</th></tr></thead>
+          <tbody>
+            <tr><td>Raw segments</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> bucket</td><td>The raw window: 7 days by default, 7-30 by user setting</td><td>The nightly cleanup step, in two phases (below)</td></tr>
+            <tr><td>Flagged segments (<span class="font-mono text-xs bg-base-200 rounded px-1">manually_flagged</span>)</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> bucket</td><td>Forever</td><td>Only an explicit delete in the app</td></tr>
+            <tr><td>"Always include" segments (<span class="font-mono text-xs bg-base-200 rounded px-1">user_feedback = include</span>)</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> bucket</td><td>Forever</td><td>Only an explicit delete in the app</td></tr>
+            <tr><td>Reels</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">reels</span> bucket</td><td>Forever</td><td>Only an explicit delete in the app</td></tr>
+            <tr><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">reels</span> rows</td><td>Postgres</td><td>Forever, as metadata</td><td>Account or device deletion</td></tr>
+            <tr><td>A deleted account's or device's footage</td><td>Both buckets</td><td>Deleted with the account</td><td>The deletion path (below)</td></tr>
+            <tr><td>Uploaded segments and flag markers</td><td>SD card <span class="font-mono text-xs bg-base-200 rounded px-1">queue/</span></td><td>Until the upload succeeds</td><td>The upload worker (as built)</td></tr>
+            <tr><td>Rejected segments</td><td>SD card <span class="font-mono text-xs bg-base-200 rounded px-1">rejected/</span></td><td>30 days</td><td>The daemon at boot (planned)</td></tr>
+            <tr><td>Footage not yet backed up</td><td>SD card <span class="font-mono text-xs bg-base-200 rounded px-1">queue/</span></td><td>Until it uploads</td><td>Never deleted automatically: a full card stops recording instead</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-base-content/70 mt-2">A nightly-workflow step after the reel: <strong>mark</strong> raw segments past the window (not flagged or kept, and only once the day has a reel or has sat in <span class="font-mono text-xs bg-base-200 rounded px-1">pipeline_dlq</span> 30 days) with <span class="font-mono text-xs bg-base-200 rounded px-1">raw_expires_at</span> 7 days out; the app <strong>warns</strong> 3 days before and one tap keeps a clip; then <strong>delete</strong> through the Storage API in batches of up to 1,000 (SQL on <span class="font-mono text-xs bg-base-200 rounded px-1">storage.objects</span> leaves files behind), keeping the row with <span class="font-mono text-xs bg-base-200 rounded px-1">raw_deleted_at</span>. Re-runs are safe, a per-run cap and <span class="font-mono text-xs bg-base-200 rounded px-1">--dry-run</span> guard it, and shortening the window never touches already-marked clips. Account and device deletion also remove storage objects, which the Postgres cascade does not. The pendant never deletes footage that has not been backed up; only <span class="font-mono text-xs bg-base-200 rounded px-1">rejected/</span> is pruned after 30 days.</p>
     </div>
   </section>
 
