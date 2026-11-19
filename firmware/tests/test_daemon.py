@@ -28,6 +28,7 @@ from visio_recorder.daemon import (
     ensure_paired,
     handle_revoked_login,
     load_config,
+    pair_and_connect,
     resolve_audio,
     run_recording_loop,
     run_startup_sequence,
@@ -36,6 +37,7 @@ from visio_recorder.device_identity import store_paired_device_id
 from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.led import LedPattern
 from visio_recorder.pairing import (
+    Pairing,
     PairingRejectedError,
     PairingState,
     PairingUnavailableError,
@@ -43,6 +45,7 @@ from visio_recorder.pairing import (
     write_pending_pairing,
 )
 from visio_recorder.recording_loop import DiskStats, RetryBackoff
+from visio_recorder.supabase_clients import SupabaseStorage
 from visio_recorder.upload_queue import list_pending
 from visio_recorder.wifi_onboard import write_session_credentials
 
@@ -1269,7 +1272,7 @@ class PairingRig:
     led: FakeLedDriver = field(default_factory=FakeLedDriver)
     pair_error: Exception | None = None
 
-    def pair(self) -> str:
+    def pair(self) -> Pairing:
         self.events.append("pair")
         if self.pair_error is not None:
             if isinstance(self.pair_error, PairingRejectedError):
@@ -1279,10 +1282,12 @@ class PairingRig:
             raise self.pair_error
         store_paired_device_id(self.data_dir / "device.json", PAIRED_DEVICE_ID)
         (self.data_dir / "pairing.json").unlink(missing_ok=True)
-        return PAIRED_DEVICE_ID
+        return Pairing(device_id=PAIRED_DEVICE_ID)
 
-    def run(self, scanner: ScriptedScanner, *, activation_fails: bool = False):
-        return ensure_paired(
+    def run(
+        self, scanner: ScriptedScanner, *, activation_fails: bool = False
+    ) -> str | None:
+        paired = ensure_paired(
             self.data_dir,
             scanner,
             RecordingActivator(self.events, fail=activation_fails),
@@ -1291,6 +1296,7 @@ class PairingRig:
             nm_keyfile_path=self.data_dir / "visio.nmconnection",
             max_attempts=3,
         )
+        return None if paired is None else paired.device_id
 
 
 def _session(data_dir: Path) -> None:
@@ -1397,3 +1403,88 @@ def test_a_revoked_login_returns_the_pendant_to_scanning(tmp_path):
     assert pairing_state(tmp_path) is PairingState.UNPAIRED
     assert not (tmp_path / "session.json").exists()
     assert led.calls[-1] == CRITICAL_LED
+
+
+# pair_and_connect, against a fake supabase-py client.
+
+
+class _FakeAuthSession:
+    def __init__(self, access_token: str, refresh_token: str) -> None:
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+
+
+class _FakeAuth:
+    def __init__(self) -> None:
+        self._subscribers: list = []
+
+    def on_auth_state_change(self, callback) -> None:
+        self._subscribers.append(callback)
+
+    def _emit(self, event: str) -> None:
+        for callback in self._subscribers:
+            callback(event, _FakeAuthSession(f"{event}-at", f"{event}-rt"))
+
+    def sign_in_anonymously(self) -> None:
+        self._emit("SIGNED_IN")
+
+    def refresh_session(self, refresh_token: str | None = None) -> None:
+        self._emit("TOKEN_REFRESHED")
+
+
+class _FakeClaim:
+    def execute(self):
+        return type("Response", (), {"data": PAIRED_DEVICE_ID})()
+
+
+class _FakeSupabaseClient:
+    def __init__(self) -> None:
+        self.auth = _FakeAuth()
+
+    def rpc(self, name: str, params: dict) -> _FakeClaim:
+        return _FakeClaim()
+
+
+def _pair_and_connect(data_dir: Path, scanner: ScriptedScanner, made: list):
+    def factory(url: str, key: str) -> _FakeSupabaseClient:
+        made.append(_FakeSupabaseClient())
+        return made[-1]
+
+    return pair_and_connect(
+        data_dir,
+        scanner,
+        RecordingActivator([]),
+        FakeLedDriver(),
+        "http://x",
+        "anon",
+        client_factory=factory,
+        nm_keyfile_path=data_dir / "visio.nmconnection",
+        max_attempts=3,
+    )
+
+
+def test_a_pairing_boot_keeps_using_the_client_that_paired(tmp_path):
+    # Two live clients meant two auto-refresh timers rotating one refresh
+    # token and two writers racing on one session.json.
+    made: list = []
+
+    connected = _pair_and_connect(tmp_path, ScriptedScanner([QR_V2]), made)
+
+    assert connected is not None
+    device_id, clients = connected
+    assert device_id == PAIRED_DEVICE_ID
+    assert len(made) == 1
+    assert isinstance(clients.storage, SupabaseStorage)
+    assert clients.storage._client is made[0]
+
+
+def test_a_paired_boot_restores_the_login_with_one_client(tmp_path):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    made: list = []
+
+    connected = _pair_and_connect(tmp_path, ScriptedScanner([]), made)
+
+    assert connected is not None
+    assert connected[0] == PAIRED_DEVICE_ID
+    assert len(made) == 1

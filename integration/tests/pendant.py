@@ -88,7 +88,7 @@ def pair_pendant(
     """The whole pairing as the app and the pendant do it; returns the device id."""
     payload = parse_onboarding_qr_payload(make_pairing_qr(owner_client, device_id))
     write_pending_pairing(data_dir / PAIRING_FILE, payload.pairing_code)
-    return complete_pairing(env["url"], env["anon_key"], data_dir)
+    return complete_pairing(env["url"], env["anon_key"], data_dir).device_id
 
 
 @dataclass

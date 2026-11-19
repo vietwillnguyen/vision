@@ -130,12 +130,13 @@ class SessionRevokedError(Exception):
     """The pendant's login no longer exists: removed in the app, or re-paired."""
 
 
-def build_supabase_clients(
+def restore_supabase_client(
     url: str,
     key: str,
     session_path: Path,
     client_factory: Callable[[str, str], Any] = create_client,
-) -> SupabaseClients:
+) -> Any:
+    """A client signed back in as the pendant from ``session.json``."""
     session = read_saved_session(session_path)
     if session is None:
         raise SessionRevokedError("the pendant's session.json is missing or unreadable")
@@ -147,7 +148,22 @@ def build_supabase_clients(
         restore_session(client, session["refresh_token"])
     except LoginRefusedError as err:
         raise SessionRevokedError(f"the pendant's {err}") from err
+    return client
+
+
+def supabase_clients_for(client: Any) -> SupabaseClients:
     return SupabaseClients(
         storage=SupabaseStorage(client),
         status=SupabaseStatus(client),
+    )
+
+
+def build_supabase_clients(
+    url: str,
+    key: str,
+    session_path: Path,
+    client_factory: Callable[[str, str], Any] = create_client,
+) -> SupabaseClients:
+    return supabase_clients_for(
+        restore_supabase_client(url, key, session_path, client_factory)
     )

@@ -9,6 +9,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
+
+from supabase import create_client
 
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import (
@@ -40,6 +43,7 @@ from visio_recorder.pairing import (
     DEVICE_FILE,
     PAIRING_FILE,
     SESSION_FILE,
+    Pairing,
     PairingRejectedError,
     PairingState,
     PairingUnavailableError,
@@ -69,7 +73,12 @@ from visio_recorder.segment_size import (
     default_segment_duration_ms,
     predicted_segment_bytes,
 )
-from visio_recorder.supabase_clients import SessionRevokedError, build_supabase_clients
+from visio_recorder.supabase_clients import (
+    SessionRevokedError,
+    SupabaseClients,
+    restore_supabase_client,
+    supabase_clients_for,
+)
 from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
 from visio_recorder.uploader import StorageClient
 
@@ -466,12 +475,12 @@ def ensure_paired(
     scanner: QrScanner,
     activator: ConnectionActivator,
     led_driver: LedDriver,
-    pair: Callable[[], str],
+    pair: Callable[[], Pairing],
     *,
     nm_keyfile_path: Path = _NM_KEYFILE_PATH,
     max_attempts: int = _ONBOARDING_MAX_ATTEMPTS,
-) -> str | None:
-    """The boot gate: the paired device id, or None when the daemon must exit 1.
+) -> Pairing | None:
+    """The boot gate: the paired device, or None when the daemon must exit 1.
 
     ``UNPAIRED`` deletes any session first (a pendant onboarded the old way
     still holds its owner's) and scans for a QR. ``PENDING`` (a scanned code
@@ -484,7 +493,8 @@ def ensure_paired(
         reactivate_connection_if_configured(
             activator, _NM_CONNECTION_ID, nm_keyfile_path
         )
-        return load_paired_device_id(data_dir / DEVICE_FILE)
+        device_id = load_paired_device_id(data_dir / DEVICE_FILE)
+        return None if device_id is None else Pairing(device_id=device_id)
     if state is PairingState.UNPAIRED:
         # Also drops an unreadable pairing.json, which cannot be resumed.
         (data_dir / SESSION_FILE).unlink(missing_ok=True)
@@ -507,6 +517,45 @@ def ensure_paired(
         return None
 
 
+def pair_and_connect(
+    data_dir: Path,
+    scanner: QrScanner,
+    activator: ConnectionActivator,
+    led_driver: LedDriver,
+    url: str,
+    key: str,
+    *,
+    client_factory: Callable[[str, str], Any] = create_client,
+    nm_keyfile_path: Path = _NM_KEYFILE_PATH,
+    max_attempts: int = _ONBOARDING_MAX_ATTEMPTS,
+) -> tuple[str, SupabaseClients] | None:
+    """Pass the boot gate and sign in; None when the daemon must exit 1."""
+    paired = ensure_paired(
+        data_dir,
+        scanner,
+        activator,
+        led_driver,
+        lambda: complete_pairing(url, key, data_dir, client_factory),
+        nm_keyfile_path=nm_keyfile_path,
+        max_attempts=max_attempts,
+    )
+    if paired is None:
+        return None
+    client = paired.client
+    if client is None:
+        try:
+            client = restore_supabase_client(
+                url, key, data_dir / SESSION_FILE, client_factory=client_factory
+            )
+        except SessionRevokedError:
+            _logger.exception("this pendant's login was revoked; scanning next boot")
+            handle_revoked_login(data_dir, led_driver)
+            return None
+    # Exactly one client, and so one auto-refresh timer and one session.json
+    # persister, per process: a pairing boot keeps the client that paired.
+    return paired.device_id, supabase_clients_for(client)
+
+
 def handle_revoked_login(data_dir: Path, led_driver: LedDriver) -> None:
     """Go back to scanning after Remove device or a re-pair elsewhere.
 
@@ -527,7 +576,6 @@ def main() -> int:
     """
     config = load_config(os.environ)
 
-    session_path = config.data_dir / SESSION_FILE
     queue_dir = config.data_dir / "queue"
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -538,26 +586,17 @@ def main() -> int:
     if not startup.proceed:
         return 0
 
-    device_id = ensure_paired(
+    connected = pair_and_connect(
         config.data_dir,
         RpicamZbarScanner(),
         NmcliConnectionActivator(),
         led_driver,
-        lambda: complete_pairing(
-            config.supabase_url, config.supabase_anon_key, config.data_dir
-        ),
+        config.supabase_url,
+        config.supabase_anon_key,
     )
-    if device_id is None:
+    if connected is None:
         return 1
-
-    try:
-        clients = build_supabase_clients(
-            config.supabase_url, config.supabase_anon_key, session_path
-        )
-    except SessionRevokedError:
-        _logger.exception("this pendant's login was revoked; scanning next boot")
-        handle_revoked_login(config.data_dir, led_driver)
-        return 1
+    device_id, clients = connected
 
     command_runner = SubprocessCommandRunner()
     audio = resolve_audio(command_runner, config.audio)

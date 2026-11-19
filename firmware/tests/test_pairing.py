@@ -258,7 +258,7 @@ class FakePairingClient:
 def _pair(data_dir, client: FakePairingClient) -> str:
     return complete_pairing(
         "http://x", "anon", data_dir, client_factory=lambda url, key: client
-    )
+    ).device_id
 
 
 def _pending(data_dir) -> None:
@@ -299,6 +299,18 @@ def test_pairing_claims_the_code_then_adopts_the_device_and_drops_the_code(tmp_p
     }
     assert not (tmp_path / "pairing.json").exists()
     assert pairing_state(tmp_path) is PairingState.PAIRED
+
+
+def test_pairing_hands_back_the_client_that_signed_in(tmp_path):
+    # The boot keeps using it rather than opening a second client.
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+
+    paired = complete_pairing(
+        "http://x", "anon", tmp_path, client_factory=lambda url, key: client
+    )
+
+    assert paired.client is client
 
 
 def test_pairing_resumes_with_the_saved_session_instead_of_signing_in_again(tmp_path):

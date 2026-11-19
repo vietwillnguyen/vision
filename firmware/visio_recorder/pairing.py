@@ -9,6 +9,7 @@ device's id. docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -105,6 +106,21 @@ CLAIM_ARG = "p_code"
 _REJECTION_SQLSTATES = frozenset({"P0001", "42501"})
 
 
+@dataclass(frozen=True)
+class Pairing:
+    """A boot's paired device, and the client that paired it on this boot.
+
+    ``client`` is the signed-in supabase-py client when this boot ran the
+    pairing, and None on a normal paired boot, which restores the login from
+    ``session.json`` instead. A pairing boot must keep using its own client:
+    a second one would run a second auto-refresh timer against one
+    ``session.json`` and rotate the refresh token out from under the first.
+    """
+
+    device_id: str
+    client: Any | None = None
+
+
 class PairingRejectedError(Exception):
     """The code was refused for good; the pendant has to scan a new QR."""
 
@@ -182,10 +198,11 @@ def complete_pairing(
     key: str,
     data_dir: Path,
     client_factory: Callable[[str, str], Any] = create_client,
-) -> str:
+) -> Pairing:
     """Sign in as this pendant's own user and claim the saved pairing code.
 
-    Returns the device id the owner's code named. The order makes every
+    Returns the device id the owner's code named, with the signed-in client
+    for the rest of the boot. The order makes every
     crash point resumable: the session persister is registered before the
     sign-in so the new session reaches ``session.json`` through the same
     atomic write as every later rotation; ``device.json`` is written before
@@ -205,4 +222,4 @@ def complete_pairing(
     store_paired_device_id(data_dir / DEVICE_FILE, device_id)
     pending_path.unlink(missing_ok=True)
     _logger.info("paired with device %s", device_id)
-    return device_id
+    return Pairing(device_id=device_id, client=client)
