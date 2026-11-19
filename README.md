@@ -2,7 +2,7 @@
 
 Visio pendant - a wearable camera that records your day and turns it into a nightly highlight reel.
 
-**Design specs:** [`2026-07-04-visio-pendant-design.md`](docs/superpowers/specs/2026-07-04-visio-pendant-design.md), [`2026-07-20-wifi-reonboard-qr-screen-design.md`](docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md), [`2026-07-21-visio-device-provisioning-design.md`](docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md) (all under `docs/superpowers/specs/`)
+**Design specs:** [`2026-07-04-visio-pendant-design.md`](docs/superpowers/specs/2026-07-04-visio-pendant-design.md), [`2026-07-20-wifi-reonboard-qr-screen-design.md`](docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md), [`2026-07-21-visio-device-provisioning-design.md`](docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md), [`2026-11-19-visio-device-pairing-design.md`](docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md) (all under `docs/superpowers/specs/`)
 **Roadmap:** [`docs/superpowers/plans/2026-07-04-visio-epics-overview.md`](docs/superpowers/plans/2026-07-04-visio-epics-overview.md)
 
 ## Repository layout

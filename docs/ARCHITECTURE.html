@@ -29,9 +29,10 @@
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
 <!-- source-sha256: 16618ecaf15a7a37f0c0cdf99a0a7ce0a5779bdf75199bee174845c0a76d77d0  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
-<!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
+<!-- source-sha256: 31f884e638e4f0e441a3a10f0e15c28a566c6ce0c526c7e57beba1fe5b2c393c  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-17 (latched Critical LED + in-process upload retry) -->
+<!-- source-sha256: 9f9b7e978508b17d85f92f6f5bbe30787d218e3a7bc1a9a664fdc7cf7863dcda  docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md -->
+<!-- regenerated-at: 2026-11-19 (device pairing design added, planned) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -48,6 +49,7 @@
       <li><a href="#data">Data model</a></li>
       <li><a href="#pipeline">Pipeline</a></li>
       <li><a href="#app">App</a></li>
+      <li><a href="#pairing">Pairing</a></li>
     </ul>
   </div>
   <div class="navbar-end">
@@ -64,9 +66,10 @@
         A living rendering of every spec under <span class="font-mono">docs/superpowers/specs/</span> - the
         <a class="link link-primary" href="superpowers/specs/2026-07-04-visio-pendant-design.md">pendant design spec</a>
         plus the
-        <a class="link link-primary" href="superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md">WiFi re-onboarding QR</a>
-        and
+        <a class="link link-primary" href="superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md">WiFi re-onboarding QR</a>,
         <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">device provisioning &amp; preflight</a>
+        and
+        <a class="link link-primary" href="superpowers/specs/2026-11-19-visio-device-pairing-design.md">device pairing</a>
         specs (source of truth - edit those files, then regenerate this page).
         A wearable pendant that records passively all day and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
       </p>
@@ -406,8 +409,49 @@ score = base_score * 1.5  (if manually flagged)
     </div>
   </section>
 
+  <section id="pairing" class="space-y-4">
+    <h2 class="text-2xl font-bold">Device Pairing <span class="badge badge-warning badge-soft align-middle">planned, not built</span></h2>
+    <p class="text-base-content/70 max-w-3xl">Today the Re-onboard QR hands the pendant the phone's own Supabase session, so the pendant loses its login when the phone refreshes twice or the user logs out. The <a class="link link-primary" href="superpowers/specs/2026-11-19-visio-device-pairing-design.md">device pairing spec</a> gives the pendant its own login instead, with no service-role code on the pairing path. Plan: <a class="link link-primary" href="superpowers/plans/2026-11-19-visio-device-pairing.md">2026-11-19-visio-device-pairing.md</a>.</p>
+    <div class="card bg-base-100 shadow p-4">
+      <pre class="mermaid">
+sequenceDiagram
+  participant App
+  participant DB as Supabase Auth + Postgres
+  participant Pendant
+  App->>DB: rpc create_pairing_code(device_id) as owner
+  DB-->>App: one-time code (stored hashed, 10 min)
+  App->>App: QR {v:2, ssid, password, pairing_code}
+  Pendant->>Pendant: scan, join Wi-Fi
+  Pendant->>DB: anonymous sign-in
+  DB-->>Pendant: its own session
+  Pendant->>DB: rpc claim_pairing(code)
+  DB-->>Pendant: device_id (devices.device_user_id linked)
+  Pendant->>DB: status upserts + segment uploads as the device user
+  App->>DB: rpc unpair_device(device_id) on Remove device
+  DB->>DB: clear link, delete the device user and its sessions
+      </pre>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Data model</h3>
+        <p class="text-xs text-base-content/70 mt-1"><span class="font-mono text-xs bg-base-200 rounded px-1">devices.device_user_id</span> (unique, the pendant's anonymous auth user) and <span class="font-mono text-xs bg-base-200 rounded px-1">private.device_pairing_codes</span> (SHA-256 of a 256-bit code, single use). Helpers <span class="font-mono text-xs bg-base-200 rounded px-1">private.owned_device_ids()</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">private.paired_device_id()</span> are the one place every policy asks who may act for a device.</p>
+      </div>
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Permissions</h3>
+        <p class="text-xs text-base-content/70 mt-1">The owner reads; the device user writes only its device's <span class="font-mono text-xs bg-base-200 rounded px-1">device_status</span> row and uploads only into <span class="font-mono text-xs bg-base-200 rounded px-1">segments/{device_id}/</span>, reading back only its own uploads. The owner loses direct inserts on <span class="font-mono text-xs bg-base-200 rounded px-1">devices</span> and all storage writes. The pipeline (service role) is unchanged.</p>
+      </div>
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Lifecycle</h3>
+        <p class="text-xs text-base-content/70 mt-1">Policies resolve the link at query time, so Remove device revokes at once even while the pendant's access token is still valid. Re-pairing deletes the previous device user. App logout touches only the phone's session. The login never expires by time. A daily <span class="font-mono text-xs bg-base-200 rounded px-1">pg_cron</span> job deletes anonymous users no device points at.</p>
+      </div>
+    </div>
+    <div class="alert alert-warning alert-soft text-sm" role="alert">
+      <span><strong>Manual step:</strong> anonymous sign-ins must be enabled on the hosted project (CAPTCHA off, no session time-box), and the test pendant is re-onboarded once after the change ships. Firmware rejects the old v1 QR payload rather than accept the owner's session again.</span>
+    </div>
+  </section>
+
   <footer class="border-t border-base-content/10 pt-6 pb-12 text-xs text-base-content/50 space-y-1">
-    <p>Source of truth: every spec under <span class="font-mono">docs/superpowers/specs/</span> - the pendant design spec plus the WiFi re-onboarding QR and device provisioning &amp; preflight specs. Regenerate this page after editing any of them - see <span class="font-mono">docs/architecture-regeneration.md</span>.</p>
+    <p>Source of truth: every spec under <span class="font-mono">docs/superpowers/specs/</span> - the pendant design spec plus the WiFi re-onboarding QR, device provisioning &amp; preflight and device pairing specs. Regenerate this page after editing any of them - see <span class="font-mono">docs/architecture-regeneration.md</span>.</p>
     <p>A pre-commit hook blocks commits that change any of those specs without updating that spec's line in this page's embedded <span class="font-mono">source-sha256</span> manifest.</p>
   </footer>
 
