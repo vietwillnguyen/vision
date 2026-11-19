@@ -133,6 +133,27 @@ def _status(device_id: str, battery_pct: int) -> dict:
     return {"device_id": device_id, "battery_pct": battery_pct}
 
 
+# What a permission refusal looks like, so a negative test cannot pass on a
+# malformed request or a missing function instead. PostgREST surfaces both an
+# RLS violation and a function's own `errcode = '42501'` as SQLSTATE 42501;
+# storage-api answers an RLS violation with HTTP 403.
+INSUFFICIENT_PRIVILEGE = "42501"
+
+
+def _denied_by_postgres(call: Callable[[], object]) -> APIError:
+    with pytest.raises(APIError) as exc_info:
+        call()
+    assert exc_info.value.code == INSUFFICIENT_PRIVILEGE, exc_info.value
+    return exc_info.value
+
+
+def _denied_by_storage(call: Callable[[], object]) -> StorageApiError:
+    with pytest.raises(StorageApiError) as exc_info:
+        call()
+    assert str(exc_info.value.status) == "403", exc_info.value
+    return exc_info.value
+
+
 @pytest.fixture
 def anonymous_user(paired_device: PairedDevice) -> Iterator[Callable[[], Client]]:
     """Signs in fresh anonymous users, and deletes them after the test."""
@@ -207,15 +228,18 @@ def test_the_pendant_cannot_reach_beyond_its_own_device(
     )
     client = paired_device.pendant.client
 
-    with pytest.raises(StorageApiError):
-        upload_segment(paired_device.pendant.clients.storage, other, _segment(tmp_path))
-    with pytest.raises(APIError):
-        paired_device.pendant.clients.status.upsert_device_status(_status(other, 1))
+    pendant = paired_device.pendant.clients
+    _denied_by_storage(
+        lambda: upload_segment(pendant.storage, other, _segment(tmp_path))
+    )
+    _denied_by_postgres(lambda: pendant.status.upsert_device_status(_status(other, 1)))
     assert client.storage.from_("reels").list(paired_device.device_id) == []
     assert client.table("devices").select("device_id").execute().data == []
     assert client.table("reels").select("id").execute().data == []
-    with pytest.raises(APIError):
-        client.rpc("create_pairing_code", {"p_device_id": None}).execute()
+    refused = _denied_by_postgres(
+        lambda: client.rpc("create_pairing_code", {"p_device_id": None}).execute()
+    )
+    assert refused.message == "only a signed-in account can create a pairing code"
 
 
 def test_remove_device_revokes_the_pendant_and_keeps_the_device(
@@ -231,10 +255,12 @@ def test_remove_device_revokes_the_pendant_and_keeps_the_device(
 
     # The running pendant's access token is still cryptographically valid, but
     # every policy looks the link up at query time.
-    with pytest.raises(StorageApiError):
-        upload_segment(pendant.storage, device_id, _segment(tmp_path))
-    with pytest.raises(APIError):
-        pendant.status.upsert_device_status(_status(device_id, 5))
+    _denied_by_storage(
+        lambda: upload_segment(pendant.storage, device_id, _segment(tmp_path))
+    )
+    _denied_by_postgres(
+        lambda: pendant.status.upsert_device_status(_status(device_id, 5))
+    )
     # Its next boot is a definite rejection, which sends it back to scanning.
     with pytest.raises(SessionRevokedError):
         boot_pendant(paired_device.env, paired_device.data_dir)
@@ -296,14 +322,25 @@ def test_an_anonymous_user_that_never_paired_can_do_nothing(
 
     assert stranger.table("devices").select("device_id").execute().data == []
     assert stranger.table("device_status").select("device_id").execute().data == []
-    with pytest.raises(APIError):
-        stranger.table("device_status").upsert(_status(device_id, 1)).execute()
-    with pytest.raises(APIError):
-        stranger.table("devices").insert({"user_id": "x", "name": "squat"}).execute()
-    with pytest.raises(StorageApiError):
-        upload_segment(SupabaseStorage(stranger), device_id, _segment(tmp_path))
-    with pytest.raises(APIError):
-        stranger.rpc("create_pairing_code", {"p_device_id": None}).execute()
+    _denied_by_postgres(
+        lambda: stranger.table("device_status").upsert(_status(device_id, 1)).execute()
+    )
+    # A real uuid, its own: only the missing insert grant can refuse this.
+    stranger_id = stranger.auth.get_user().user.id
+    _denied_by_postgres(
+        lambda: (
+            stranger.table("devices")
+            .insert({"user_id": stranger_id, "name": "squat"})
+            .execute()
+        )
+    )
+    _denied_by_storage(
+        lambda: upload_segment(SupabaseStorage(stranger), device_id, _segment(tmp_path))
+    )
+    refused = _denied_by_postgres(
+        lambda: stranger.rpc("create_pairing_code", {"p_device_id": None}).execute()
+    )
+    assert refused.message == "only a signed-in account can create a pairing code"
 
 
 def _b64url(data: bytes) -> str:
