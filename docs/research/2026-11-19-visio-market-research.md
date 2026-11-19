@@ -115,4 +115,4 @@ The realistic exit is an acqui-hire or licensing deal, as with Limitless and Bee
 
 - On-device filtering (the flag button plus cheap motion and scene-change checks) decides whether the business works, because model cost, not storage, dominates.
 - The privacy work in the v1 PRD (an LED that cannot be disabled, every boot comes up stopped, a one-gesture stop) matches what regulators now expect and carries straight over to a product.
-- The 30-day raw retention decision (D6) is the main storage cost lever; 7 days of raw footage plus long-lived highlights would cut storage to roughly a quarter.
+- Raw retention is the main storage cost lever: 7 days of raw footage plus long-lived highlights cuts storage to roughly a quarter of 30 days. Adopted on 2026-11-19, when D6 was revised from 30 days to a 7-day default (adjustable to 30) in the pendant spec's Retention and Cleanup section (PR #102).
