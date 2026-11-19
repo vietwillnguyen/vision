@@ -192,3 +192,72 @@ select cron.schedule(
   'purge-stale-pairing-state', '17 3 * * *',
   $$select private.purge_stale_pairing_state()$$
 );
+
+-- Policies: the owner reads, the device user writes its own device and nothing
+-- else, the service role (pipeline) is unchanged.
+
+-- devices: claim_pairing is the only creator of device rows. This is required,
+-- not cosmetic: an anonymous user is in the authenticated role, and with the
+-- old insert grant it could create a device with itself as user_id and then
+-- act as that device's owner. Only the pairing functions write user_id and
+-- device_user_id.
+revoke insert, update on public.devices from authenticated;
+grant update (name, push_token) on public.devices to authenticated;
+drop policy "devices_owner_access" on public.devices;
+create policy "devices_owner_access" on public.devices
+  for all to authenticated using ((select auth.uid()) = user_id);
+
+-- device_status: the table grants (select, insert, update) stay; the pendant
+-- needs select too because supabase-py's upsert asks for the row back.
+drop policy "device_status_owner_access" on public.device_status;
+create policy "device_status_owner_read" on public.device_status
+  for select to authenticated using (device_id in (select private.owned_device_ids()));
+create policy "device_status_device_read" on public.device_status
+  for select to authenticated using (device_id = (select private.paired_device_id()));
+create policy "device_status_device_insert" on public.device_status
+  for insert to authenticated with check (device_id = (select private.paired_device_id()));
+create policy "device_status_device_update" on public.device_status
+  for update to authenticated
+  using (device_id = (select private.paired_device_id()))
+  with check (device_id = (select private.paired_device_id()));
+
+-- segments, reels: same rule as before, now expressed through the helper.
+drop policy "segments_owner_access" on public.segments;
+create policy "segments_owner_access" on public.segments
+  for all to authenticated using (device_id in (select private.owned_device_ids()));
+drop policy "reels_owner_access" on public.reels;
+create policy "reels_owner_access" on public.reels
+  for all to authenticated using (device_id in (select private.owned_device_ids()));
+
+-- A device user is never a person: it gets no score weights.
+create policy "score_weights_no_anonymous" on public.score_weights
+  as restrictive for all to authenticated using (not (select private.is_anonymous()));
+
+-- storage: object keys stay {device_id}/{filename}; the first folder is
+-- compared as text, so a non-uuid folder is a mismatch and never a cast error.
+-- The pendant reads back only what its own login uploaded (its upload
+-- idempotency check), so a new pairing cannot read earlier footage.
+drop policy "segments_bucket_owner_access" on storage.objects;
+drop policy "reels_bucket_owner_access" on storage.objects;
+create policy "segments_bucket_owner_read" on storage.objects
+  for select to authenticated using (
+    bucket_id = 'segments'
+    and (storage.foldername(name))[1] in (select id::text from private.owned_device_ids() as id)
+  );
+create policy "reels_bucket_owner_read" on storage.objects
+  for select to authenticated using (
+    bucket_id = 'reels'
+    and (storage.foldername(name))[1] in (select id::text from private.owned_device_ids() as id)
+  );
+create policy "segments_bucket_device_read" on storage.objects
+  for select to authenticated using (
+    bucket_id = 'segments'
+    and (storage.foldername(name))[1] = (select private.paired_device_id()::text)
+    and owner_id = (select auth.uid()::text)
+  );
+create policy "segments_bucket_device_insert" on storage.objects
+  for insert to authenticated with check (
+    bucket_id = 'segments'
+    and (storage.foldername(name))[1] = (select private.paired_device_id()::text)
+    and owner_id = (select auth.uid()::text)
+  );

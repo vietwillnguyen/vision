@@ -1,10 +1,14 @@
 begin;
-insert into auth.users (id, email) values
-  ('00000000-0000-0000-0000-0000000000a1', 'owner@example.com'),
-  ('00000000-0000-0000-0000-0000000000a2', 'other@example.com');
-insert into public.devices (device_id, user_id, name) values
-  ('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000a1', 'owner-device'),
-  ('00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000a1', 'owner-device-2');
+-- a1 owner, a2 another account, e1 the pendant's device user for b1, e9 an
+-- anonymous user that never paired.
+insert into auth.users (id, email, is_anonymous) values
+  ('00000000-0000-0000-0000-0000000000a1', 'owner@example.com', false),
+  ('00000000-0000-0000-0000-0000000000a2', 'other@example.com', false),
+  ('00000000-0000-0000-0000-0000000000e1', null, true),
+  ('00000000-0000-0000-0000-0000000000e9', null, true);
+insert into public.devices (device_id, user_id, name, device_user_id) values
+  ('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000a1', 'owner-device', '00000000-0000-0000-0000-0000000000e1'),
+  ('00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000a1', 'owner-device-2', null);
 insert into public.device_status (device_id) values
   ('00000000-0000-0000-0000-0000000000b1');
 insert into public.segments (id, device_id, recorded_at, duration_sec, s3_key) values
@@ -14,8 +18,10 @@ insert into public.reels (id, device_id, date, s3_key, duration_sec) values
 insert into public.score_weights (user_id) values
   ('00000000-0000-0000-0000-0000000000a1');
 
-select plan(23);
+select plan(40);
 
+-- The pendant's device user is in the authenticated role, so the grants stay;
+-- the policies decide which authenticated user they apply to.
 select ok(
   has_table_privilege('authenticated', 'public.device_status', 'insert'),
   'authenticated role should have insert privilege on device_status'
@@ -24,6 +30,13 @@ select ok(
 select ok(
   has_table_privilege('authenticated', 'public.device_status', 'update'),
   'authenticated role should have update privilege on device_status'
+);
+
+-- claim_pairing is the only creator of devices rows, and only the pairing
+-- functions write the ownership and pairing columns.
+select ok(
+  not has_table_privilege('authenticated', 'public.devices', 'insert'),
+  'authenticated role should have no insert privilege on devices'
 );
 
 set local role authenticated;
@@ -139,26 +152,160 @@ select throws_ok(
   'the owning user should not be able to update reels'
 );
 
--- The firmware daemon runs under the owner's user session (not service_role),
--- so the owner must be able to insert and upsert their own device_status.
 select lives_ok(
+  $$update public.devices set name = 'renamed'
+    where device_id = '00000000-0000-0000-0000-0000000000b1'$$,
+  'the owning user should be able to rename their own device'
+);
+
+select throws_ok(
+  $$insert into public.devices (user_id, name) values
+    ('00000000-0000-0000-0000-0000000000a1', 'direct')$$,
+  '42501',
+  null,
+  'the owning user should not be able to insert a device directly'
+);
+
+select throws_ok(
+  $$update public.devices set device_user_id = '00000000-0000-0000-0000-0000000000e9'
+    where device_id = '00000000-0000-0000-0000-0000000000b2'$$,
+  '42501',
+  null,
+  'the owning user should not be able to attach a user to their device'
+);
+
+select throws_ok(
+  $$update public.devices set user_id = '00000000-0000-0000-0000-0000000000a2'
+    where device_id = '00000000-0000-0000-0000-0000000000b1'$$,
+  '42501',
+  null,
+  'the owning user should not be able to hand their device to another account'
+);
+
+-- The pendant writes device_status under its own login now; the owner only reads.
+select throws_ok(
   $$insert into public.device_status (device_id, battery_pct) values
     ('00000000-0000-0000-0000-0000000000b2', 55)$$,
-  'the owning user should be able to insert device status for their own device'
+  '42501',
+  null,
+  'the owning user should not be able to insert device status'
 );
+
+select is_empty(
+  $$with u as (
+      update public.device_status set battery_pct = 1
+      where device_id = '00000000-0000-0000-0000-0000000000b1'
+      returning 1
+    ) select * from u$$,
+  'the owning user should not be able to update device status'
+);
+
+-- The pendant's device user.
+
+reset role;
+delete from public.device_status where device_id = '00000000-0000-0000-0000-0000000000b1';
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000e1", "role": "authenticated", "is_anonymous": true}';
 
 select lives_ok(
   $$insert into public.device_status (device_id, battery_pct) values
-    ('00000000-0000-0000-0000-0000000000b1', 88)
-    on conflict (device_id) do update set battery_pct = excluded.battery_pct$$,
-  'the owning user should be able to upsert their own device status'
+    ('00000000-0000-0000-0000-0000000000b1', 55)$$,
+  'the device user should be able to insert its paired device''s status'
 );
 
-select is(
-  (select battery_pct from public.device_status
-    where device_id = '00000000-0000-0000-0000-0000000000b1'),
-  88,
-  'the upsert should update the existing device status row'
+select lives_ok(
+  $$update public.device_status set battery_pct = 60
+    where device_id = '00000000-0000-0000-0000-0000000000b1'$$,
+  'the device user should be able to update its paired device''s status'
+);
+
+-- supabase-py's upsert is INSERT ... ON CONFLICT DO UPDATE with return=representation.
+select results_eq(
+  $$insert into public.device_status (device_id, battery_pct) values
+    ('00000000-0000-0000-0000-0000000000b1', 88)
+    on conflict (device_id) do update set battery_pct = excluded.battery_pct
+    returning battery_pct$$,
+  $$values (88)$$,
+  'the device user should be able to upsert its paired device''s status'
+);
+
+select throws_ok(
+  $$insert into public.device_status (device_id, battery_pct) values
+    ('00000000-0000-0000-0000-0000000000b2', 55)$$,
+  '42501',
+  null,
+  'the device user should not be able to insert status for another device'
+);
+
+select is_empty(
+  $$select 1 from public.devices$$,
+  'the device user should see no devices'
+);
+
+select is_empty(
+  $$select 1 from public.segments$$,
+  'the device user should see no segments'
+);
+
+select is_empty(
+  $$select 1 from public.reels$$,
+  'the device user should see no reels'
+);
+
+select throws_ok(
+  $$insert into public.score_weights (user_id) values
+    ('00000000-0000-0000-0000-0000000000e1')$$,
+  '42501',
+  null,
+  'the device user should not be able to create score weights'
+);
+
+-- An anonymous user that never paired can do nothing.
+
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000e9", "role": "authenticated", "is_anonymous": true}';
+
+select is_empty(
+  $$select 1 from public.device_status$$,
+  'an unpaired anonymous user should see no device status'
+);
+
+select throws_ok(
+  $$insert into public.device_status (device_id) values
+    ('00000000-0000-0000-0000-0000000000b2')$$,
+  '42501',
+  null,
+  'an unpaired anonymous user should not be able to insert device status'
+);
+
+select throws_ok(
+  $$insert into public.devices (user_id, name) values
+    ('00000000-0000-0000-0000-0000000000e9', 'squatter')$$,
+  '42501',
+  null,
+  'an unpaired anonymous user should not be able to create a device for itself'
+);
+
+select throws_ok(
+  $$insert into public.score_weights (user_id) values
+    ('00000000-0000-0000-0000-0000000000e9')$$,
+  '42501',
+  null,
+  'an unpaired anonymous user should not be able to create score weights'
+);
+
+-- Remove device revokes immediately, even with the same (still valid) claims.
+
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000a1", "role": "authenticated"}';
+select public.unpair_device('00000000-0000-0000-0000-0000000000b1');
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000e1", "role": "authenticated", "is_anonymous": true}';
+
+select throws_ok(
+  $$insert into public.device_status (device_id, battery_pct) values
+    ('00000000-0000-0000-0000-0000000000b1', 10)
+    on conflict (device_id) do update set battery_pct = excluded.battery_pct$$,
+  '42501',
+  null,
+  'an unpaired device user should not be able to upsert status any more'
 );
 
 select * from finish();
