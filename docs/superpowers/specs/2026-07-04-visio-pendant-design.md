@@ -307,16 +307,16 @@ Capture region:
 
 | State | Look | Capturing? | Enters when | Exits when (to) | Status |
 |---|---|---|---|---|---|
-| Off | Dark | No | Power removed, or the daemon exited (`ExecStopPost=` writes an all-off frame) | Power applied or systemd starts the daemon (Booting) | Partly built: no `ExecStopPost=` yet, and the WS2812B latches its last frame, so a crash leaves the last colour lit |
-| Booting | White, dim solid (same look as Stopped) | No | Daemon start | No `session.json` (Scanning, first boot); session on disk (Stopped, or Recording if the `/run` marker says a crash interrupted a recording); battery halt confirmed (Halted, battery) | Designed (PR #103) |
-| Scanning | Cyan, pulsing | No | First boot with no `session.json`; a 10 s hold released from Stopped; Setup needed and any press; `visio-reonboard` | QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; SIGTERM (Shutting down) | New (today onboarding shows Recording green, and giving up exits 1 into a restart loop) |
-| Setup needed | Cyan, dim solid | No | First-boot scanning used its 60 attempts | Any press or hold (Scanning, a fresh 60 attempts); power cycle (Booting, then Scanning); SIGTERM (Shutting down) | New |
-| Stopped | White, dim solid | No | Every boot with a session; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (`stop_reason = storage_full`); a re-onboard that timed out or was cancelled | A hold released between 2 and 10 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); SIGTERM (Shutting down) | Designed (PR #103) |
-| Recording | Green, solid (red flashing or yellow pulsing while a health condition holds, see the resolver) | Yes | A hold released between 2 and 10 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b) | A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); SIGTERM (Shutting down) | Built (today derived from intent, not evidence) |
+| Off | Dark | No | Shutting down finished, or power was cut from any state (ungraceful; the next boot recovers the cut segment) | Power applied, the PiJuice power button, or systemd starting the daemon (Booting) | Partly built: no `ExecStopPost=` yet, and the WS2812B latches its last frame, so a crash leaves the last colour lit |
+| Booting | White, dim solid (same look as Stopped) | No | Daemon start | No `session.json` (Scanning, first boot); session on disk (Stopped, or Recording if the `/run` marker says a crash interrupted a recording); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down) | Designed (PR #103) |
+| Scanning | Cyan, pulsing | No | First boot with no `session.json`; a hold released at 10 s or more from Stopped; Setup needed and any press; `visio-reonboard` | QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; power-off hold or SIGTERM (Shutting down) | New (today onboarding shows Recording green, and giving up exits 1 into a restart loop) |
+| Setup needed | Cyan, dim solid | No | First-boot scanning used its 60 attempts | A press or a hold released before 5 s (Scanning, a fresh 60 attempts); power cycle (Booting, then Scanning); power-off (Shutting down) | New |
+| Stopped | White, dim solid | No | Every boot with a session; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (`stop_reason = storage_full`); a re-onboard that timed out or was cancelled | A hold released between 2 and 5 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down) | Designed (PR #103) |
+| Recording | Green, solid (red flashing or yellow pulsing while a health condition holds, see the resolver) | Yes | A hold released between 2 and 5 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b) | A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down) | Built (today derived from intent, not evidence) |
 | Flag saved (overlay) | Magenta, 150 ms | Yes | A short press released while Recording, once the marker is fsynced (PR #100) | After 150 ms, back to the underlying state | Designed (PR #100) |
-| Shutting down | White, pulsing | No | SIGTERM or SIGINT in any state: a reboot, `systemctl stop`, or a watchdog restart (during a battery halt's own power-off the LED stays Halted red, which outranks this) | The process exits (Off), at most `TimeoutStopSec=30` later, after which systemd kills it | Designed (PR #103) |
-| Halted, battery | Red, solid, full brightness | No | `BatteryMonitor` confirms a halt: under 10% on 3 readings, under the 3300 mV floor on 2, or an unreadable gauge on 3, never while on external power (PR #101) | External power appears while it drains (back to the state it came from); otherwise the in-flight upload finishes or 120 s pass, then a clean power-off (Off). With a PiJuice the HAT wakes the Pi at 25% charge (Booting, then Stopped); without one, the wearer charges and powers on | Designed (PR #101) |
-| Halted, camera | Red, solid, full brightness | No | 3 capture failures in a row (camera missing, ribbon loose, `rpicam-vid` crashing) | A 2 s hold retries one capture (Recording if it works, back here if not); power cycle (Booting); SIGTERM (Shutting down) | New (today a capture error ends the loop and leaves the last colour lit) |
+| Shutting down | White, pulsing | No | From any running state: a hold released at 5-10 s, or at 10 s or more outside Stopped, SIGTERM or SIGINT (a reboot, `systemctl stop`, a watchdog restart), or a battery halt's drain finishing (the LED stays Halted red, which outranks this) | The graceful steps above finish or `TimeoutStopSec=30` passes (systemd then kills the process): Off, powered down for the hold and the battery halt, restarted for a reboot or watchdog | Designed (PR #103 covers SIGTERM; the hold and the power-off are new) |
+| Halted, battery | Red, solid, full brightness | No | `BatteryMonitor` confirms a halt: under 10% on 3 readings, under the 3300 mV floor on 2, or an unreadable gauge on 3, never while on external power (PR #101) | External power appears while it drains (back to the state it came from); a 5 s hold skips the drain; otherwise the in-flight upload finishes or 120 s pass (Shutting down, then Off, LED red throughout). With a PiJuice the HAT wakes the Pi at 25% charge (Booting, then Stopped); without one, the wearer charges and powers on | Designed (PR #101) |
+| Halted, camera | Red, solid, full brightness | No | 3 capture failures in a row (camera missing, ribbon loose, `rpicam-vid` crashing) | A hold released at 2-5 s retries one capture (Recording if it works, back here if not); power cycle (Booting); power-off hold or SIGTERM (Shutting down) | New (today a capture error ends the loop and leaves the last colour lit) |
 
 What the wearer can do in each state that needs them:
 
@@ -324,7 +324,8 @@ What the wearer can do in each state that needs them:
 - **Stopped because storage is full:** get the pendant on Wi-Fi so the queue uploads and frees space, then hold 2 s; the app shows "Storage full" and the backlog size.
 - **Critical (still recording):** for the SD card, get on Wi-Fi so the queue uploads; for upload failures, open the app (an expired login is fixed by re-onboarding, a full bucket by freeing storage).
 - **Halted, battery:** plug in a charger; during the drain that cancels the halt and the pendant carries on, after it the pendant powers off and comes back by itself (PiJuice) or when powered on.
-- **Halted, camera:** hold 2 s to retry; if it fails again, power off and reseat the camera ribbon.
+- **Halted, camera:** hold 2 s to retry; if it fails again, hold 5 s to power off safely and reseat the camera ribbon.
+- **Any state:** hold 5 s until the LED pulses white, then release, to power off safely; unplugging is the only unsafe way to turn it off.
 
 Upload region (the upload worker; it runs while the daemon is in Stopped or Recording, finishes only its in-flight upload during a battery halt, and drains within the `TimeoutStopSec=30` budget during Shutting down):
 
@@ -355,6 +356,7 @@ LED resolver, first matching rule wins:
 | 7 | Recording, and battery low | Yellow, pulsing | Recording; charge soon |
 | 8 | Recording | Green, solid | Recording |
 | - | Overlay: a flag saved while Recording | Magenta, 150 ms | Your press was saved |
+| - | Overlay: the button is held | Green or dim white at 2 s, white pulsing at 5 s, cyan at 10 s (from Stopped) | What releasing now will do |
 
 The Uploading look (blue, pulsing) is removed; `LedState.UPLOADING` exists in today's firmware and goes when the resolver lands.
 Compared with PR #103's precedence (`SHUTTING_DOWN > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING or STOPPED`), health no longer shows over Stopped and UPLOADING is gone.
@@ -364,25 +366,27 @@ Capture region diagram:
 ```mermaid
 stateDiagram-v2
     [*] --> Off
-    Off --> Booting: power on
-    Booting --> Scanning: no session.json
-    Booting --> Stopped: session on disk
-    Booting --> HaltedBattery: battery halt
-    Scanning --> Booting: QR read, Wi-Fi up
-    Scanning --> SetupNeeded: 60 attempts, first boot
-    Scanning --> Stopped: re-onboard gave up
-    SetupNeeded --> Scanning: any press
-    Stopped --> Recording: release at 2-10 s
-    Stopped --> Scanning: release at 10 s+
-    Recording --> Stopped: hold 2 s or SD full
-    Recording --> HaltedCamera: camera fails 3x
-    HaltedCamera --> Recording: hold 2 s, retry ok
-    Recording --> HaltedBattery: battery halt (also from Stopped)
-    HaltedBattery --> Recording: charger
-    HaltedBattery --> Off: clean poweroff
-    Recording --> ShuttingDown: SIGTERM
-    Stopped --> ShuttingDown: SIGTERM
-    ShuttingDown --> Off: process exits
+    Off --> Running: power on
+    state Running {
+        [*] --> Booting
+        Booting --> Scanning: no session.json
+        Booting --> Stopped: session on disk
+        Booting --> HaltedBattery: battery halt
+        Scanning --> Booting: QR read, Wi-Fi up
+        Scanning --> SetupNeeded: 60 attempts, first boot
+        Scanning --> Stopped: re-onboard gave up
+        SetupNeeded --> Scanning: any press
+        Stopped --> Recording: release at 2-5 s
+        Stopped --> Scanning: release at 10 s+
+        Recording --> Stopped: hold 2 s or SD full
+        Recording --> HaltedCamera: camera fails 3x
+        HaltedCamera --> Recording: release at 2-5 s, retry ok
+        Recording --> HaltedBattery: battery halt (also from Stopped)
+        HaltedBattery --> Recording: charger
+    }
+    Running --> ShuttingDown: release at 5 s+, SIGTERM, or battery drain done
+    Running --> Off: power cut (ungraceful)
+    ShuttingDown --> Off: power off
 ```
 
 Upload region, running at the same time on the worker thread:
@@ -398,7 +402,7 @@ stateDiagram-v2
 ```
 
 The two diagrams are concurrent regions of one device: capture runs on the main thread and uploads on the worker thread at the same time; a success with more files queued goes straight to the next file.
-The diagram leaves out SIGTERM from Scanning, Setup needed and Halted, camera (each goes to Shutting down) and the return to Stopped when a charger cancels a halt that started from Stopped, to stay readable; the tables are complete.
+Running is a parent state: its two edges out (graceful power-off and power cut) apply to every state inside it, which is how every state reaches Shutting down without drawing an edge from each one. The diagram leaves out the return to Stopped when a charger cancels a halt that started from Stopped; the tables are complete.
 
 **Upload policy (open decision for M3).** Today, and through v1 on USB power, the pendant uploads whenever it is online, recording or not.
 For the battery build, the alternative is to upload only while charging, as GoPro's cloud auto-upload and the Narrative Clip do, because Wi-Fi uploads cost battery and heat on a Zero 2W that is also encoding video.
@@ -410,14 +414,23 @@ Transition rules:
 - **Boot.** Every boot comes up Stopped and only a 2 s hold starts recording (PR #103, decisions D2-b and D3-a: a daemon crash-restart within one power cycle resumes the wearer's last choice through a `/run` marker, and finishing onboarding leaves the pendant Stopped).
   Recording always requires `session.json`: no path reaches Recording without a saved login.
   The unit drops `After=network-online.target` (keeping a plain `Wants=`), so an offline boot lights the LED within seconds instead of waiting for the network-online timeout; the startup flush already tolerates no network.
-- **Button gestures** (one button, GPIO 17, told apart by hold time with gpiozero's `Button(hold_time=2)` and `held_time`):
-  a short press while Recording flags a moment, and a short press while Stopped is ignored (D4-a);
-  holding 2 s toggles Recording and Stopped;
-  holding 10 s from Stopped starts re-onboarding;
-  in Setup needed any press starts scanning again, during a re-onboard a short press cancels it, and in Halted, camera a 2 s hold retries the camera.
-  So that a 10 s hold does not first toggle at 2 s, a hold that starts from Stopped commits on release: at 2 s the LED previews green (release to start recording), and at 10 s it switches to cyan (release to scan).
-  A hold that starts from Recording commits at 2 s as PR #103 designs, since there is no longer gesture to wait for; re-onboarding from Recording is a stop first, then a 10 s hold.
+- **Button gestures** (one button, GPIO 17, told apart by hold time with gpiozero's `Button(hold_time=2)`, `held_time` and a timer for the later thresholds).
+  The same hold ladder applies in every state, and the LED previews what releasing will do, so the wearer can let go at the right moment without looking at a phone:
+
+  | Hold, then release | LED preview while held | Does |
+  |---|---|---|
+  | Under 2 s (a short press) | none | Recording: flag a moment. Setup needed: scan again. Re-onboard scanning: cancel it. Elsewhere: ignored (D4-a) |
+  | 2-5 s | green from Stopped, dim white from Recording | Stopped: start recording. Recording: stop, committed the moment the hold reaches 2 s (PR #103). Halted, camera: retry the camera |
+  | 5-10 s | white, pulsing | Graceful power-off from any state (see Shutting down) |
+  | 10 s or more | cyan, if the pendant is now Stopped; otherwise still white, pulsing | Stopped: start re-onboarding (Scanning). Elsewhere: graceful power-off |
+
+  Every gesture except the Recording stop commits on release, so a longer hold never fires a shorter one first; a hold that starts while Recording stops recording at 2 s and then continues up the same ladder from Stopped.
+  The button listener is registered at the start of Booting, before onboarding, so power-off works from every running state, including Booting and Scanning.
   This replaces J12's earlier "hold about 10 s from any state" and the double-press pause, which a short-press flag would have had to wait out.
+- **Power off.** Every running state can be ended gracefully by the 5 s hold or by SIGTERM, which is why the diagram draws them inside one Running state with a single edge out.
+  Graceful means: cut the in-flight segment so it stays playable (PR #103), mux and queue it, push `recording_active = false`, let the upload in flight finish within the `TimeoutStopSec=30` budget, write the all-off LED frame, then `systemctl poweroff` (and, with a PiJuice, cut its 5 V rail so the halted Pi stops draining the battery).
+  Pulling the power is the only ungraceful exit; the next boot's orphan recovery then muxes and queues whatever the cut segment left behind, so at most that segment's last seconds are lost.
+  Turning it back on after a graceful power-off is an open M2 hardware question: with a PiJuice its own power button wakes the Pi; without one the wearer unplugs and replugs the power, because the Pi only wakes from halt on GPIO 3, which the PiJuice needs for I2C.
 - **Scanning** needs the camera, so it is reachable only from Stopped or first boot, never mid-recording.
   First-boot activation failure (usually a mistyped password) counts as an attempt and scanning continues; 60 attempts (about 2-3 minutes, each a 1 s `rpicam-still` plus a zbar decode) without success leave the pendant in Setup needed, waiting for a press, instead of halting or exiting into systemd's restart loop.
   A re-onboard that times out, is cancelled by a short press, or whose activation fails reactivates the previous NetworkManager profile and returns to Stopped, so re-onboarding never strands the device.

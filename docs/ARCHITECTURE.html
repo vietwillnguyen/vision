@@ -28,7 +28,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 1351e91761eee06620ff80a1e41921510570e2fb42818d7d5a636c8584c0986c  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: cdbf954d1fb1e4b977a88dfd2278edf82dacead44b134cd25dcba8a2e4278ad4  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-19 (LED state machine: two regions, recording control from PR #103, review fixes) -->
@@ -262,6 +262,7 @@ flowchart TD
             <tr><td>7</td><td>Recording, and battery low</td><td>Yellow, pulsing</td><td>Recording; charge soon</td></tr>
             <tr><td>8</td><td>Recording</td><td>Green, solid</td><td>Recording</td></tr>
             <tr><td>-</td><td>Overlay: a flag saved while Recording</td><td>Magenta, 150 ms</td><td>Your press was saved</td></tr>
+            <tr><td>-</td><td>Overlay: the button is held</td><td>Green or dim white at 2 s, white pulsing at 5 s, cyan at 10 s (from Stopped)</td><td>What releasing now will do</td></tr>
           </tbody>
         </table>
       </div>
@@ -270,16 +271,16 @@ flowchart TD
         <table class="table table-sm">
           <thead><tr><th>State</th><th>Look</th><th>Capturing?</th><th>Enters when</th><th>Exits when (to)</th><th>Status</th></tr></thead>
           <tbody>
-            <tr><td>Off</td><td>Dark</td><td>No</td><td>Power removed, or the daemon exited (<span class="font-mono text-xs bg-base-200 rounded px-1">ExecStopPost=</span> writes an all-off frame)</td><td>Power applied or systemd starts the daemon (Booting)</td><td>Partly built: no <span class="font-mono text-xs bg-base-200 rounded px-1">ExecStopPost=</span> yet, and the WS2812B latches its last frame, so a crash leaves the last colour lit</td></tr>
-            <tr><td>Booting</td><td>White, dim solid (same look as Stopped)</td><td>No</td><td>Daemon start</td><td>No <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span> (Scanning, first boot); session on disk (Stopped, or Recording if the <span class="font-mono text-xs bg-base-200 rounded px-1">/run</span> marker says a crash interrupted a recording); battery halt confirmed (Halted, battery)</td><td>Designed (PR #103)</td></tr>
-            <tr><td>Scanning</td><td>Cyan, pulsing</td><td>No</td><td>First boot with no <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span>; a 10 s hold released from Stopped; Setup needed and any press; <span class="font-mono text-xs bg-base-200 rounded px-1">visio-reonboard</span></td><td>QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; SIGTERM (Shutting down)</td><td>New (today onboarding shows Recording green, and giving up exits 1 into a restart loop)</td></tr>
-            <tr><td>Setup needed</td><td>Cyan, dim solid</td><td>No</td><td>First-boot scanning used its 60 attempts</td><td>Any press or hold (Scanning, a fresh 60 attempts); power cycle (Booting, then Scanning); SIGTERM (Shutting down)</td><td>New</td></tr>
-            <tr><td>Stopped</td><td>White, dim solid</td><td>No</td><td>Every boot with a session; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (<span class="font-mono text-xs bg-base-200 rounded px-1">stop_reason = storage_full</span>); a re-onboard that timed out or was cancelled</td><td>A hold released between 2 and 10 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
-            <tr><td>Recording</td><td>Green, solid (red flashing or yellow pulsing while a health condition holds, see the resolver)</td><td>Yes</td><td>A hold released between 2 and 10 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b)</td><td>A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); SIGTERM (Shutting down)</td><td>Built (today derived from intent, not evidence)</td></tr>
+            <tr><td>Off</td><td>Dark</td><td>No</td><td>Shutting down finished, or power was cut from any state (ungraceful; the next boot recovers the cut segment)</td><td>Power applied, the PiJuice power button, or systemd starting the daemon (Booting)</td><td>Partly built: no <span class="font-mono text-xs bg-base-200 rounded px-1">ExecStopPost=</span> yet, and the WS2812B latches its last frame, so a crash leaves the last colour lit</td></tr>
+            <tr><td>Booting</td><td>White, dim solid (same look as Stopped)</td><td>No</td><td>Daemon start</td><td>No <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span> (Scanning, first boot); session on disk (Stopped, or Recording if the <span class="font-mono text-xs bg-base-200 rounded px-1">/run</span> marker says a crash interrupted a recording); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
+            <tr><td>Scanning</td><td>Cyan, pulsing</td><td>No</td><td>First boot with no <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span>; a hold released at 10 s or more from Stopped; Setup needed and any press; <span class="font-mono text-xs bg-base-200 rounded px-1">visio-reonboard</span></td><td>QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; power-off hold or SIGTERM (Shutting down)</td><td>New (today onboarding shows Recording green, and giving up exits 1 into a restart loop)</td></tr>
+            <tr><td>Setup needed</td><td>Cyan, dim solid</td><td>No</td><td>First-boot scanning used its 60 attempts</td><td>A press or a hold released before 5 s (Scanning, a fresh 60 attempts); power cycle (Booting, then Scanning); power-off (Shutting down)</td><td>New</td></tr>
+            <tr><td>Stopped</td><td>White, dim solid</td><td>No</td><td>Every boot with a session; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (<span class="font-mono text-xs bg-base-200 rounded px-1">stop_reason = storage_full</span>); a re-onboard that timed out or was cancelled</td><td>A hold released between 2 and 5 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
+            <tr><td>Recording</td><td>Green, solid (red flashing or yellow pulsing while a health condition holds, see the resolver)</td><td>Yes</td><td>A hold released between 2 and 5 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b)</td><td>A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Built (today derived from intent, not evidence)</td></tr>
             <tr><td>Flag saved (overlay)</td><td>Magenta, 150 ms</td><td>Yes</td><td>A short press released while Recording, once the marker is fsynced (PR #100)</td><td>After 150 ms, back to the underlying state</td><td>Designed (PR #100)</td></tr>
-            <tr><td>Shutting down</td><td>White, pulsing</td><td>No</td><td>SIGTERM or SIGINT in any state: a reboot, <span class="font-mono text-xs bg-base-200 rounded px-1">systemctl stop</span>, or a watchdog restart (during a battery halt's own power-off the LED stays Halted red, which outranks this)</td><td>The process exits (Off), at most <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span> later, after which systemd kills it</td><td>Designed (PR #103)</td></tr>
-            <tr><td>Halted, battery</td><td>Red, solid, full brightness</td><td>No</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">BatteryMonitor</span> confirms a halt: under 10% on 3 readings, under the 3300 mV floor on 2, or an unreadable gauge on 3, never while on external power (PR #101)</td><td>External power appears while it drains (back to the state it came from); otherwise the in-flight upload finishes or 120 s pass, then a clean power-off (Off). With a PiJuice the HAT wakes the Pi at 25% charge (Booting, then Stopped); without one, the wearer charges and powers on</td><td>Designed (PR #101)</td></tr>
-            <tr><td>Halted, camera</td><td>Red, solid, full brightness</td><td>No</td><td>3 capture failures in a row (camera missing, ribbon loose, <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> crashing)</td><td>A 2 s hold retries one capture (Recording if it works, back here if not); power cycle (Booting); SIGTERM (Shutting down)</td><td>New (today a capture error ends the loop and leaves the last colour lit)</td></tr>
+            <tr><td>Shutting down</td><td>White, pulsing</td><td>No</td><td>From any running state: a hold released at 5-10 s, or at 10 s or more outside Stopped, SIGTERM or SIGINT (a reboot, <span class="font-mono text-xs bg-base-200 rounded px-1">systemctl stop</span>, a watchdog restart), or a battery halt's drain finishing (the LED stays Halted red, which outranks this)</td><td>The graceful steps above finish or <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span> passes (systemd then kills the process): Off, powered down for the hold and the battery halt, restarted for a reboot or watchdog</td><td>Designed (PR #103 covers SIGTERM; the hold and the power-off are new)</td></tr>
+            <tr><td>Halted, battery</td><td>Red, solid, full brightness</td><td>No</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">BatteryMonitor</span> confirms a halt: under 10% on 3 readings, under the 3300 mV floor on 2, or an unreadable gauge on 3, never while on external power (PR #101)</td><td>External power appears while it drains (back to the state it came from); a 5 s hold skips the drain; otherwise the in-flight upload finishes or 120 s pass (Shutting down, then Off, LED red throughout). With a PiJuice the HAT wakes the Pi at 25% charge (Booting, then Stopped); without one, the wearer charges and powers on</td><td>Designed (PR #101)</td></tr>
+            <tr><td>Halted, camera</td><td>Red, solid, full brightness</td><td>No</td><td>3 capture failures in a row (camera missing, ribbon loose, <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> crashing)</td><td>A hold released at 2-5 s retries one capture (Recording if it works, back here if not); power cycle (Booting); power-off hold or SIGTERM (Shutting down)</td><td>New (today a capture error ends the loop and leaves the last colour lit)</td></tr>
           </tbody>
         </table>
       </div>
@@ -310,25 +311,27 @@ flowchart TD
       <pre class="mermaid" data-layout="elk">
 stateDiagram-v2
     [*] --> Off
-    Off --> Booting: power on
-    Booting --> Scanning: no session.json
-    Booting --> Stopped: session on disk
-    Booting --> HaltedBattery: battery halt
-    Scanning --> Booting: QR read, Wi-Fi up
-    Scanning --> SetupNeeded: 60 attempts, first boot
-    Scanning --> Stopped: re-onboard gave up
-    SetupNeeded --> Scanning: any press
-    Stopped --> Recording: release at 2-10 s
-    Stopped --> Scanning: release at 10 s+
-    Recording --> Stopped: hold 2 s or SD full
-    Recording --> HaltedCamera: camera fails 3x
-    HaltedCamera --> Recording: hold 2 s, retry ok
-    Recording --> HaltedBattery: battery halt (also from Stopped)
-    HaltedBattery --> Recording: charger
-    HaltedBattery --> Off: clean poweroff
-    Recording --> ShuttingDown: SIGTERM
-    Stopped --> ShuttingDown: SIGTERM
-    ShuttingDown --> Off: process exits
+    Off --> Running: power on
+    state Running {
+        [*] --> Booting
+        Booting --> Scanning: no session.json
+        Booting --> Stopped: session on disk
+        Booting --> HaltedBattery: battery halt
+        Scanning --> Booting: QR read, Wi-Fi up
+        Scanning --> SetupNeeded: 60 attempts, first boot
+        Scanning --> Stopped: re-onboard gave up
+        SetupNeeded --> Scanning: any press
+        Stopped --> Recording: release at 2-5 s
+        Stopped --> Scanning: release at 10 s+
+        Recording --> Stopped: hold 2 s or SD full
+        Recording --> HaltedCamera: camera fails 3x
+        HaltedCamera --> Recording: release at 2-5 s, retry ok
+        Recording --> HaltedBattery: battery halt (also from Stopped)
+        HaltedBattery --> Recording: charger
+    }
+    Running --> ShuttingDown: release at 5 s+, SIGTERM, or battery drain done
+    Running --> Off: power cut (ungraceful)
+    ShuttingDown --> Off: power off
       </pre></div>
         <div><h4 class="font-semibold text-sm mb-1">Upload region (at the same time, worker thread)</h4>
       <pre class="mermaid" data-layout="elk" style="max-width:420px;margin:0 auto">
@@ -341,7 +344,7 @@ stateDiagram-v2
     Waiting --> Uploading: deadline passed, online
       </pre></div>
       </div>
-      <p class="text-xs text-base-content/70 mt-2">The upload queue is the <span class="font-mono text-xs bg-base-200 rounded px-1">queue/</span> directory on the SD card: finished segments and flag markers not yet uploaded. It survives reboots, every boot flushes it, and "draining" means letting the upload in flight finish, never the whole backlog. Gestures: a short press while Recording flags; a 2 s hold toggles; from Stopped a hold commits on release (green preview at 2 s, cyan at 10 s); in Setup needed any press rescans; in Halted, camera a 2 s hold retries. The diagram omits SIGTERM from Scanning, Setup needed and Halted, camera; the tables are complete. Open M3 decision: upload whenever online (today), only while charging (GoPro, Narrative Clip), or while recording only above a charge threshold.</p>
+      <p class="text-xs text-base-content/70 mt-2">The upload queue is the <span class="font-mono text-xs bg-base-200 rounded px-1">queue/</span> directory on the SD card: finished segments and flag markers not yet uploaded. It survives reboots, every boot flushes it, and "draining" means letting the upload in flight finish, never the whole backlog. Gestures, one hold ladder in every state with LED previews: under 2 s flags (Recording) or rescans (Setup needed); 2-5 s starts recording, retries the camera, or stops (committed at 2 s while Recording); 5-10 s powers off safely from any state; 10 s or more re-onboards from Stopped. Running is a parent state, so its graceful power-off edge (hold, SIGTERM or a finished battery drain) and the ungraceful power-cut edge apply to every state inside it. Turning back on after a power-off is an open M2 hardware question (PiJuice button, or replug). Open M3 decision: upload whenever online (today), only while charging (GoPro, Narrative Clip), or while recording only above a charge threshold.</p>
     </div>
 
     <div class="card bg-base-100 shadow p-4">
