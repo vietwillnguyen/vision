@@ -1375,6 +1375,18 @@ def test_paired_boots_normally_without_scanning_or_pairing(tmp_path):
     assert rig.events == [("activate", "visio")]
 
 
+def test_paired_with_an_unreadable_session_scans_for_a_new_qr(tmp_path):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    (tmp_path / "session.json").write_text("")
+    rig = PairingRig(tmp_path)
+    scanner = ScriptedScanner([QR_V2])
+
+    assert rig.run(scanner) == PAIRED_DEVICE_ID
+
+    assert scanner.scans == 1
+    assert rig.events == [("activate", "visio"), "pair"]
+
+
 def test_a_revoked_login_returns_the_pendant_to_scanning(tmp_path):
     store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
     _session(tmp_path)

@@ -502,3 +502,17 @@ def test_a_network_or_server_failure_is_not_a_revocation(tmp_path, error):
         )
 
     assert exc_info.value is error
+
+
+@pytest.mark.parametrize("content", ["", "[]", "{}", '{"access_token": "at"}'])
+def test_an_unreadable_session_is_a_lost_login_not_a_crash(tmp_path, content):
+    # The boot gate already treats this as unpaired; this is the last line
+    # if the file changes between the gate and the restore.
+    session_path = tmp_path / "session.json"
+    session_path.write_text(content)
+    fake = FakeSupabase()
+
+    with pytest.raises(SessionRevokedError):
+        build_supabase_clients(
+            "http://x", "anon", session_path, client_factory=lambda url, key: fake
+        )

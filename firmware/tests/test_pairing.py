@@ -85,6 +85,32 @@ def test_a_corrupt_device_file_is_unpaired(tmp_path):
     assert pairing_state(tmp_path) is PairingState.UNPAIRED
 
 
+# Every shape of session.json the pendant cannot sign in with. A power cut is
+# not one of them (the write is atomic), but an SD card fault or a hand edit
+# is, and a PAIRED boot that then cannot parse the file crash-looped forever.
+UNREADABLE_SESSIONS = [
+    "",
+    "{",
+    "[]",
+    "null",
+    '"tokens"',
+    "{}",
+    '{"access_token": "at"}',
+    '{"refresh_token": "rt"}',
+    '{"access_token": 1, "refresh_token": "rt"}',
+    '{"access_token": "at", "refresh_token": ["rt"]}',
+    '{"access_token": "at", "refresh_token": ""}',
+]
+
+
+@pytest.mark.parametrize("content", UNREADABLE_SESSIONS)
+def test_a_marked_device_file_with_an_unreadable_session_is_unpaired(tmp_path, content):
+    store_paired_device_id(tmp_path / "device.json", DEVICE_ID)
+    (tmp_path / "session.json").write_text(content)
+
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+
+
 def test_a_corrupt_pending_pairing_file_is_unpaired(tmp_path):
     # Nothing to claim with, so the only way forward is a fresh scan.
     (tmp_path / "pairing.json").write_text("{not json")

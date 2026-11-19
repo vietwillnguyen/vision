@@ -17,14 +17,21 @@ _logger = logging.getLogger(__name__)
 
 
 def read_saved_session(session_path: Path) -> dict[str, str] | None:
+    """The saved tokens, or None for a missing or unusable ``session.json``.
+
+    Every shape the pendant cannot sign in with (empty, not JSON, not an
+    object, a missing, empty or non-string token) is None, so callers treat
+    it as no login at all instead of crashing on it. Deleting the file is
+    left to the caller that is about to replace it.
+    """
     try:
         data = json.loads(session_path.read_text())
         access_token, refresh_token = data["access_token"], data["refresh_token"]
     except (OSError, ValueError, KeyError, TypeError):
-        session_path.unlink(missing_ok=True)
         return None
     if not isinstance(access_token, str) or not isinstance(refresh_token, str):
-        session_path.unlink(missing_ok=True)
+        return None
+    if not access_token or not refresh_token:
         return None
     return {"access_token": access_token, "refresh_token": refresh_token}
 

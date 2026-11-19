@@ -63,13 +63,14 @@ def pairing_state(data_dir: Path) -> PairingState:
     A pending code wins over everything, so a power cut after the claim but
     before ``pairing.json`` was deleted resumes the claim (which is
     idempotent). A ``pairing.json`` with no readable code cannot be resumed,
-    so it counts as unpaired and the pendant scans again.
+    and an unreadable ``session.json`` cannot sign in, so both count as
+    unpaired and the pendant scans again instead of crash-looping.
     """
     if read_pending_pairing(data_dir / PAIRING_FILE) is not None:
         return PairingState.PENDING
     if (
         load_paired_device_id(data_dir / DEVICE_FILE) is not None
-        and (data_dir / SESSION_FILE).exists()
+        and read_saved_session(data_dir / SESSION_FILE) is not None
     ):
         return PairingState.PAIRED
     return PairingState.UNPAIRED
@@ -113,7 +114,9 @@ def _is_definite_auth_rejection(err: AuthApiError) -> bool:
 
 def _sign_in(client: Any, session_path: Path) -> None:
     saved = read_saved_session(session_path)
-    if saved is not None:
+    if saved is None:
+        session_path.unlink(missing_ok=True)
+    else:
         try:
             client.auth.set_session(saved["access_token"], saved["refresh_token"])
             return

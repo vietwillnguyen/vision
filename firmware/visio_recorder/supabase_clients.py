@@ -1,4 +1,3 @@
-import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,7 +8,7 @@ from storage3.exceptions import StorageApiError
 from supabase import create_client
 from supabase_auth.errors import AuthApiError
 
-from visio_recorder.session_store import session_persister
+from visio_recorder.session_store import read_saved_session, session_persister
 from visio_recorder.uploader import ObjectAlreadyStoredError, ObjectTooLargeError
 
 _logger = logging.getLogger(__name__)
@@ -133,8 +132,10 @@ def build_supabase_clients(
     session_path: Path,
     client_factory: Callable[[str, str], Any] = create_client,
 ) -> SupabaseClients:
+    session = read_saved_session(session_path)
+    if session is None:
+        raise SessionRevokedError("the pendant's session.json is missing or unreadable")
     client = client_factory(url, key)
-    session = json.loads(session_path.read_text())
     # Registered before set_session, which refreshes an expired access token
     # before it returns: that first rotation has to be saved too.
     client.auth.on_auth_state_change(session_persister(session_path))
