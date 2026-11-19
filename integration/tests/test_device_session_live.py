@@ -14,13 +14,14 @@ login can and cannot do, and that Remove device and a re-pair revoke it.
 """
 
 import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from postgrest.exceptions import APIError
 from storage3.exceptions import StorageApiError
-from supabase import create_client
+from supabase import Client, create_client
 
 from tests.pendant import (
     PairedDevice,
@@ -120,6 +121,23 @@ def _segment(tmp_path: Path, name: str = "20261119_090000.mp4") -> Path:
 
 def _status(device_id: str, battery_pct: int) -> dict:
     return {"device_id": device_id, "battery_pct": battery_pct}
+
+
+@pytest.fixture
+def anonymous_user(paired_device: PairedDevice) -> Iterator[Callable[[], Client]]:
+    """Signs in fresh anonymous users, and deletes them after the test."""
+    created: list[str] = []
+
+    def sign_in() -> Client:
+        client = create_client(paired_device.env["url"], paired_device.env["anon_key"])
+        response = client.auth.sign_in_anonymously()
+        assert response.user is not None
+        created.append(response.user.id)
+        return client
+
+    yield sign_in
+    for user_id in created:
+        paired_device.admin.auth.admin.delete_user(user_id)
 
 
 def _other_device(paired: PairedDevice) -> str:
@@ -241,7 +259,7 @@ def test_re_pairing_the_device_replaces_the_previous_pendant(
 
 
 def test_a_used_pairing_code_is_refused_for_anyone_else(
-    paired_device: PairedDevice, tmp_path
+    paired_device: PairedDevice, anonymous_user, tmp_path
 ):
     # Expiry cannot be aged through the public API without a ten-minute sleep,
     # so the expired-code refusal is covered by pgTAP (device_pairing.test.sql).
@@ -252,8 +270,7 @@ def test_a_used_pairing_code_is_refused_for_anyone_else(
     write_pending_pairing(first_dir / PAIRING_FILE, code)
     complete_pairing(paired_device.env["url"], paired_device.env["anon_key"], first_dir)
 
-    thief = create_client(paired_device.env["url"], paired_device.env["anon_key"])
-    thief.auth.sign_in_anonymously()
+    thief = anonymous_user()
     with pytest.raises(APIError) as exc_info:
         thief.rpc(CLAIM_RPC, {CLAIM_ARG: code}).execute()
 
@@ -262,10 +279,9 @@ def test_a_used_pairing_code_is_refused_for_anyone_else(
 
 
 def test_an_anonymous_user_that_never_paired_can_do_nothing(
-    paired_device: PairedDevice, tmp_path
+    paired_device: PairedDevice, anonymous_user, tmp_path
 ):
-    stranger = create_client(paired_device.env["url"], paired_device.env["anon_key"])
-    stranger.auth.sign_in_anonymously()
+    stranger = anonymous_user()
     device_id = paired_device.device_id
 
     assert stranger.table("devices").select("device_id").execute().data == []
