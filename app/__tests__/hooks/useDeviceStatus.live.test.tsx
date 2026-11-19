@@ -10,13 +10,12 @@
  * those statuses against a live Postgres `postgres_changes` feed. This test
  * uses the real `createClient()` (same call as src/lib/supabase.ts) against a
  * running local Supabase instance: an authenticated device owner subscribes
- * through the real hook, then that same client - standing in for the
- * firmware daemon, which authenticates as the device owner's own session
- * rather than holding a service-role key (see
- * supabase/migrations/20260710090000_grant_device_status_writes.sql) - upserts
- * the owner's `device_status` row, and we assert the hook's `realtime` field
- * reaches 'live' and its `status` reflects the row over the wire - not a
- * mocked channel callback.
+ * through the real hook, then a pendant paired the way firmware pairs (an
+ * anonymous sign-in claiming the owner's one-time pairing code, see
+ * supabase/migrations/20261119120000_device_pairing.sql) upserts the device's
+ * `device_status` row under its own login, and we assert the hook's
+ * `realtime` field reaches 'live' and its `status` reflects the row over the
+ * wire - not a mocked channel callback.
  *
  * Needs SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY pointing
  * at a `supabase start` instance (same env vars as integration/'s Python live
@@ -137,6 +136,7 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
     const userId = created.user.id;
 
     let ownerClient: SupabaseClient | undefined;
+    let pendantClient: SupabaseClient | undefined;
     try {
       const { data: device, error: deviceError } = await adminClient
         .from('devices')
@@ -173,6 +173,24 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
       const { error: signInError } = await client.auth.signInWithPassword({ email, password });
       if (signInError) throw signInError;
 
+      // The owner only reads device_status; the paired pendant writes it.
+      const { data: codes, error: codeError } = await client.rpc('create_pairing_code', {
+        p_device_id: deviceId,
+      });
+      if (codeError || !codes || codes.length === 0) {
+        throw codeError ?? new Error('failed to create a pairing code');
+      }
+      const pendant = createClient(SUPABASE_URL as string, SUPABASE_ANON_KEY as string, {
+        global: { fetch: restFetch },
+      });
+      pendantClient = pendant;
+      const { error: anonymousError } = await pendant.auth.signInAnonymously();
+      if (anonymousError) throw anonymousError;
+      const { error: claimError } = await pendant.rpc('claim_pairing', {
+        p_code: codes[0].code,
+      });
+      if (claimError) throw claimError;
+
       const { result, unmount } = await renderHook(() => useDeviceStatus(client, deviceId));
 
       await waitFor(
@@ -192,7 +210,7 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
       const deadline = Date.now() + 90000;
       let lastAssertionError: unknown;
       do {
-        const { error: upsertError } = await client.from('device_status').upsert({
+        const { error: upsertError } = await pendant.from('device_status').upsert({
           device_id: deviceId,
           battery_pct: 55,
           storage_used_gb: 3.5,
@@ -234,8 +252,14 @@ describeLive('useDeviceStatus against a live Supabase instance', () => {
           await ownerClient.auth.stopAutoRefresh();
           await disconnectRealtime(ownerClient);
         }
+        // The pendant never subscribes, so it has no socket to close.
+        if (pendantClient) {
+          await pendantClient.auth.stopAutoRefresh();
+        }
       } finally {
         await adminClient.auth.stopAutoRefresh();
+        const pendantUser = pendantClient ? (await pendantClient.auth.getUser()).data.user : null;
+        if (pendantUser) await adminClient.auth.admin.deleteUser(pendantUser.id);
         await adminClient.auth.admin.deleteUser(userId);
       }
     }
