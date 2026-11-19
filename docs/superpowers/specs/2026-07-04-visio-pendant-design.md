@@ -359,8 +359,8 @@ LED resolver, first matching rule wins:
 
 | # | When | Look | Means for a person |
 |---|---|---|---|
-| 1 | Capture is Shutting down | White, pulsing | Powering down; not recording |
-| 2 | Capture is Halted (battery or camera) | Red, solid, full brightness | Not recording; needs you (see the table above) |
+| 1 | Capture is Halted (battery or camera) | Red, solid, full brightness | Not recording; needs you (see the table above) |
+| 2 | Capture is Shutting down | White, pulsing | Powering down; not recording |
 | 3 | Capture is Scanning | Cyan, pulsing | Looking for a QR code; not recording |
 | 4 | Capture is Setup needed | Cyan, dim solid | Press to scan again; not recording |
 | 5 | Capture is Booting or Stopped | White, dim solid | Powered and fine; not recording |

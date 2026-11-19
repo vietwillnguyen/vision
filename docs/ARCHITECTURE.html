@@ -29,7 +29,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 1e91a96f745e21af4f846ca5f084280a235e883b9fb698c48764b13b6dcc121c  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 49a105992917ecc179526fb0b41793eda37676e5286a82aacc2782b443a5203e  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-19 (LED state machine: two regions, recording control from PR #103, review fixes) -->
@@ -254,8 +254,8 @@ flowchart TD
         <table class="table table-sm">
           <thead><tr><th>#</th><th>When</th><th>Look</th><th>Means for a person</th></tr></thead>
           <tbody>
-            <tr><td>1</td><td>Capture is Shutting down</td><td>White, pulsing</td><td>Powering down; not recording</td></tr>
-            <tr><td>2</td><td>Capture is Halted (battery or camera)</td><td>Red, solid, full brightness</td><td>Not recording; needs you (see the table above)</td></tr>
+            <tr><td>1</td><td>Capture is Halted (battery or camera)</td><td>Red, solid, full brightness</td><td>Not recording; needs you (see the table above)</td></tr>
+            <tr><td>2</td><td>Capture is Shutting down</td><td>White, pulsing</td><td>Powering down; not recording</td></tr>
             <tr><td>3</td><td>Capture is Scanning</td><td>Cyan, pulsing</td><td>Looking for a QR code; not recording</td></tr>
             <tr><td>4</td><td>Capture is Setup needed</td><td>Cyan, dim solid</td><td>Press to scan again; not recording</td></tr>
             <tr><td>5</td><td>Capture is Booting or Stopped</td><td>White, dim solid</td><td>Powered and fine; not recording</td></tr>
