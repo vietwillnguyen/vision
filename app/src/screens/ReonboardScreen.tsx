@@ -95,15 +95,14 @@ export function ReonboardScreen({
           This code has expired
         </Text>
         <Text style={styles.body}>
-          Pairing codes work for 10 minutes. Make a new one to continue.
+          Pairing codes work for 10 minutes. Enter your Wi-Fi password again to make a new one.
         </Text>
         <View style={styles.buttonWrap}>
           <Button
             testID="new-code-button"
-            title={isSubmitting ? 'Generating...' : 'Generate a new code'}
+            title="Make a new code"
             color={colors.accent}
-            accessibilityLabel="Generate a new pairing code"
-            disabled={isSubmitting}
+            accessibilityLabel="Make a new pairing code"
             onPress={onNewCode}
           />
         </View>
@@ -113,7 +112,6 @@ export function ReonboardScreen({
             title="Cancel"
             color={colors.textMuted}
             accessibilityLabel="Cancel pairing"
-            disabled={isSubmitting}
             onPress={onDone}
           />
         </View>

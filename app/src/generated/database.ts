@@ -244,6 +244,7 @@ export type Database = {
         Returns: {
           code: string
           expires_at: string
+          expires_in: number
         }[]
       }
       unpair_device: { Args: { p_device_id: string }; Returns: undefined }

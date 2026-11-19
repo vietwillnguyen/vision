@@ -74,7 +74,13 @@ function fakeClient(session: Session | null, devices: Rows | (() => Rows)) {
     from: (table: string) => makeChain(table === 'devices' ? readDevices : () => []),
     rpc: jest.fn(() =>
       Promise.resolve({
-        data: [{ code: 'code-1', expires_at: new Date(Date.now() + 600000).toISOString() }],
+        data: [
+          {
+            code: 'code-1',
+            expires_at: new Date(Date.now() + 600000).toISOString(),
+            expires_in: 600,
+          },
+        ],
         error: null,
       }),
     ),

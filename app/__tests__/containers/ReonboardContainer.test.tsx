@@ -3,6 +3,7 @@ import React from 'react';
 
 import { PAIRING_POLL_MS, ReonboardContainer } from '../../src/containers/ReonboardContainer';
 import type { VisionClient } from '../../src/lib/supabase';
+import { ReonboardScreen } from '../../src/screens/ReonboardScreen';
 
 jest.mock(
   'react-native-qrcode-svg',
@@ -14,10 +15,12 @@ jest.mock(
 );
 
 type Result<T> = { data: T; error: { message: string } | null };
-type CodeRow = { code: string; expires_at: string };
+type CodeRow = { code: string; expires_at: string; expires_in: number };
 
 const NOW = new Date('2026-11-19T12:00:00Z').getTime();
-const IN_TEN_MINUTES = new Date(NOW + 10 * 60 * 1000).toISOString();
+const TEN_MINUTES_MS = 10 * 60 * 1000;
+const IN_TEN_MINUTES = new Date(NOW + TEN_MINUTES_MS).toISOString();
+const TEN_MINUTES_SEC = 600;
 
 interface FakeOptions {
   // Each read of devices takes the next row set; the last one repeats.
@@ -53,7 +56,9 @@ function fakeClient({ deviceReads = [[{ device_user_id: 'old-pendant' }]], rpc }
       return rpc
         ? rpc()
         : Promise.resolve({
-            data: [{ code: `code-${codes}`, expires_at: IN_TEN_MINUTES }],
+            data: [
+              { code: `code-${codes}`, expires_at: IN_TEN_MINUTES, expires_in: TEN_MINUTES_SEC },
+            ],
             error: null,
           });
     },
@@ -66,6 +71,26 @@ async function generate() {
   await fireEvent.changeText(screen.getByTestId('password-input'), 'hunter2pass');
   await fireEvent.press(screen.getByTestId('generate-qr-button'));
 }
+
+// The real screen, wrapped so a test can read what the container still holds.
+jest.mock('../../src/screens/ReonboardScreen', () => {
+  const actual = jest.requireActual('../../src/screens/ReonboardScreen');
+  const ReactActual = jest.requireActual('react');
+  return {
+    ...actual,
+    ReonboardScreen: jest.fn((props: object) =>
+      ReactActual.createElement(actual.ReonboardScreen, props),
+    ),
+  };
+});
+
+function heldSecrets() {
+  const calls = jest.mocked(ReonboardScreen).mock.calls;
+  const props = calls[calls.length - 1][0];
+  return { password: props.password, qrValue: props.qrValue };
+}
+
+const CLEARED = { password: '', qrValue: '' };
 
 function qrPayload() {
   return JSON.parse(screen.getByTestId('qr-code').props.children);
@@ -192,21 +217,58 @@ describe('ReonboardContainer', () => {
     expect(fake.reads()).toBe(readsBeforeUnmount);
   });
 
-  it('expires the code and makes a new one on request', async () => {
+  it('expires the code, forgets it and the password, and starts over on request', async () => {
     const fake = fakeClient({});
     await render(<ReonboardContainer client={fake.client} deviceId="dev-1" onDone={jest.fn()} />);
     await generate();
     await waitFor(() => expect(screen.getByTestId('qr-code')).toBeTruthy());
 
-    await advance(10 * 60 * 1000);
+    await advance(TEN_MINUTES_MS);
     await waitFor(() => expect(screen.getByTestId('expired-message')).toBeTruthy());
     expect(screen.queryByTestId('qr-code')).toBeNull();
+    expect(heldSecrets()).toEqual(CLEARED);
 
     await fireEvent.press(screen.getByTestId('new-code-button'));
+    expect(screen.getByTestId('ssid-input').props.value).toBe('HomeNet');
+    expect(screen.getByTestId('password-input').props.value).toBe('');
+    await generate();
     await waitFor(() => expect(screen.getByTestId('qr-code')).toBeTruthy());
     expect(qrPayload().pairing_code).toBe('code-2');
     expect(fake.rpcCalls).toHaveLength(2);
   });
+
+  it.each([
+    ['ahead of', NOW + 60 * 1000],
+    ['behind', NOW + 20 * 60 * 1000],
+  ])(
+    'times the code by its server lifetime when the phone clock is %s the server',
+    async (_label, expiresAtOnPhoneClock) => {
+      // expires_at is the server's time; read against a skewed phone clock it
+      // would expire the QR early or keep showing a dead code.
+      const fake = fakeClient({
+        rpc: () =>
+          Promise.resolve({
+            data: [
+              {
+                code: 'code-1',
+                expires_at: new Date(expiresAtOnPhoneClock).toISOString(),
+                expires_in: TEN_MINUTES_SEC,
+              },
+            ],
+            error: null,
+          }),
+      });
+      await render(<ReonboardContainer client={fake.client} deviceId="dev-1" onDone={jest.fn()} />);
+      await generate();
+      await waitFor(() => expect(screen.getByTestId('qr-code')).toBeTruthy());
+
+      await advance(TEN_MINUTES_MS - 1000);
+      expect(screen.getByTestId('qr-code')).toBeTruthy();
+
+      await advance(1000);
+      await waitFor(() => expect(screen.getByTestId('expired-message')).toBeTruthy());
+    },
+  );
 
   it('ignores a second press while the code is still being made', async () => {
     jest.useRealTimers();
@@ -227,13 +289,16 @@ describe('ReonboardContainer', () => {
     expect(fake.rpcCalls).toHaveLength(1);
 
     await act(async () => {
-      respond({ data: [{ code: 'code-1', expires_at: IN_TEN_MINUTES }], error: null });
+      respond({
+        data: [{ code: 'code-1', expires_at: IN_TEN_MINUTES, expires_in: TEN_MINUTES_SEC }],
+        error: null,
+      });
       await firstPress;
     });
     await waitFor(() => expect(screen.getByTestId('qr-code')).toBeTruthy());
   });
 
-  it('calls onDone from Done', async () => {
+  it('forgets the code and the password when closed while the QR is up', async () => {
     const onDone = jest.fn();
     const fake = fakeClient({});
     await render(<ReonboardContainer client={fake.client} deviceId="dev-1" onDone={onDone} />);
@@ -241,19 +306,36 @@ describe('ReonboardContainer', () => {
     await waitFor(() => expect(screen.getByTestId('done-button')).toBeTruthy());
 
     await fireEvent.press(screen.getByTestId('done-button'));
+
     expect(onDone).toHaveBeenCalled();
+    expect(heldSecrets()).toEqual(CLEARED);
   });
 
-  it('keeps the typed SSID and password after Try again', async () => {
+  it('forgets the code and the password once paired', async () => {
+    const fake = fakeClient({
+      deviceReads: [[{ device_user_id: 'old-pendant' }], [{ device_user_id: 'new-pendant' }]],
+    });
+    await render(<ReonboardContainer client={fake.client} deviceId="dev-1" onDone={jest.fn()} />);
+    await generate();
+    await waitFor(() => expect(screen.getByTestId('qr-code')).toBeTruthy());
+
+    await advance(PAIRING_POLL_MS);
+    await waitFor(() => expect(screen.getByTestId('paired-message')).toBeTruthy());
+
+    expect(heldSecrets()).toEqual(CLEARED);
+  });
+
+  it('keeps the SSID but forgets the password after an error', async () => {
     const fake = fakeClient({
       rpc: () => Promise.resolve({ data: null, error: { message: 'boom' } }),
     });
     await render(<ReonboardContainer client={fake.client} deviceId="dev-1" onDone={jest.fn()} />);
     await generate();
     await waitFor(() => expect(screen.getByTestId('try-again-button')).toBeTruthy());
+    expect(heldSecrets()).toEqual(CLEARED);
 
     await fireEvent.press(screen.getByTestId('try-again-button'));
     expect(screen.getByTestId('ssid-input').props.value).toBe('HomeNet');
-    expect(screen.getByTestId('password-input').props.value).toBe('hunter2pass');
+    expect(screen.getByTestId('password-input').props.value).toBe('');
   });
 });

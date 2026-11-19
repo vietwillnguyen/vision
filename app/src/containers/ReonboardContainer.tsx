@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { VisionClient } from '../lib/supabase';
 import { buildPairingQrPayload } from '../logic/pairingQr';
@@ -17,6 +17,11 @@ interface ReonboardContainerProps {
 }
 
 interface PendingPairing {
+  // When the QR stops being useful, on this phone's clock: the moment the
+  // code arrived plus the lifetime the server gave it. Comparing the
+  // server's expires_at with the phone's clock instead is off by however
+  // far that clock is, which would retire a live code early or keep showing
+  // a dead one.
   expiresAt: number;
   // The pairing link before the code was made: the device's pendant login,
   // or (with no device yet) whether any device exists. A change means the
@@ -57,9 +62,32 @@ export function ReonboardContainer({ client, deviceId, onDone }: ReonboardContai
   // re-render that disables the button, and would see a stale false.
   const inFlight = useRef(false);
 
+  // The QR holds the Wi-Fi password and a live pairing code, so neither is
+  // kept a moment longer than the QR is on screen. Clearing state is all
+  // there is to do on close: the database has no call that retires a code
+  // without unpairing, a new code replaces it, and it expires on its own.
+  const forgetSecrets = useCallback(() => {
+    setPassword('');
+    setQrValue('');
+    setPending(null);
+  }, []);
+
+  const finish = useCallback(
+    (next: ReonboardStep) => {
+      forgetSecrets();
+      setStep(next);
+    },
+    [forgetSecrets],
+  );
+
   const fail = (message: string) => {
     setErrorMessage(message);
-    setStep('error');
+    finish('error');
+  };
+
+  const close = () => {
+    forgetSecrets();
+    onDone();
   };
 
   const onSubmit = async (submittedSsid: string, submittedPassword: string) => {
@@ -86,7 +114,7 @@ export function ReonboardContainer({ client, deviceId, onDone }: ReonboardContai
         return;
       }
       setQrValue(buildPairingQrPayload(submittedSsid, submittedPassword, data[0].code));
-      setPending({ expiresAt: new Date(data[0].expires_at).getTime(), baseline: before.link });
+      setPending({ expiresAt: Date.now() + data[0].expires_in * 1000, baseline: before.link });
       setStep('ready');
     } catch (caught) {
       fail(messageOf(caught));
@@ -110,7 +138,7 @@ export function ReonboardContainer({ client, deviceId, onDone }: ReonboardContai
       readLink(client, deviceId)
         .then((read) => {
           // A failed read is retried on the next tick; the code is still live.
-          if (active && read.ok && read.link !== pending.baseline) setStep('paired');
+          if (active && read.ok && read.link !== pending.baseline) finish('paired');
         })
         .catch(() => {})
         .finally(() => {
@@ -119,7 +147,7 @@ export function ReonboardContainer({ client, deviceId, onDone }: ReonboardContai
     }, PAIRING_POLL_MS);
     const expiry = setTimeout(
       () => {
-        if (active) setStep('expired');
+        if (active) finish('expired');
       },
       Math.max(0, pending.expiresAt - Date.now()),
     );
@@ -128,7 +156,7 @@ export function ReonboardContainer({ client, deviceId, onDone }: ReonboardContai
       clearInterval(poll);
       clearTimeout(expiry);
     };
-  }, [step, pending, client, deviceId]);
+  }, [step, pending, client, deviceId, finish]);
 
   return (
     <ReonboardScreen
@@ -141,9 +169,9 @@ export function ReonboardContainer({ client, deviceId, onDone }: ReonboardContai
       onSsidChange={setSsid}
       onPasswordChange={setPassword}
       onSubmit={onSubmit}
-      onDone={onDone}
+      onDone={close}
       onRetry={() => setStep('form')}
-      onNewCode={() => onSubmit(ssid, password)}
+      onNewCode={() => setStep('form')}
     />
   );
 }

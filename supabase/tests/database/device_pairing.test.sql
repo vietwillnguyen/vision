@@ -19,10 +19,10 @@ insert into public.devices (device_id, user_id, name, device_user_id) values
   ('00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a2', 'other-device', null);
 
 -- Plaintext codes, passed between roles inside this one transaction.
-create temp table codes (label text primary key, code text, expires_at timestamptz);
+create temp table codes (label text primary key, code text, expires_at timestamptz, expires_in integer);
 grant all on codes to authenticated;
 
-select plan(52);
+select plan(53);
 
 -- devices.device_user_id
 
@@ -95,6 +95,13 @@ select ok(
   (select expires_at between now() + interval '9 minutes' and now() + interval '11 minutes'
      from codes where label = 'first'),
   'the code expires in 10 minutes'
+);
+-- The app times the QR by this duration, not by expires_at against the
+-- phone's own clock, which can be off by minutes.
+select is(
+  (select expires_in from codes where label = 'first'),
+  600,
+  'create_pairing_code also returns the code''s lifetime in seconds'
 );
 select throws_ok(
   $$select public.create_pairing_code('00000000-0000-0000-0000-0000000000b3')$$,

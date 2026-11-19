@@ -248,6 +248,8 @@ describe('ReonboardScreen', () => {
       />,
     );
     expect(screen.getByTestId('expired-message')).toHaveTextContent('This code has expired');
+    // The password was forgotten with the code, so the new one starts at the form.
+    expect(screen.getByText(/Enter your Wi-Fi password again/)).toBeTruthy();
     expect(screen.queryByTestId('qr-code')).toBeNull();
     await fireEvent.press(screen.getByTestId('new-code-button'));
     expect(onNewCode).toHaveBeenCalled();

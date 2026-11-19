@@ -57,14 +57,17 @@ grant execute on function private.is_anonymous(), private.owned_device_ids(), pr
 -- pendant to an existing device (Re-onboard keeps footage history); null
 -- creates a device when the pendant claims (first pairing). The plaintext
 -- exists only in the return value; an account has at most one live code.
+-- expires_in (seconds) is for timing the QR on the phone: comparing
+-- expires_at with the phone's own clock is off by however far that clock is.
 create function public.create_pairing_code(p_device_id uuid default null)
-  returns table (code text, expires_at timestamptz)
+  returns table (code text, expires_at timestamptz, expires_in integer)
   language plpgsql security definer set search_path = ''
 as $$
 declare
   v_uid uuid := (select auth.uid());
   v_code text;
-  v_expires timestamptz := now() + interval '10 minutes';
+  v_lifetime interval := interval '10 minutes';
+  v_expires timestamptz := now() + v_lifetime;
 begin
   if v_uid is null or not exists (
     select 1 from auth.users u where u.id = v_uid and not u.is_anonymous
@@ -80,7 +83,7 @@ begin
   v_code := translate(encode(extensions.gen_random_bytes(32), 'base64'), '+/=', '-_');
   insert into private.device_pairing_codes (code_hash, user_id, device_id, expires_at)
   values (extensions.digest(v_code, 'sha256'), v_uid, p_device_id, v_expires);
-  return query select v_code, v_expires;
+  return query select v_code, v_expires, extract(epoch from v_lifetime)::integer;
 end;
 $$;
 
