@@ -10,11 +10,18 @@
 
 > **Status note (2026-07-21):** the PiJuice Zero pHAT below is currently blocked on availability. Bring-up and integration testing are proceeding on a generic USB power bank into the Pi's power input instead - Task 3's PiJuice-specific steps (mount, verify charge API) are deferred until real battery hardware is sourced. See [`2026-07-21-visio-device-provisioning-design.md`](../specs/2026-07-21-visio-device-provisioning-design.md) for the firmware-side handling (`VISIO_BATTERY_SOURCE=none`) and researched alternatives (PiSugar 2/3, generic I2C-fuel-gauge UPS HATs, or a hand-built TP4056/IP5306 + MAX17048 combo).
 
+> **Status note (2026-11-19):** refreshed for the v1 PRD and the LED state machine in the pendant spec (PR #102).
+> The LED data line is GPIO 10 (SPI0 MOSI), already reflected in Task 3 Step 4.
+> The Uploading look (blue, pulsing) is removed, so Task 6 Step 2 no longer checks it.
+> The goal is now a typical day of moments (about 2 h recording, Stopped the rest of a 14 h day), so Task 4 gains a standby measurement.
+> Task 7 adds the M2 bench checks ([#129](https://github.com/vietwillnguyen/vision/issues/129)); the standby measurement and upload-policy decision are M3 ([#130](https://github.com/vietwillnguyen/vision/issues/130)).
+
 ## Global Constraints
 
 - Total BOM under $110 (spec target: ~$91.50 with the standard camera, ~$74.50 with the vintage OV5647 alternative).
 - Enclosure target dimensions: ~65mm x 45mm x 18mm.
-- Target continuous draw: ~1.5W (Pi Zero 2W ~1.2W + Camera Module 3 Wide ~0.3W); target runtime ~7.4 hours on the 3000mAh/3.7V battery.
+- Target continuous draw: ~1.5W (Pi Zero 2W ~1.2W + Camera Module 3 Wide ~0.3W); ~7.4 hours of continuous recording on the 3000mAh/3.7V battery is the stress case.
+  The v1 target is a typical day of moments on one charge: about 2 h recording plus Stopped for the rest of a 14 h day, which needs about 17 Wh on paper against the 11.1 Wh cell if Stopped draws ~1.2 W, so standby draw must be measured (Task 4 Step 6).
 - OS: Raspberry Pi OS Lite (Bookworm, 64-bit headless).
 - Camera choice: Camera Module 3 Wide is the default (cleaner feed, usable without the vintage filter); OV5647 is the optional vintage-look alternative - decide before ordering, since it changes the BOM total and the mounting footprint.
 
@@ -111,6 +118,7 @@ for rgb in [(0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 0), (0, 0, 0)]:
 ```
 
 Expected: green, blue, yellow, red, then dark, each for two seconds.
+Blue is only a driver colour check here; it is no longer a status look (2026-11-19).
 If colours flicker or are wrong, the 3.3 V data level is the first suspect - see the provisioning spec's "Needs the physical device" list.
 
 - [ ] [human] **Step 5: Wire the tactile button**
@@ -161,6 +169,14 @@ Either let the device run until PiJuice reports `should_halt` territory (<10%, p
 
 Expected: within a reasonable margin of the spec's ~7.4 hour estimate (11.1Wh / 1.5W). If materially short, note the gap - it affects whether the "full-day (7-8 hr) passive recording" goal from the spec is actually met and may need a larger battery or duty-cycled recording.
 
+> 2026-11-19: the "full-day (7-8 hr)" goal above is historical; continuous recording is now the stress case, and Step 6 measures what the v1 target depends on.
+
+- [ ] [human] **Step 6: Measure standby (Stopped) draw (M3, [#130](https://github.com/vietwillnguyen/vision/issues/130))**
+
+With the daemon running and Stopped (dim white LED, camera idle), measure draw the same way as Step 3 for at least 30 minutes, then repeat while the upload worker is sending a backlog.
+Compute the energy for 2 h Recording plus 12 h Stopped and compare it with the 11.1 Wh cell.
+If it does not fit, record the gap for the PRD's standby open question (lower-power standby, or a smaller daily target).
+
 ---
 
 ### Task 5: Enclosure assembly
@@ -195,7 +211,9 @@ With the enclosure closed, confirm the camera lens is unobstructed and centered 
 
 - [ ] [human] **Step 2: LED visibility check**
 
-Confirm the NeoPixel's solid green (recording), pulsing blue (uploading), pulsing yellow (low battery), and red flash (critical) states from the firmware plan's LED state machine are all visible from a normal wearing distance/angle, not hidden by the lanyard or shell edge.
+Confirm the NeoPixel's solid green (recording), pulsing yellow (low battery), and red flash (critical) states are all visible from a normal wearing distance/angle, not hidden by the lanyard or shell edge.
+The full set of looks is in the pendant spec's LED state machine (PR #102); Task 7 Step 1 checks every one at 2 m.
+The earlier pulsing blue (uploading) look is removed: upload progress is never shown on the LED.
 
 - [ ] [human] **Step 3: Button accessibility check**
 
@@ -204,6 +222,28 @@ Confirm the tactile button is reachable by touch while worn (no need to remove t
 - [ ] [human] **Step 4: Wear comfort check**
 
 Wear the assembled pendant on the lanyard for several minutes. Confirm weight distribution doesn't cause obvious discomfort or the pendant flipping to show its back consistently (camera facing away from the wearer's intended subject).
+
+---
+
+### Task 7: M2 bench checks for the LED, the button and power-on (added 2026-11-19, [#129](https://github.com/vietwillnguyen/vision/issues/129))
+
+**Verification artifact:** a pass or fail per check, recorded in this plan or on the issue.
+
+- [ ] [human] **Step 1: LED looks at 2 m**
+
+With the firmware's LED resolver in place, show each look from the pendant spec's resolver table (dim white, cyan pulsing, cyan dim, green, red flashing, yellow pulsing, solid red at full brightness, white pulsing, magenta flag ack, and the hold previews).
+Confirm each is identifiable at 2 m in daylight and indoors, and that no pulse or flash reaches full dark.
+Compare against the colour-blind simulation output from the firmware unit test.
+
+- [ ] [human] **Step 2: Blind hold test through clothing (BENCH-2)**
+
+Worn under a shirt or jacket, without looking, perform a short press, a 2 s hold, a 5 s hold and a 10 s hold from Stopped, ten times each.
+Confirm each lands on the intended gesture; note any misfires.
+
+- [ ] [human] **Step 3: Power on after a graceful power-off without a PiJuice**
+
+Power off with the 5 s hold, then try to bring the Pi back without unplugging.
+The Zero 2W wakes from halt only on GPIO 3, which the PiJuice needs for I2C, so record whether unplug and replug is the only way back without a PiJuice, and how the PiJuice's own button behaves once fitted.
 
 ---
 

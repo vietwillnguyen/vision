@@ -1,5 +1,7 @@
 # Visio Device Provisioning & Preflight Implementation Plan
 
+> **Superseded (2026-11-19):** the LED states and boot-to-Recording behaviour in this executed plan are superseded by the LED state machine in the pendant spec (PR #102); this plan is kept as history and not rewritten.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An idempotent device-provisioning script and a firmware-level preflight check for the Visio pendant's Raspberry Pi Zero 2W, both aware that the PiJuice battery HAT is currently unavailable and must not block on its absence.
