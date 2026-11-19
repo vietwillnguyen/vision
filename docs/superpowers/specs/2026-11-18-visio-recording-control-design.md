@@ -106,11 +106,11 @@ States, with the LED each one shows:
 
 | State | Entered when | LED | Leaves when |
 |---|---|---|---|
-| BOOTING | process start; battery check, onboarding, registration, orphan recovery, startup flush | STOPPED (dim white), or LOW_BATTERY | the recording loop starts |
+| BOOTING | process start; battery check, onboarding, registration, orphan recovery, startup flush | STOPPED (dim white); a low battery goes to the app, since health states only show while recording | the recording loop starts |
 | STOPPED | loop start on every boot; a hold while RECORDING | STOPPED | a hold (to RECORDING); SIGTERM (to SHUTTING_DOWN); battery halt (to HALTED) |
 | RECORDING | a hold while STOPPED | RECORDING, UPLOADING, LOW_BATTERY or CRITICAL as today | a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt |
 | SHUTTING_DOWN | SIGTERM or SIGINT in any state | SHUTTING_DOWN (white) | the process exits |
-| HALTED | battery under the halt threshold, observed while recording or while idle | CRITICAL (red), applied last as today | the process exits 0 |
+| HALTED | battery under the halt threshold, observed while recording or while idle | HALTED (red, solid; PR #101), applied last | the queue drains, then a clean power-off (PR #101) |
 
 The loop body becomes: check battery (halt if needed); if `stop` is set, show SHUTTING_DOWN and break; if `recording` is clear, make sure the LED and status say stopped, then `wake.wait(timeout=IDLE_BATTERY_POLL_SEC)` and continue; otherwise record one segment with `cancel_capture` and hand the file to the worker exactly as today.
 Transitions are observed on the main thread only, so the status push and LED change for a transition happen once, in order, on one thread.
@@ -135,9 +135,11 @@ Two new `LedState`s: `STOPPED` as dim white `(30, 30, 30)` solid and `SHUTTING_D
 Never "LED off": a dark pendant is indistinguishable from a dead one, and a wearer who cannot tell will yank power, which is what this whole feature exists to avoid.
 The SPI driver renders pulsing as solid, so on today's hardware the two states differ by brightness alone; that is acceptable because they never need to be told apart at the same moment (one is a resting state, the other lasts seconds and ends with the power).
 
-`next_led_state` gains a `recording` input and a `shutting_down` input, with precedence SHUTTING_DOWN > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING or STOPPED.
-The base state is RECORDING when the loop is capturing and STOPPED when it is idle; a segment uploading after a stop press shows UPLOADING then returns to STOPPED, not to RECORDING as `_upload_showing_led` would do today.
-The battery-halt path keeps applying CRITICAL last, after the worker join, so it remains the final LED state.
+The pendant spec's LED state machine (PR #102) owns the full table, and this section follows it.
+It splits the LED into two regions: a capture region (STOPPED, RECORDING, SHUTTING_DOWN, HALTED) that always decides the look, and a health region (CRITICAL, LOW_BATTERY, UPLOADING) that only colours the LED while capturing.
+`next_led_state` therefore gains a `recording` input and a `shutting_down` input, with precedence HALTED > SHUTTING_DOWN > (STOPPED, if not recording) > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING.
+While STOPPED no health condition shows: a segment uploading after a stop press, a latched upload Critical or a low battery all leave the LED dim white, so a stopped pendant never shows a recording-family colour to anyone nearby, and those conditions reach the phone through `device_status` instead.
+The battery-halt path applies HALTED (red, solid; PR #101) last, after the worker join, so it remains the final LED state.
 
 Ownership: the single-owner invariant stays, generalised.
 A `LedController` wraps the driver and holds the current condition set (`recording`, `uploading`, `battery_low`, `upload_critical`, `shutting_down`) under one lock; callers `update(...)` a condition and the controller recomputes the state and writes the driver only when it changed.
@@ -150,11 +152,14 @@ Lands after PR #98 merges and is rebased onto its `UploadHealth` shape.
 The existing GPIO 17 button is overloaded by hold time; no new GPIO, BOM or enclosure change.
 
 - Short press (released before the hold threshold) while RECORDING: write a flag marker, as today.
-- Hold for 2 s or longer, in either state: toggle recording.
+- Hold for 2 s or longer while RECORDING: stop, committed the moment the hold reaches 2 s (`when_held`).
+- Hold while STOPPED: committed on release, not at 2 s, because the same button also re-onboards with a 10 s hold from STOPPED (pendant spec, LED state machine). At 2 s the LED previews green (release to start recording) and at 10 s it previews cyan (release to scan for a QR code); releasing before 2 s does nothing.
 - Short press while STOPPED: ignored (decision 4); a marker written then would match nothing in the pipeline's restart-gap window and would be DLQ'd as unmatched.
 
 gpiozero supports this natively: `Button(hold_time=2.0, hold_repeat=False)` fires `when_held` once the button has stayed down for `hold_time`, and `when_released` on release.
-There is no built-in "was held" flag on `Button`, so a small pure-Python `ButtonDispatcher` tracks it: `on_hold` sets a `held` flag and calls `toggle()`; `on_release` writes the flag marker only when `held` is clear, then clears it.
+There is no built-in "was held" flag on `Button`, so a small pure-Python `ButtonDispatcher` tracks it: `on_hold` sets a `held` flag and, while RECORDING, calls `toggle()`; while STOPPED it only asks `LedController` for the green preview.
+`on_release` reads gpiozero's `held_time`: while STOPPED it starts recording for a hold of 2-10 s and starts re-onboarding for 10 s or more; while RECORDING it writes the flag marker only when `held` is clear; then it clears the flag.
+The 10 s preview needs a timer the dispatcher arms in `on_hold` (gpiozero fires `when_held` once, at `hold_time`), cancelled on release.
 The flag therefore moves from press to release; a hold never also flags.
 `FlagButton` (the protocol at `flag_button.py:17-18`) grows `on_hold` and `on_release` beside `on_press`, and `GpioZeroFlagButton` binds all three.
 The existing 2 s press cooldown stays for flags.
@@ -293,6 +298,6 @@ Phases 1 and 2 can be reviewed as one PR if the reviewer prefers fewer rebases o
 
 ## Open Questions / Future Work
 
-- A dedicated ONBOARDING LED state, so a device scanning for a QR code is distinguishable from one that is stopped; today both would be dim white.
+- A dedicated ONBOARDING LED state, so a device scanning for a QR code is distinguishable from one that is stopped; the pendant spec (PR #102) defines it as Scanning, cyan pulsing.
 - LED animation (a timed pattern thread) would let SHUTTING_DOWN and STOPPED differ by more than brightness and would make a brief acknowledgement blink for an ignored short press possible.
 - Remote stop (decision 1 option b) if the captain wants it after living with the button.
