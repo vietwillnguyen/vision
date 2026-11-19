@@ -153,13 +153,14 @@ The existing GPIO 17 button is overloaded by hold time; no new GPIO, BOM or encl
 
 - Short press (released before the hold threshold) while RECORDING: write a flag marker, as today.
 - Hold for 2 s or longer while RECORDING: stop, committed the moment the hold reaches 2 s (`when_held`).
-- Hold while STOPPED: committed on release, not at 2 s, because the same button also re-onboards with a 10 s hold from STOPPED (pendant spec, LED state machine). At 2 s the LED previews green (release to start recording) and at 10 s it previews cyan (release to scan for a QR code); releasing before 2 s does nothing.
+- Hold while STOPPED: committed on release, not at 2 s, because the same button also re-onboards with a 10 s hold from STOPPED (pendant spec, LED state machine). At 2 s the LED previews green (release to start recording), at 5 s white pulsing (release to power off safely) and at 10 s cyan (release to scan for a QR code); releasing before 2 s does nothing.
+- Hold 5 s or more in any state: a graceful power-off (pendant spec, Power off). A hold that started while RECORDING has already stopped at 2 s and continues up the same ladder.
 - Short press while STOPPED: ignored (decision 4); a marker written then would match nothing in the pipeline's restart-gap window and would be DLQ'd as unmatched.
 
 gpiozero supports this natively: `Button(hold_time=2.0, hold_repeat=False)` fires `when_held` once the button has stayed down for `hold_time`, and `when_released` on release.
 There is no built-in "was held" flag on `Button`, so a small pure-Python `ButtonDispatcher` tracks it: `on_hold` sets a `held` flag and, while RECORDING, calls `toggle()`; while STOPPED it only asks `LedController` for the green preview.
-`on_release` reads gpiozero's `held_time`: while STOPPED it starts recording for a hold of 2-10 s and starts re-onboarding for 10 s or more; while RECORDING it writes the flag marker only when `held` is clear; then it clears the flag.
-The 10 s preview needs a timer the dispatcher arms in `on_hold` (gpiozero fires `when_held` once, at `hold_time`), cancelled on release.
+`on_release` reads gpiozero's `held_time`: while STOPPED it starts recording for a hold of 2-5 s and starts re-onboarding for 10 s or more; in any state a hold of 5-10 s (or 10 s or more outside STOPPED) starts a graceful power-off through SHUTTING_DOWN, the same path as SIGTERM followed by `systemctl poweroff`; while RECORDING it writes the flag marker only when `held` is clear; then it clears the flag.
+The 5 s (white pulsing, power off) and 10 s previews need a timer the dispatcher arms in `on_hold` (gpiozero fires `when_held` once, at `hold_time`), cancelled on release.
 The flag therefore moves from press to release; a hold never also flags.
 `FlagButton` (the protocol at `flag_button.py:17-18`) grows `on_hold` and `on_release` beside `on_press`, and `GpioZeroFlagButton` binds all three.
 The existing 2 s press cooldown stays for flags.
