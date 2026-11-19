@@ -10,14 +10,16 @@
 
 Visio is a cheap wearable pendant AI life-logger for home and personal vlogging use.
 It is inspired by looki.ai but targets a DIY maker audience using off-the-shelf embedded components.
-The device records passively all day, uploads footage to the cloud over home WiFi, and an AI pipeline assembles a 60-120 second highlight reel automatically each night.
+The wearer records the moments they choose (a 2 s button hold starts and stops recording), the device uploads footage to the cloud over home WiFi in the background, and an AI pipeline assembles a 60-120 second highlight reel automatically each night.
+A typical day is sized as about 2 h of recording (1-2 h expected), not a full day: storage is the dominant cost (decision 2026-11-19, PRD `docs/prd/2026-11-18-visio-v1-prd.html`).
+Recording all day still works, at about four times the storage, cost and power.
 
 ---
 
 ## Goals
 
 - Total hardware BOM under $110.
-- Full-day (7-8 hr) passive recording without user interaction.
+- A typical day of moments (about 2 h recorded, Stopped the rest of the day) on one charge; continuous recording (about 7.4 hr on paper) is the stress case, not the target.
 - Nightly AI-generated highlight reel delivered via push notification.
 - Vintage / nostalgic aesthetic available as a post-process filter option.
 - Mobile companion app for viewing reels, browsing raw footage, and monitoring device status.
@@ -416,7 +418,7 @@ Running is a parent state: its two edges out (graceful power-off and power cut) 
 
 **Upload policy (open decision for M3).** Today, and through v1 on USB power, the pendant uploads whenever it is online, recording or not.
 For the battery build, the alternative is to upload only while charging, as GoPro's cloud auto-upload and the Narrative Clip do, because Wi-Fi uploads cost battery and heat on a Zero 2W that is also encoding video.
-The cost is a later backup: 8 h of footage is about 14.4 GB, which needs about 8 Mbps of upload for 4 h of overnight charging, so the nightly pipeline (02:00 ICT) would have to wait for the upload or run on whatever arrived.
+The cost is a later backup: a typical day of moments (2 h) is about 3.6 GB, which needs about 2 Mbps of upload for 4 h of overnight charging, and a full 8 h day (about 14.4 GB) needs about 8 Mbps, and a slow link means the nightly pipeline (02:00 ICT) would have to wait for the upload or run on whatever arrived.
 A middle option is to upload while recording only above a charge threshold (for example 50%) and otherwise wait for the charger.
 Decide at M3 with the measured power cost of uploading; it changes only the Waiting to Uploading rule above.
 
@@ -644,7 +646,8 @@ Status: designed, not built. Today nothing in the cloud is ever deleted.
 
 This follows how cloud cameras handle continuous footage: retention follows how much the wearer cared, not when it was recorded.
 Continuous recording gets the shortest window (Nest Aware keeps 24/7 footage about 10 days, against 30-60 days for event clips), clips the user marked are exempt (a dashcam's locked event files, Nest's saved clips), deletion is soft with a recovery window (Axon evidence, Google Photos' trash), and the window is a setting (Ring).
-Seven days also cuts storage at rest from about 430 GB to about 100 GB per wearer (see `docs/research/2026-11-19-visio-market-research.md`, PR #104).
+For a typical day of moments (2 h, about 3.6 GB at 4 Mbps), seven days keeps about 25 GB at rest per wearer, against about 110 GB a month that nothing deletes today.
+A wearer who records 8 h a day would keep about 100 GB instead of 430 GB a month (see `docs/research/2026-11-19-visio-market-research.md`, PR #104).
 
 | Category | Where | Kept | Removed by |
 |---|---|---|---|
@@ -678,15 +681,17 @@ The one exception is `rejected/`, which today grows forever: at boot the daemon 
 
 ### Cost Estimate
 
-Per day of full 8-hour recording (~14.4GB raw footage at 4 Mbps, ~480 one-minute segments):
+Per typical day of moments (about 2 h recorded, ~3.6GB raw footage at 4 Mbps, ~120 one-minute segments):
 
 | Service | Est. Cost |
 |---|---|
-| Whisper transcription (~8 hrs audio) | ~$0.20 |
-| Claude Haiku vision (motion-gated, ~30% of segments) | ~$0.25-0.50 (five times the calls of 5-minute segments) |
+| Whisper transcription (~2 hrs audio) | ~$0.05 |
+| Claude Haiku vision (motion-gated, ~30% of segments) | ~$0.06-0.13 (five times the calls of 5-minute segments) |
 | Supabase Storage egress | ~$0.01 |
-| Storage at rest (7-day raw window, about 100 GB per wearer) | not yet priced against the current plan |
-| **Total** | **<$0.75/day** |
+| Storage at rest (7-day raw window, about 25 GB per wearer) | not yet priced against the current plan |
+| **Total** | **<$0.20/day** |
+
+A full 8-hour day (~14.4GB, ~480 segments) scales each line by four and stays under $0.75/day, with about 100 GB at rest.
 
 ---
 
@@ -785,3 +790,6 @@ vision/
 - v2: on-device wake-word detection (Porcupine) to auto-flag audio moments without cloud round-trip.
 - v2: Bluetooth Low Energy status broadcast so the mobile app gets real-time device status without Supabase round-trip when on the same local network.
 - Enclosure: explore off-the-shelf plastic pendant shells (AliExpress) to avoid 3D printing requirement.
+- Auto-stop: should a recording session stop itself after N minutes to protect storage, since a forgotten one records until the SD card fills?
+- Standby power: Stopped still runs the Pi (about 1.2 W on paper), so 2 h recording plus 12 h Stopped needs about 17 Wh against the 11.1 Wh cell; measure at M3 and decide whether a lower-power standby is needed.
+- Short days: what should the nightly reel do when a day holds under 60 s of footage?

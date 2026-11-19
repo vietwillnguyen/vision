@@ -29,7 +29,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: b58d24b26ffde47b9bcabe0182a58327d011a7d4f1ce858f5b2fe8c82e405783  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 1e91a96f745e21af4f846ca5f084280a235e883b9fb698c48764b13b6dcc121c  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-19 (LED state machine: two regions, recording control from PR #103, review fixes) -->
@@ -69,7 +69,7 @@
         and
         <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">device provisioning &amp; preflight</a>
         specs (source of truth - edit those files, then regenerate this page).
-        A wearable pendant that records passively all day and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
+        A wearable pendant that records the moments the wearer chooses (sized for about 2 h a day) and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
       </p>
     </div>
     <div class="stats stats-vertical sm:stats-horizontal shadow bg-base-100 w-full">
@@ -81,12 +81,12 @@
       <div class="stat">
         <div class="stat-title">Recording window</div>
         <div class="stat-value text-primary text-2xl">~7.4 hrs</div>
-        <div class="stat-desc">3000mAh @ ~1.5W continuous draw</div>
+        <div class="stat-desc">continuous, 3000mAh @ ~1.5W; the stress case, not a typical day</div>
       </div>
       <div class="stat">
         <div class="stat-title">Pipeline cost</div>
-        <div class="stat-value text-primary text-2xl">&lt;$0.75/day</div>
-        <div class="stat-desc">Whisper + Claude Haiku vision, motion-gated</div>
+        <div class="stat-value text-primary text-2xl">&lt;$0.20/day</div>
+        <div class="stat-desc">2 h day of moments (~3.6 GB); Whisper + Claude Haiku vision, motion-gated</div>
       </div>
       <div class="stat">
         <div class="stat-title">Status</div>
