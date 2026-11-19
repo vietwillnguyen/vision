@@ -1,0 +1,79 @@
+# Reproduction: a SIGTERM landing mid-capture waits out the whole segment
+#
+# Branch point: main 5073cce (before the interruptible capture).
+# The fake camera blocks for a 5 s segment; the test sends a real SIGTERM
+# once the capture has started and measures how long the loop takes to
+# return. The record_count and upload assertions pass, so the harness is
+# sound and the defect is isolated to the stop latency.
+#
+$ uv run --locked --extra dev pytest -q tests/test_daemon.py -k sigterm_during_a_capture
+
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_sigterm_during_a_capture_cuts_it_short_instead_of_waiting_for_the_segment _
+
+tmp_path = PosixPath('/tmp/pytest-of-viet/pytest-556/test_sigterm_during_a_capture_0')
+
+    def test_sigterm_during_a_capture_cuts_it_short_instead_of_waiting_for_the_segment(
+        tmp_path,
+    ):
+        # The loop observes ``stop`` only between segments, so a SIGTERM landing
+        # just after a capture starts waits out the whole segment: 300 s measured
+        # on the device with the old five-minute segments, and a full minute with
+        # today's 60 s default. systemd's stop timeout fires long before that and
+        # SIGKILLs the daemon, which is what loses the in-flight segment. The
+        # capture must be cut short cleanly instead.
+        stop = threading.Event()
+        capturing = threading.Event()
+        storage = FakeStorageClient()
+    
+        class SlowCapture(FakeCommandRunner):
+            def run(self, args: list[str]) -> None:
+                if args[0] == "rpicam-vid":
+                    capturing.set()
+                    time.sleep(STOP_SEGMENT_SEC)
+                super().run(args)
+    
+        runner = SlowCapture()
+        deps = _make_deps(
+            tmp_path,
+            command_runner=runner,
+            battery_reader=FakeBatteryReader(85),
+            led_driver=FakeLedDriver(),
+            storage_client=storage,
+        )
+    
+        signalled_at: list[float] = []
+    
+        def sigterm_mid_capture() -> None:
+            assert capturing.wait(timeout=10), "the capture never started"
+            signalled_at.append(time.monotonic())
+            os.kill(os.getpid(), signal.SIGTERM)
+    
+        # The daemon's own handler shape: SIGTERM sets stop, and the loop is on
+        # the main thread, so the handler runs there exactly as it does in main().
+        previous_handler = signal.signal(signal.SIGTERM, lambda *_: stop.set())
+        killer = threading.Thread(target=sigterm_mid_capture)
+        try:
+            killer.start()
+            run_recording_loop(
+                deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0))
+            )
+        finally:
+            killer.join(timeout=10)
+            signal.signal(signal.SIGTERM, previous_handler)
+    
+        stop_latency_sec = time.monotonic() - signalled_at[0]
+        assert runner.record_count == 1
+        # The cut-short segment is muxed, queued and uploaded like a full one.
+        assert storage.uploaded == ["device-abc/20261118_090000.mp4"]
+>       assert stop_latency_sec < STOP_SEGMENT_SEC / 2, (
+            f"stop took {stop_latency_sec:.1f}s of a {STOP_SEGMENT_SEC:.0f}s segment"
+        )
+E       AssertionError: stop took 5.0s of a 5s segment
+E       assert 5.001402512018103 < (5.0 / 2)
+
+tests/test_daemon.py:500: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_daemon.py::test_sigterm_during_a_capture_cuts_it_short_instead_of_waiting_for_the_segment
+1 failed, 46 deselected in 5.49s

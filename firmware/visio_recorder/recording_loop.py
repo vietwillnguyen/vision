@@ -474,6 +474,20 @@ def retry_pending_segments(
     )
 
 
+def queue_segment(
+    command_runner: CommandRunner, h264_path: Path, queue_dir: Path, framerate: int
+) -> Path:
+    """Mux one finished capture into the upload queue and return its queued path.
+
+    The raw capture is removed once the MP4 exists, so from here on the queue
+    is the segment's only copy and the next boot's ``flush_pending`` recovers
+    it if this run never uploads it.
+    """
+    mp4_path = mux_segment(command_runner, h264_path, framerate)
+    h264_path.unlink()
+    return enqueue(queue_dir, mp4_path)
+
+
 def on_segment_complete(
     h264_path: Path,
     queue_dir: Path,
@@ -490,7 +504,42 @@ def on_segment_complete(
     upload_limit: UploadLimit,
     upload_health: UploadHealth | None = None,
 ) -> SegmentResult:
-    """Mux, queue and upload one finished capture, driving the LED and status.
+    """Mux, queue and upload one finished capture: ``queue_segment`` then
+    ``upload_segment``."""
+    return upload_segment(
+        queued_path=queue_segment(command_runner, h264_path, queue_dir, framerate),
+        # Per segment: a .ts capture carries the microphone track.
+        audio_active=h264_path.suffix == ".ts",
+        queue_dir=queue_dir,
+        storage_client=storage_client,
+        status_client=status_client,
+        led_driver=led_driver,
+        battery_reader=battery_reader,
+        device_id=device_id,
+        segments_uploaded_today=segments_uploaded_today,
+        disk_stats_reader=disk_stats_reader,
+        data_dir=data_dir,
+        upload_limit=upload_limit,
+        upload_health=upload_health,
+    )
+
+
+def upload_segment(
+    queued_path: Path,
+    audio_active: bool,
+    queue_dir: Path,
+    storage_client: StorageClient,
+    status_client: StatusClient,
+    led_driver: LedDriver,
+    battery_reader: BatteryReader,
+    device_id: str,
+    segments_uploaded_today: int,
+    disk_stats_reader: DiskStatsReader,
+    data_dir: Path,
+    upload_limit: UploadLimit,
+    upload_health: UploadHealth | None = None,
+) -> SegmentResult:
+    """Upload one queued segment, driving the LED and reporting the status.
 
     ``upload_health`` is the worker's run-long consecutive-failure counter.
     Both LED states are derived from it, so a run already escalated to
@@ -501,10 +550,6 @@ def on_segment_complete(
     escalation history, which is what a single-segment caller wants.
     """
     upload_health = UploadHealth() if upload_health is None else upload_health
-    mp4_path = mux_segment(command_runner, h264_path, framerate)
-    h264_path.unlink()
-    queued_path = enqueue(queue_dir, mp4_path)
-
     battery_status = read_battery_status(battery_reader)
 
     def upload(show_uploading: Callable[[], None]) -> UploadOutcome:
@@ -531,8 +576,7 @@ def on_segment_complete(
         queue_dir=queue_dir,
         segments_uploaded_today=segments_uploaded_today,
         recording_active=True,
-        # Per segment: a .ts capture carries the microphone track.
-        audio_active=h264_path.suffix == ".ts",
+        audio_active=audio_active,
     )
     status_client.upsert_device_status(asdict(status))
 

@@ -11,6 +11,17 @@ WorkingDirectory=/opt/visio-recorder
 Restart=on-failure
 RestartSec=5
 User=pi
+# The daemon owns its rpicam-vid child and cuts the capture short on SIGTERM
+# itself, so systemd must signal only the daemon: the default
+# KillMode=control-group would SIGTERM rpicam-vid directly and lose the
+# finalised short segment the daemon is in the middle of saving.
+KillMode=mixed
+# The bounded shutdown, in order: cancel the capture, mux and queue the cut
+# segment, push the final device_status (recording_active=false), then let the
+# upload worker drain the queue. Everything before the drain fits well inside
+# this; an upload still running when it expires is cut off by the SIGKILL, and
+# its segment stays queued for the next boot's flush to upload.
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
