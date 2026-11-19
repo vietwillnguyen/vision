@@ -18,13 +18,36 @@ class FakeAuthResponse:
         self.user = FakeUser(user_id)
 
 
+class FakeSession:
+    def __init__(self, access_token: str, refresh_token: str) -> None:
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+
+
 class FakeAuth:
+    """supabase-py's auth client, as far as the daemon uses it.
+
+    ``refresh_on_set`` makes ``set_session`` behave as it does for an expired
+    access token: it refreshes and notifies TOKEN_REFRESHED before returning.
+    """
+
     def __init__(self, user_id: str) -> None:
         self._user_id = user_id
         self.session_set_with: tuple[str, str] | None = None
+        self.refresh_on_set: FakeSession | None = None
+        self._subscribers: list = []
+
+    def on_auth_state_change(self, callback) -> None:
+        self._subscribers.append(callback)
+
+    def emit(self, event: str, session: FakeSession | None) -> None:
+        for callback in self._subscribers:
+            callback(event, session)
 
     def set_session(self, access_token: str, refresh_token: str) -> FakeAuthResponse:
         self.session_set_with = (access_token, refresh_token)
+        if self.refresh_on_set is not None:
+            self.emit("TOKEN_REFRESHED", self.refresh_on_set)
         return FakeAuthResponse(self._user_id)
 
 
@@ -155,6 +178,70 @@ def test_build_sets_the_session_before_any_client_use(tmp_path):
         client_factory=lambda url, key: fake,
     )
     assert fake.session_set_with == ("at", "rt")
+
+
+def _stored_session(path: Path) -> dict:
+    return json.loads(path.read_text())
+
+
+def test_a_token_refresh_during_the_run_is_written_back_to_session_json(tmp_path):
+    # Refresh tokens rotate and each one works once, so a pendant that only
+    # ever keeps the token it was onboarded with cannot log in after a reboot
+    # once it has refreshed twice in a run (reproduced against the local
+    # stack: "Invalid Refresh Token: Already Used").
+    fake = FakeSupabase()
+    session_path = _write_session(tmp_path)
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    fake.auth.emit("TOKEN_REFRESHED", FakeSession("at-2", "rt-2"))
+
+    assert _stored_session(session_path) == {
+        "access_token": "at-2",
+        "refresh_token": "rt-2",
+    }
+
+
+def test_the_refresh_set_session_does_at_boot_is_written_back_too(tmp_path):
+    # An expired access token makes set_session refresh before it returns, so
+    # the listener has to be registered before the session is set.
+    fake = FakeSupabase()
+    fake.auth.refresh_on_set = FakeSession("at-boot", "rt-boot")
+    session_path = _write_session(tmp_path)
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    assert _stored_session(session_path)["refresh_token"] == "rt-boot"
+
+
+def test_events_without_a_session_leave_session_json_alone(tmp_path):
+    # A sign-out notification carries no session; erasing the file would turn
+    # a transient server-side revoke into a permanent loss of the login.
+    fake = FakeSupabase()
+    session_path = _write_session(tmp_path)
+    before = session_path.read_text()
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    fake.auth.emit("SIGNED_OUT", None)
+
+    assert session_path.read_text() == before
+
+
+def test_a_written_back_session_stays_private_and_leaves_no_temp_file(tmp_path):
+    fake = FakeSupabase()
+    session_path = _write_session(tmp_path)
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    fake.auth.emit("TOKEN_REFRESHED", FakeSession("at-2", "rt-2"))
+
+    assert session_path.stat().st_mode & 0o777 == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["session.json"]
 
 
 def test_storage_adapter_uploads_to_bucket_and_path(tmp_path):

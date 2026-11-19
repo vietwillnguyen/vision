@@ -114,6 +114,30 @@ def write_nm_keyfile(path: Path, ssid: str, password: str) -> None:
 def write_session_credentials(
     path: Path, access_token: str, refresh_token: str
 ) -> None:
-    _write_private_text(
-        path, json.dumps({"access_token": access_token, "refresh_token": refresh_token})
-    )
+    """Replace ``session.json`` atomically, readable only by its owner.
+
+    The refresh token rotates on every refresh and the old one stops working,
+    so this file is rewritten during normal running, not just at onboarding.
+    A power cut halfway through an in-place write would leave neither token,
+    and the pendant would need re-onboarding; writing a temporary file in the
+    same directory, fsyncing it and renaming it over the old one means the
+    file always holds one complete session.
+    """
+    content = json.dumps({"access_token": access_token, "refresh_token": refresh_token})
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)

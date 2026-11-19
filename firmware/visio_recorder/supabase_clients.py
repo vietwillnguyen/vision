@@ -1,4 +1,6 @@
 import json
+import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +10,9 @@ from storage3.exceptions import StorageApiError
 from supabase import create_client
 
 from visio_recorder.uploader import ObjectTooLargeError
+from visio_recorder.wifi_onboard import write_session_credentials
+
+_logger = logging.getLogger(__name__)
 
 # Content types by suffix for everything firmware uploads. Explicit rather than
 # `mimetypes`, whose answer depends on the host's /etc/mime.types. Anything
@@ -122,6 +127,31 @@ class SupabaseClients:
     registration: SupabaseRegistration
 
 
+def _session_persister(session_path: Path) -> Callable[[str, Any], None]:
+    """An auth listener that keeps ``session.json`` on the newest tokens.
+
+    Supabase rotates the refresh token on every refresh and accepts only the
+    newest one (plus its immediate predecessor), so a pendant that kept only
+    the token it was onboarded with lost its login on the first reboot after
+    two refreshes - about two hours of running. Events without a session (a
+    sign-out) leave the file alone, so a transient revoke is not turned into
+    a deleted login. The lock serialises supabase-py's auto-refresh timer
+    thread with any other refresh.
+    """
+    lock = threading.Lock()
+
+    def persist(event: str, session: Any) -> None:
+        if session is None:
+            return
+        with lock:
+            write_session_credentials(
+                session_path, session.access_token, session.refresh_token
+            )
+        _logger.info("session %s; saved the rotated tokens", event.lower())
+
+    return persist
+
+
 def build_supabase_clients(
     url: str,
     key: str,
@@ -130,6 +160,9 @@ def build_supabase_clients(
 ) -> SupabaseClients:
     client = client_factory(url, key)
     session = json.loads(session_path.read_text())
+    # Registered before set_session, which refreshes an expired access token
+    # before it returns: that first rotation has to be saved too.
+    client.auth.on_auth_state_change(_session_persister(session_path))
     auth_response = client.auth.set_session(
         session["access_token"], session["refresh_token"]
     )
