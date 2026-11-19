@@ -290,7 +290,7 @@ The LED cannot show all of them on one pixel, so a single pure resolver (the suc
 
 - **Capture region** - Booting, Scanning, Setup needed, Stopped, Recording, Shutting down, Halted (battery or camera).
   Exactly one at a time; driven by the recording-control state machine of PR #103; decides whether the camera is capturing.
-- **Upload region** - Idle, Waiting, Uploading.
+- **Upload region** - Backed up, Waiting (with a reason), Uploading.
   Exactly one at a time; owned by the upload worker thread; runs alongside Stopped and Recording, and never changes the LED.
 - **Health conditions** - SD low, uploads failing, battery low.
   Flags with their own set and clear thresholds, not states; any number can hold at once.
@@ -329,11 +329,21 @@ What the wearer can do in each state that needs them:
 
 Upload region (the upload worker; it runs while the daemon is in Stopped or Recording, finishes only its in-flight upload during a battery halt, and drains within the `TimeoutStopSec=30` budget during Shutting down):
 
-| State | Enters when | Exits when (to) |
-|---|---|---|
-| Idle | The queue is empty | A segment finishes or a flag is written: with `full` connectivity (Uploading), without it (Waiting) |
-| Waiting | Files are queued but there is no `full` connectivity, or an upload just failed | The backoff deadline passes (30 s doubling to 480 s, on its own counter) and connectivity is `full`, or a new file arrives while online (Uploading); the daemon stops (it ends; the queue stays on the SD card) |
-| Uploading | One file is in flight | Success and the queue is empty (Idle); success with more queued (the next file, still Uploading); failure (Waiting); the halt or stop budget runs out (it ends; the file stays queued) |
+| State | Means for a person | Enters when | Exits when (to) |
+|---|---|---|---|
+| Backed up | Nothing is at risk: every recorded clip is in the cloud | The queue is empty | A segment finishes or a flag is written: with `full` connectivity (Uploading), without it (Waiting, reason `offline`) |
+| Waiting | Clips are on the SD card only, and the reason says why | Files are queued and something blocks sending them; the reason is one of `offline` (no `full` NetworkManager connectivity), `retry_backoff` (an upload just failed; next try at the deadline) or, from M3, `policy` (the upload policy holds uploads, for example until the charger is connected) | The blocker clears: connectivity is `full`, the backoff deadline passes (30 s doubling to 480 s, on its own counter), or the policy allows it; a new file arriving while online also starts a round (Uploading); the daemon stops (it ends; the queue stays on the SD card) |
+| Uploading | Footage is being sent now | One file is in flight | Success and the queue is empty (Backed up); success with more queued (the next file, still Uploading); failure (Waiting, reason `retry_backoff`); the halt or stop budget runs out (it ends; the file stays queued) |
+
+The reason is data on Waiting rather than separate states, so the M3 upload-policy decision adds a reason, not a state.
+This mirrors how backup products report themselves (Google Photos' "Backup complete", "Backing up" and "Waiting for Wi-Fi"; Android WorkManager's network and charging constraints gating queued work).
+
+The pendant reports the region to the phone through a planned `device_status.upload_status` field (`backed_up`, `uploading`, `waiting_offline`, `waiting_retry`, `waiting_policy`), written with the existing per-segment and transition upserts, so the app's Device tab can say "Backed up", "Uploading 3 clips" or "Waiting for Wi-Fi, 12 clips since 14:05" (with `segments_pending` and `oldest_pending_at`).
+The LED never shows it.
+
+Retries are idempotent without overwriting, because the queue is an on-disk outbox that is delivered at least once (a power cut can land between a finished upload and the local delete).
+`SupabaseStorage.upload` looks the object up first: the same key with the same byte size counts as already uploaded and is skipped, and the same key with a different size is refused rather than overwritten, because object keys are second-resolution local timestamps that can repeat (a DST fall-back, or a boot without an RTC before NTP sync) and an overwrite would destroy a different segment.
+Planned fix for that refusal: today it raises on every retry, so the file stays queued forever and counts as an upload failure each round, which can latch Critical. A colliding segment is instead uploaded under a suffixed key (for example `20261119_140500-2.mp4`), so both segments are kept and the queue keeps moving.
 
 Health conditions (flags, evaluated continuously; they only affect the LED while Recording):
 
@@ -393,12 +403,12 @@ Upload region, running at the same time on the worker thread:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle
-    Idle --> Uploading: file queued, online
-    Idle --> Waiting: file queued, offline
-    Uploading --> Idle: queue empty
-    Uploading --> Waiting: upload failed
-    Waiting --> Uploading: deadline passed, online
+    [*] --> BackedUp
+    BackedUp --> Uploading: file queued, online
+    BackedUp --> Waiting: file queued, offline
+    Uploading --> BackedUp: queue empty
+    Uploading --> Waiting: upload failed (retry_backoff)
+    Waiting --> Uploading: blocker cleared
 ```
 
 The two diagrams are concurrent regions of one device: capture runs on the main thread and uploads on the worker thread at the same time; a success with more files queued goes straight to the next file.
@@ -510,7 +520,7 @@ segments_rejected, audio_active, updated_at
 ```
 
 Planned: `oldest_pending_at`, the capture time of the oldest segment still waiting to upload, so the app and the nightly pipeline can tell a stale backup from a normal offline walk (see the LED state machine).
-Planned: `stop_reason` (`button` or `storage_full`), `clock_synced` and `throttled`, so conditions the LED deliberately does not show still reach the phone.
+Planned: `stop_reason` (`button` or `storage_full`), `upload_status` (see the upload region), `clock_synced` and `throttled`, so conditions the LED deliberately does not show still reach the phone.
 The nightly pipeline also treats a stale `updated_at` as a backup problem, because a pendant that cannot reach Supabase cannot report its own backlog.
 `audio_active` says whether the pendant is recording its microphone (see Audio Capture).
 `segments_rejected` is the number of segments the firmware gave up uploading because they are over the storage size limit and could not be split (see Segment Size Contract).

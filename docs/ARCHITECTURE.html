@@ -21,6 +21,7 @@
     height: auto;
   }
   .mermaid { display: flex; justify-content: center; }
+  .led-card td:first-child { white-space: nowrap; }
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
@@ -28,7 +29,7 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: cdbf954d1fb1e4b977a88dfd2278edf82dacead44b134cd25dcba8a2e4278ad4  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 8526819702db5476344ae5ffc36f7898d3a3329761bee1c0534077b40ab53099  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- regenerated-at: 2026-11-19 (LED state machine: two regions, recording control from PR #103, review fixes) -->
@@ -245,7 +246,7 @@ flowchart TD
       <p class="text-sm text-base-content/80 mt-2"><span class="font-mono text-xs bg-base-200 rounded px-1">Ws2812LedDriver</span> writes one SPI transfer per colour to <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/spidev0.0</span> through py-spidev (<span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>: no root, no <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span>, nothing compiled on the device). Each WS2812B bit is one byte at a 6.4 MHz request - <span class="font-mono text-xs bg-base-200 rounded px-1">0xC0</span> for a 0, <span class="font-mono text-xs bg-base-200 rounded px-1">0xF0</span> for a 1 - sent green, red, blue, MSB first, between two 240-byte zero resets (300 us latch). Both Zero 2W core clocks divide to a real 6.25 MHz, giving 320/960 ns and 640/640 ns pulses, at least 40 ns inside the WS2812B-V5 datasheet windows (legacy pre-V5 parts fall 10-40 ns outside theirs, a bench check). Pulsing and flashing render solid on the single pixel. The device needs <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> (the kernel caches the core clock at probe, so a scaling core clock would skew the SPI rate) and the daemon user in the <span class="font-mono text-xs bg-base-200 rounded px-1">spi</span> group.</p>
     </div>
 
-    <div class="card bg-base-100 shadow p-4">
+    <div class="card bg-base-100 shadow p-4 led-card">
       <h3 class="font-semibold mb-2">LED state machine <span class="badge badge-warning badge-sm align-middle">designed 2026-11-19, partly built</span></h3>
       <p class="text-sm text-base-content/80 mb-2">The pendant runs concurrent regions - it can record and upload at the same moment - and one pure resolver projects them onto the single LED. The capture region (PR #103's recording control) always wins the look; health conditions only colour it while Recording; upload progress never shows on the LED (backup status is in the app, as with Limitless, Plaud, GoPro and Narrative Clip). Dark means no power or no daemon, never "recording quietly". This page and the pendant spec own the LED table for PRs #100, #101 and #103.</p>
       <h4 class="font-semibold text-sm mt-3 mb-1">LED resolver (first matching rule wins)</h4>
@@ -285,13 +286,14 @@ flowchart TD
         </table>
       </div>
       <h4 class="font-semibold text-sm mt-3 mb-1">Upload region (worker thread)</h4>
+      <p class="text-xs text-base-content/70 mb-1">Reported to the app as <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.upload_status</span> (planned). Retries are idempotent without overwriting: same key and size is skipped, a different size is refused because timestamp keys can repeat; planned: a colliding segment gets a suffixed key instead of retrying forever.</p>
       <div class="overflow-x-auto">
         <table class="table table-sm">
-          <thead><tr><th>State</th><th>Enters when</th><th>Exits when (to)</th></tr></thead>
+          <thead><tr><th>State</th><th>Means for a person</th><th>Enters when</th><th>Exits when (to)</th></tr></thead>
           <tbody>
-            <tr><td>Idle</td><td>The queue is empty</td><td>A segment finishes or a flag is written: with <span class="font-mono text-xs bg-base-200 rounded px-1">full</span> connectivity (Uploading), without it (Waiting)</td></tr>
-            <tr><td>Waiting</td><td>Files are queued but there is no <span class="font-mono text-xs bg-base-200 rounded px-1">full</span> connectivity, or an upload just failed</td><td>The backoff deadline passes (30 s doubling to 480 s, on its own counter) and connectivity is <span class="font-mono text-xs bg-base-200 rounded px-1">full</span>, or a new file arrives while online (Uploading); the daemon stops (it ends; the queue stays on the SD card)</td></tr>
-            <tr><td>Uploading</td><td>One file is in flight</td><td>Success and the queue is empty (Idle); success with more queued (the next file, still Uploading); failure (Waiting); the halt or stop budget runs out (it ends; the file stays queued)</td></tr>
+            <tr><td>Backed up</td><td>Nothing is at risk: every recorded clip is in the cloud</td><td>The queue is empty</td><td>A segment finishes or a flag is written: with <span class="font-mono text-xs bg-base-200 rounded px-1">full</span> connectivity (Uploading), without it (Waiting, reason <span class="font-mono text-xs bg-base-200 rounded px-1">offline</span>)</td></tr>
+            <tr><td>Waiting</td><td>Clips are on the SD card only, and the reason says why</td><td>Files are queued and something blocks sending them; the reason is one of <span class="font-mono text-xs bg-base-200 rounded px-1">offline</span> (no <span class="font-mono text-xs bg-base-200 rounded px-1">full</span> NetworkManager connectivity), <span class="font-mono text-xs bg-base-200 rounded px-1">retry_backoff</span> (an upload just failed; next try at the deadline) or, from M3, <span class="font-mono text-xs bg-base-200 rounded px-1">policy</span> (the upload policy holds uploads, for example until the charger is connected)</td><td>The blocker clears: connectivity is <span class="font-mono text-xs bg-base-200 rounded px-1">full</span>, the backoff deadline passes (30 s doubling to 480 s, on its own counter), or the policy allows it; a new file arriving while online also starts a round (Uploading); the daemon stops (it ends; the queue stays on the SD card)</td></tr>
+            <tr><td>Uploading</td><td>Footage is being sent now</td><td>One file is in flight</td><td>Success and the queue is empty (Backed up); success with more queued (the next file, still Uploading); failure (Waiting, reason <span class="font-mono text-xs bg-base-200 rounded px-1">retry_backoff</span>); the halt or stop budget runs out (it ends; the file stays queued)</td></tr>
           </tbody>
         </table>
       </div>
@@ -336,12 +338,12 @@ stateDiagram-v2
         <div><h4 class="font-semibold text-sm mb-1">Upload region (at the same time, worker thread)</h4>
       <pre class="mermaid" data-layout="elk" style="max-width:420px;margin:0 auto">
 stateDiagram-v2
-    [*] --> Idle
-    Idle --> Uploading: file queued, online
-    Idle --> Waiting: file queued, offline
-    Uploading --> Idle: queue empty
-    Uploading --> Waiting: upload failed
-    Waiting --> Uploading: deadline passed, online
+    [*] --> BackedUp
+    BackedUp --> Uploading: file queued, online
+    BackedUp --> Waiting: file queued, offline
+    Uploading --> BackedUp: queue empty
+    Uploading --> Waiting: upload failed (retry_backoff)
+    Waiting --> Uploading: blocker cleared
       </pre></div>
       </div>
       <p class="text-xs text-base-content/70 mt-2">The upload queue is the <span class="font-mono text-xs bg-base-200 rounded px-1">queue/</span> directory on the SD card: finished segments and flag markers not yet uploaded. It survives reboots, every boot flushes it, and "draining" means letting the upload in flight finish, never the whole backlog. Gestures, one hold ladder in every state with LED previews: under 2 s flags (Recording) or rescans (Setup needed); 2-5 s starts recording, retries the camera, or stops (committed at 2 s while Recording); 5-10 s powers off safely from any state; 10 s or more re-onboards from Stopped. Running is a parent state, so its graceful power-off edge (hold, SIGTERM or a finished battery drain) and the ungraceful power-cut edge apply to every state inside it. Turning back on after a power-off is an open M2 hardware question (PiJuice button, or replug). Open M3 decision: upload whenever online (today), only while charging (GoPro, Narrative Clip), or while recording only above a charge threshold.</p>
