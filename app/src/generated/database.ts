@@ -66,6 +66,7 @@ export type Database = {
         Row: {
           created_at: string
           device_id: string
+          device_user_id: string | null
           name: string
           push_token: string | null
           user_id: string
@@ -73,6 +74,7 @@ export type Database = {
         Insert: {
           created_at?: string
           device_id?: string
+          device_user_id?: string | null
           name: string
           push_token?: string | null
           user_id: string
@@ -80,6 +82,7 @@ export type Database = {
         Update: {
           created_at?: string
           device_id?: string
+          device_user_id?: string | null
           name?: string
           push_token?: string | null
           user_id?: string
@@ -235,7 +238,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      claim_pairing: { Args: { p_code: string }; Returns: string }
+      create_pairing_code: {
+        Args: { p_device_id?: string }
+        Returns: {
+          code: string
+          expires_at: string
+        }[]
+      }
+      unpair_device: { Args: { p_device_id: string }; Returns: undefined }
     }
     Enums: {
       [_ in never]: never
