@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import type { VisionClient } from '../lib/supabase';
 import { useResetOnInputChange } from './useResetOnInputChange';
@@ -7,10 +7,20 @@ export type DeviceState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'none' }
-  | { kind: 'ready'; deviceId: string; name: string };
+  // `paired` is false once "Remove device" has revoked the pendant's login:
+  // the device row and its footage stay, but no pendant can write to it.
+  | { kind: 'ready'; deviceId: string; name: string; paired: boolean };
 
-export function useDevice(client: VisionClient): DeviceState {
+export type DeviceLookup = DeviceState & {
+  // Re-query without going back to loading, e.g. once a first pairing has
+  // created the device row or a pendant has been removed.
+  refresh: () => void;
+};
+
+export function useDevice(client: VisionClient): DeviceLookup {
   const [state, setState] = useState<DeviceState>({ kind: 'loading' });
+  const [generation, setGeneration] = useState(0);
+  const refresh = useCallback(() => setGeneration((current) => current + 1), []);
 
   useResetOnInputChange([client], () => setState({ kind: 'loading' }));
 
@@ -19,7 +29,7 @@ export function useDevice(client: VisionClient): DeviceState {
 
     client
       .from('devices')
-      .select('device_id, name')
+      .select('device_id, name, device_user_id')
       .order('created_at', { ascending: true })
       .limit(1)
       .then(
@@ -34,6 +44,7 @@ export function useDevice(client: VisionClient): DeviceState {
               kind: 'ready',
               deviceId: data[0].device_id,
               name: data[0].name,
+              paired: data[0].device_user_id !== null,
             });
           }
         },
@@ -45,7 +56,7 @@ export function useDevice(client: VisionClient): DeviceState {
     return () => {
       isMounted = false;
     };
-  }, [client]);
+  }, [client, generation]);
 
-  return state;
+  return { ...state, refresh };
 }
