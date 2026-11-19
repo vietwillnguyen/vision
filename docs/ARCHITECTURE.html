@@ -31,8 +31,8 @@
 <!-- source-sha256: e5f3c4f2de8b2375155bc32917f90e5101da236766ab5e9f1421761f15c76480  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: d1457ce232a7e8251217875decdb0d313cd0a74b0de6cb37fc63978e8cad2178  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- source-sha256: a960f9b45b364d4b98b94e09c42debecdab306204f45c689f9be345f39a5309e  docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md -->
-<!-- regenerated-at: 2026-11-19 (device pairing built) -->
+<!-- source-sha256: 94973074d370124cbff17731787dd021f9030b2f003fb4e7357e18503842c31e  docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md -->
+<!-- regenerated-at: 2026-11-19 (device pairing review fixes) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -171,7 +171,7 @@ flowchart TD
                 <span class="badge badge-success badge-soft">#18/#19 flag button + NM activation — landed</span>
                 <span class="badge badge-success badge-soft">#8 app screen wiring — merged (PR #22)</span>
                 <span class="badge badge-success badge-soft">WiFi re-onboarding QR — merged (PR #25)</span>
-                <span class="badge badge-info badge-soft">device pairing (own pendant login) — built, PR #105 open</span>
+                <span class="badge badge-info badge-soft">device pairing (own pendant login) - designed and built 2026-11-19</span>
                 <span class="badge badge-success badge-soft">#9 FLAG date fix — merged (PR #13)</span>
                 <span class="badge badge-success badge-soft">#6/#12 CI hardening — merged (PR #11/#14)</span>
                 <span class="badge badge-warning badge-soft">device provisioning + preflight — draft (PR #26, blocked on physical Pi test)</span>
@@ -200,14 +200,14 @@ flowchart TD
   D -- "never succeeds" --> D1["exit 1"]
   D -- "succeeds" --> D2["nmcli connection reload<br/>+ up visio"]
   C -- "PENDING (code saved)" --> D2
-  D2 -- "activation fails" --> D3["CRITICAL LED, exit 1<br/>(systemd retries)"]
+  D2 -- "activation fails" --> D3["CRITICAL LED, exit 1<br/>(systemd retries; 3rd failure<br/>drops the code, rescan)"]
   D2 -- ok --> P["anonymous sign-in,<br/>claim_pairing(code)"]
   P -- "code refused" --> P1["clear pairing, CRITICAL LED,<br/>exit 1 (rescan next boot)"]
   P -- "unreachable" --> P2["exit 1 (retry next boot)"]
   P -- "device_id" --> E
   C -- "PAIRED" --> C1["best-effort nmcli reload + up<br/>(if keyfile exists; never fatal)"]
-  C1 --> E["set_session (own login)"]
-  E -- "login revoked" --> E1["clear pairing, CRITICAL LED,<br/>exit 1 (rescan next boot)"]
+  C1 --> E["refresh-token grant (own login;<br/>never judged by the local clock)"]
+  E -- "refresh definitely refused" --> E1["clear pairing, CRITICAL LED,<br/>exit 1 (rescan next boot)"]
   E -- ok --> G
   G["login ready"] --> H["flush_pending queue"]
   H --> R["recover_orphaned_segments<br/>(mux + queue leftover .h264/.mp4;<br/>keep non-empty captures on mux failure)"]
@@ -447,11 +447,11 @@ sequenceDiagram
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Lifecycle</h3>
-        <p class="text-xs text-base-content/70 mt-1">Policies resolve the link at query time, so Remove device revokes at once even while the pendant's access token is still valid. Re-pairing deletes the previous device user. App logout touches only the phone's session. The login never expires by time. A daily <span class="font-mono text-xs bg-base-200 rounded px-1">pg_cron</span> job deletes anonymous users no device points at.</p>
+        <p class="text-xs text-base-content/70 mt-1">Policies resolve the link at query time, so Remove device revokes at once even while the pendant's access token is still valid. Re-pairing deletes the previous device user. App logout touches only the phone's session. The login never expires by time. A boot restores it with the refresh-token grant and unpairs only on GoTrue's codes for a gone token, session or user, so a pendant booting before NTP sync is never unpaired. A daily <span class="font-mono text-xs bg-base-200 rounded px-1">pg_cron</span> job deletes anonymous users no device points at.</p>
       </div>
     </div>
     <div class="alert alert-warning alert-soft text-sm" role="alert">
-      <span><strong>Manual step:</strong> anonymous sign-ins must be enabled on the hosted project (CAPTCHA off, no session time-box), the migration applied, firmware and app shipped together, and the test pendant re-onboarded once. Firmware rejects the old v1 QR payload rather than accept the owner's session again.</span>
+      <span><strong>Manual step:</strong> anonymous sign-ins must be enabled on the hosted project (CAPTCHA off, no session time-box), the migration applied, firmware and app shipped together, and the test pendant re-onboarded once. Firmware rejects the old v1 QR payload rather than accept the owner's session again. The old pendant's copy of the owner's phone session is deleted from its disk but stays valid on the server until the phone signs out, so sign out and back in on the phone after re-onboarding.</span>
     </div>
   </section>
 

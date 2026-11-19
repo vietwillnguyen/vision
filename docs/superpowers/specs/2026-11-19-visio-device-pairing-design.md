@@ -687,6 +687,10 @@ Order matters, because the migration takes away the owner's write access that an
 Between steps 2 and 4 the pendant cannot upload.
 Its segments queue on the SD card and upload after pairing, so nothing is lost.
 
+The legacy pendant's copy of the owner's phone session is deleted from the pendant's disk on its first new boot, but that session stays valid on the server until the phone signs out.
+Anyone who copied the SD card before then still holds a working login to the owner's account.
+After re-onboarding, sign out of the app and sign back in on the phone, which ends that shared session server-side.
+
 Rollback: the migration is reversible by a follow-up migration that restores the five dropped policies and the two grants; the added column, table and functions can stay unused.
 Firmware and app roll back together with it, since v1 and v2 payloads are mutually unreadable.
 
@@ -735,3 +739,20 @@ Where the implementation differs from, or adds to, the text above:
 - **Not paired** shows the device's last status report in muted text under the "Pair pendant" card, so footage counts stay visible after a removal.
 - **Integration helpers** for pairing live in `integration/tests/pendant.py`; `integration/tests/__init__.py` makes the suite a package so tests can import them.
 - **Live app test.** `app/__tests__/hooks/useDeviceStatus.live.test.tsx` now writes `device_status` as a paired pendant, since the owner no longer can.
+- **Restoring a saved login never trusts the pendant's clock.**
+  A Pi has no RTC, so before NTP sync its clock can be hours behind; `set_session` then calls a really expired access token valid, GoTrue answers 403 `bad_jwt` "token is expired", and the first build treated that as a revocation and unpaired a healthy pendant.
+  The paired boot and the pairing resume (`session_store.restore_session`) now always run the refresh-token grant, which only the server judges.
+  They unpair only when it is refused with `refresh_token_not_found`, `refresh_token_already_used`, `session_not_found`, `session_expired`, `user_not_found` or `user_banned`; any other 4xx, a 429, a 5xx or a network error is retried.
+  Remove device and a re-pair both answer `refresh_token_not_found` (reproduced against the local stack).
+- **An unreadable `session.json`** (empty, not JSON, not an object, a missing, empty or non-string token) counts as no login: the boot gate treats it as `UNPAIRED` and scans, instead of crash-looping on a parse error.
+- **One client per boot.**
+  `complete_pairing` returns its signed-in client and the boot builds the storage and status adapters from it, so a pairing boot runs one auto-refresh timer and one `session.json` persister.
+  Atomic writes (`private_files.write_private_text_atomic`) use a unique `O_EXCL` temp name per write and are serialised per path across the process.
+- **A pending pairing gives up on Wi-Fi.**
+  `pairing.json` also carries `failed_activations`; after `MAX_FAILED_PENDING_ACTIVATIONS` (3) boots in a row whose Wi-Fi activation failed, it is deleted and the next boot scans, so a mistyped Wi-Fi password cannot strand the pendant.
+  A boot that connects resets the count.
+- **QR expiry is timed by the server's lifetime.**
+  `create_pairing_code` also returns `expires_in` (seconds), and the app times the QR from the moment the code arrived instead of comparing `expires_at` with the phone's clock.
+- **The app forgets the code and the Wi-Fi password** as soon as the QR is no longer shown (paired, expired, error or closed).
+  The database has no call that retires an unclaimed code without unpairing, so closing early only clears state; the code expires on its own and the next one replaces it.
+  "Make a new code" after expiry returns to the form with the SSID kept.
