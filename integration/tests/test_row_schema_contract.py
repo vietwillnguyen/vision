@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from pipeline.orchestrator import DeviceRecord, OrchestratorDeps, run_nightly
+from visio_recorder.pairing import CLAIM_ARG, CLAIM_RPC
 
 SCHEMA_FIXTURE = Path(__file__).parent / "fixtures" / "public_schema.json"
 
@@ -236,3 +237,9 @@ def _load_function(name: str) -> dict:
 )
 def test_pairing_function_signatures(name, args):
     assert _load_function(name)["args"] == args
+
+
+def test_firmware_claims_with_the_rpc_the_migration_defines():
+    # Firmware has no generated client: a renamed function or argument in the
+    # migration has to redden this instead of failing on a pendant.
+    assert list(_load_function(CLAIM_RPC)["args"]) == [CLAIM_ARG]

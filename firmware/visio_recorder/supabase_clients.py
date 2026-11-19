@@ -8,6 +8,7 @@ from typing import Any
 
 from storage3.exceptions import StorageApiError
 from supabase import create_client
+from supabase_auth.errors import AuthApiError
 
 from visio_recorder.uploader import ObjectTooLargeError
 from visio_recorder.wifi_onboard import write_session_credentials
@@ -109,22 +110,14 @@ class SupabaseStatus:
         self._client.table("device_status").upsert(status).execute()
 
 
-class SupabaseRegistration:
-    def __init__(self, client: Any, user_id: str) -> None:
-        self._client = client
-        self._user_id = user_id
-
-    def upsert_device(self, device_id: str, name: str) -> None:
-        self._client.table("devices").upsert(
-            {"device_id": device_id, "user_id": self._user_id, "name": name}
-        ).execute()
-
-
 @dataclass
 class SupabaseClients:
     storage: SupabaseStorage
     status: SupabaseStatus
-    registration: SupabaseRegistration
+
+
+class SessionRevokedError(Exception):
+    """The pendant's login no longer exists: removed in the app, or re-paired."""
 
 
 def _session_persister(session_path: Path) -> Callable[[str, Any], None]:
@@ -163,12 +156,18 @@ def build_supabase_clients(
     # Registered before set_session, which refreshes an expired access token
     # before it returns: that first rotation has to be saved too.
     client.auth.on_auth_state_change(_session_persister(session_path))
-    auth_response = client.auth.set_session(
-        session["access_token"], session["refresh_token"]
-    )
-    user_id = auth_response.user.id
+    try:
+        client.auth.set_session(session["access_token"], session["refresh_token"])
+    except AuthApiError as err:
+        # A definite 4xx means the device user, its session or its refresh
+        # token is gone. A 429, a 5xx or a network error (AuthRetryableError)
+        # is not a verdict on the login and must never unpair the pendant.
+        if 400 <= err.status < 500 and err.status != 429:
+            raise SessionRevokedError(
+                f"the pendant's login was refused ({err.status}: {err.message})"
+            ) from err
+        raise
     return SupabaseClients(
         storage=SupabaseStorage(client),
         status=SupabaseStatus(client),
-        registration=SupabaseRegistration(client, user_id),
     )

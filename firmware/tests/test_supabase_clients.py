@@ -3,8 +3,13 @@ from pathlib import Path
 
 import pytest
 from storage3.exceptions import StorageApiError
+from supabase_auth.errors import AuthApiError, AuthRetryableError
 
-from visio_recorder.supabase_clients import SupabaseStorage, build_supabase_clients
+from visio_recorder.supabase_clients import (
+    SessionRevokedError,
+    SupabaseStorage,
+    build_supabase_clients,
+)
 from visio_recorder.uploader import ObjectTooLargeError
 
 
@@ -35,6 +40,7 @@ class FakeAuth:
         self._user_id = user_id
         self.session_set_with: tuple[str, str] | None = None
         self.refresh_on_set: FakeSession | None = None
+        self.set_session_error: Exception | None = None
         self._subscribers: list = []
 
     def on_auth_state_change(self, callback) -> None:
@@ -46,6 +52,8 @@ class FakeAuth:
 
     def set_session(self, access_token: str, refresh_token: str) -> FakeAuthResponse:
         self.session_set_with = (access_token, refresh_token)
+        if self.set_session_error is not None:
+            raise self.set_session_error
         if self.refresh_on_set is not None:
             self.emit("TOKEN_REFRESHED", self.refresh_on_set)
         return FakeAuthResponse(self._user_id)
@@ -425,17 +433,49 @@ def test_status_adapter_upserts_device_status_row(tmp_path):
     assert fake.upserts["device_status"] == [status]
 
 
-def test_registration_adapter_upserts_device_row(tmp_path):
-    fake = FakeSupabase(user_id="user-xyz")
-    clients = build_supabase_clients(
-        "http://x",
-        "anon",
-        _write_session(tmp_path),
-        client_factory=lambda url, key: fake,
-    )
+@pytest.mark.parametrize(
+    "error",
+    [
+        AuthApiError("User from sub claim in JWT does not exist", 403, None),
+        AuthApiError("Invalid Refresh Token: Already Used", 400, None),
+        AuthApiError("Session not found", 401, None),
+    ],
+)
+def test_a_definite_session_rejection_means_the_login_was_revoked(tmp_path, error):
+    # Remove device in the app deletes the pendant's user, and a re-pair
+    # replaces it; either way this login is gone for good.
+    fake = FakeSupabase()
+    fake.auth.set_session_error = error
 
-    clients.registration.upsert_device("device-abc", "Visio Pendant")
+    with pytest.raises(SessionRevokedError):
+        build_supabase_clients(
+            "http://x",
+            "anon",
+            _write_session(tmp_path),
+            client_factory=lambda url, key: fake,
+        )
 
-    assert fake.upserts["devices"] == [
-        {"device_id": "device-abc", "user_id": "user-xyz", "name": "Visio Pendant"}
-    ]
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AuthApiError("Request rate limit reached", 429, "over_request_rate_limit"),
+        AuthApiError("Internal Server Error", 500, None),
+        AuthRetryableError("connection refused", 0),
+        AuthRetryableError("Bad Gateway", 502),
+    ],
+)
+def test_a_network_or_server_failure_is_not_a_revocation(tmp_path, error):
+    # Unpairing on a flaky network would throw away a good login.
+    fake = FakeSupabase()
+    fake.auth.set_session_error = error
+
+    with pytest.raises(type(error)) as exc_info:
+        build_supabase_clients(
+            "http://x",
+            "anon",
+            _write_session(tmp_path),
+            client_factory=lambda url, key: fake,
+        )
+
+    assert exc_info.value is error

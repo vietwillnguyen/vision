@@ -1,12 +1,21 @@
 import json
+import logging
 import stat
 
+import httpx
 import pytest
+from postgrest.exceptions import APIError
+from supabase_auth.errors import AuthApiError, AuthRetryableError
 
 from visio_recorder.device_identity import store_paired_device_id
 from visio_recorder.pairing import (
+    CLAIM_ARG,
+    CLAIM_RPC,
+    PairingRejectedError,
     PairingState,
+    PairingUnavailableError,
     clear_local_pairing,
+    complete_pairing,
     pairing_state,
     read_pending_pairing,
     write_pending_pairing,
@@ -138,3 +147,258 @@ def test_clear_local_pairing_of_an_empty_data_dir_is_a_no_op(tmp_path):
     clear_local_pairing(tmp_path)
 
     assert list(tmp_path.iterdir()) == []
+
+
+# complete_pairing, against a fake supabase-py client.
+
+
+class FakeSession:
+    def __init__(self, access_token: str, refresh_token: str) -> None:
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+
+
+class FakeAuth:
+    def __init__(self, events: list) -> None:
+        self._events = events
+        self._subscribers: list = []
+        self.sign_in_error: Exception | None = None
+        self.set_session_error: Exception | None = None
+        self.anonymous_session = FakeSession("anon-at", "anon-rt")
+
+    def on_auth_state_change(self, callback) -> None:
+        self._events.append("subscribe")
+        self._subscribers.append(callback)
+
+    def _emit(self, event: str, session: FakeSession) -> None:
+        for callback in self._subscribers:
+            callback(event, session)
+
+    def sign_in_anonymously(self):
+        self._events.append("sign_in_anonymously")
+        if self.sign_in_error is not None:
+            raise self.sign_in_error
+        self._emit("SIGNED_IN", self.anonymous_session)
+
+    def set_session(self, access_token: str, refresh_token: str):
+        self._events.append(("set_session", access_token, refresh_token))
+        if self.set_session_error is not None:
+            raise self.set_session_error
+        self._emit("SIGNED_IN", FakeSession(access_token, refresh_token))
+
+
+class FakeResponse:
+    def __init__(self, data) -> None:
+        self.data = data
+
+
+class FakeRpc:
+    def __init__(self, client: "FakePairingClient", name: str, params: dict) -> None:
+        self._client = client
+        self._name = name
+        self._params = params
+
+    def execute(self) -> FakeResponse:
+        client = self._client
+        client.events.append(("rpc", self._name, self._params))
+        # What is on disk at the moment the claim is sent.
+        client.device_file_at_claim = (client.data_dir / "device.json").exists()
+        if client.rpc_error is not None:
+            raise client.rpc_error
+        return FakeResponse(client.claimed_device_id)
+
+
+class FakePairingClient:
+    def __init__(self, data_dir) -> None:
+        self.data_dir = data_dir
+        self.events: list = []
+        self.auth = FakeAuth(self.events)
+        self.rpc_error: Exception | None = None
+        self.claimed_device_id: object = DEVICE_ID
+        self.device_file_at_claim: bool | None = None
+
+    def rpc(self, name: str, params: dict) -> FakeRpc:
+        return FakeRpc(self, name, params)
+
+
+def _pair(data_dir, client: FakePairingClient) -> str:
+    return complete_pairing(
+        "http://x", "anon", data_dir, client_factory=lambda url, key: client
+    )
+
+
+def _pending(data_dir) -> None:
+    write_pending_pairing(data_dir / "pairing.json", CODE)
+
+
+def test_pairing_signs_in_anonymously_and_saves_that_session(tmp_path):
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+
+    _pair(tmp_path, client)
+
+    # The persister is registered first, so the new session is saved by the
+    # same atomic write as every later rotation.
+    assert client.events[:2] == ["subscribe", "sign_in_anonymously"]
+    assert json.loads((tmp_path / "session.json").read_text()) == {
+        "access_token": "anon-at",
+        "refresh_token": "anon-rt",
+    }
+
+
+def test_pairing_claims_the_code_then_adopts_the_device_and_drops_the_code(tmp_path):
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+
+    device_id = _pair(tmp_path, client)
+
+    assert device_id == DEVICE_ID
+    assert client.events[-1] == (
+        "rpc",
+        CLAIM_RPC,
+        {CLAIM_ARG: CODE},
+    )
+    assert client.device_file_at_claim is False
+    assert json.loads((tmp_path / "device.json").read_text()) == {
+        "device_id": DEVICE_ID,
+        "pairing": 2,
+    }
+    assert not (tmp_path / "pairing.json").exists()
+    assert pairing_state(tmp_path) is PairingState.PAIRED
+
+
+def test_pairing_resumes_with_the_saved_session_instead_of_signing_in_again(tmp_path):
+    # Entering a scan always deletes session.json, so one seen while pending
+    # is this attempt's own anonymous session; reusing it keeps a crash-looping
+    # pendant from burning the anonymous sign-in rate limit.
+    _pending(tmp_path)
+    write_session_credentials(tmp_path / "session.json", "saved-at", "saved-rt")
+    client = FakePairingClient(tmp_path)
+
+    _pair(tmp_path, client)
+
+    assert ("set_session", "saved-at", "saved-rt") in client.events
+    assert "sign_in_anonymously" not in client.events
+
+
+def test_a_rejected_saved_session_is_replaced_by_a_new_anonymous_sign_in(tmp_path):
+    # The daily purge deletes an unlinked anonymous user after a day, so a
+    # pendant left pending that long resumes with a session that is gone.
+    _pending(tmp_path)
+    write_session_credentials(tmp_path / "session.json", "saved-at", "saved-rt")
+    client = FakePairingClient(tmp_path)
+    client.auth.set_session_error = AuthApiError("User not found", 403, None)
+
+    assert _pair(tmp_path, client) == DEVICE_ID
+
+    assert "sign_in_anonymously" in client.events
+    assert json.loads((tmp_path / "session.json").read_text())["refresh_token"] == (
+        "anon-rt"
+    )
+
+
+def test_a_crash_between_saving_the_device_and_dropping_the_code_reclaims(tmp_path):
+    # claim_pairing is idempotent for the device user that claimed.
+    store_paired_device_id(tmp_path / "device.json", DEVICE_ID)
+    write_session_credentials(tmp_path / "session.json", "saved-at", "saved-rt")
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+
+    assert _pair(tmp_path, client) == DEVICE_ID
+
+    assert ("rpc", CLAIM_RPC, {CLAIM_ARG: CODE}) in client.events
+    assert not (tmp_path / "pairing.json").exists()
+    assert pairing_state(tmp_path) is PairingState.PAIRED
+
+
+@pytest.mark.parametrize("sqlstate", ["P0001", "42501"])
+def test_a_refused_claim_is_a_rejection_that_clears_the_attempt(tmp_path, sqlstate):
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+    client.rpc_error = APIError({"message": "invalid pairing code", "code": sqlstate})
+
+    with pytest.raises(PairingRejectedError):
+        _pair(tmp_path, client)
+
+    assert not (tmp_path / "pairing.json").exists()
+    assert not (tmp_path / "session.json").exists()
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectError("no route to host"),
+        APIError({"message": "Bad Gateway", "code": "502"}),
+        APIError({"message": "Could not find the function", "code": "PGRST202"}),
+    ],
+    ids=["network", "5xx", "rpc-missing"],
+)
+def test_an_unreachable_claim_keeps_every_file_for_a_retry(tmp_path, error):
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+    client.rpc_error = error
+
+    with pytest.raises(PairingUnavailableError):
+        _pair(tmp_path, client)
+
+    assert read_pending_pairing(tmp_path / "pairing.json") == CODE
+    assert (tmp_path / "session.json").exists()
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_a_claim_answer_that_is_not_a_device_id_is_retried(tmp_path):
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+    client.claimed_device_id = None
+
+    with pytest.raises(PairingUnavailableError):
+        _pair(tmp_path, client)
+
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AuthRetryableError("connection refused", 0),
+        AuthRetryableError("Service Unavailable", 503),
+        AuthApiError("Request rate limit reached", 429, "over_request_rate_limit"),
+    ],
+    ids=["network", "5xx", "429"],
+)
+def test_an_unreachable_sign_in_keeps_the_code_for_a_retry(tmp_path, error):
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+    client.auth.sign_in_error = error
+
+    with pytest.raises(PairingUnavailableError):
+        _pair(tmp_path, client)
+
+    assert read_pending_pairing(tmp_path / "pairing.json") == CODE
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_anonymous_sign_ins_turned_off_is_logged_explicitly(tmp_path, caplog):
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+    client.auth.sign_in_error = AuthApiError(
+        "Anonymous sign-ins are disabled", 422, "anonymous_provider_disabled"
+    )
+
+    with caplog.at_level(logging.ERROR), pytest.raises(PairingUnavailableError):
+        _pair(tmp_path, client)
+
+    assert "anonymous sign-ins" in caplog.text
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_the_pairing_code_is_never_logged(tmp_path, caplog):
+    _pending(tmp_path)
+    client = FakePairingClient(tmp_path)
+    client.rpc_error = APIError({"message": "invalid pairing code", "code": "P0001"})
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(PairingRejectedError):
+        _pair(tmp_path, client)
+
+    assert CODE not in caplog.text
