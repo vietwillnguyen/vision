@@ -167,6 +167,9 @@ A single Python systemd service manages the full device lifecycle.
   A new segment or the shutdown sentinel still wakes it at once, so the retry never delays either.
   Each deadline is set that far after it is armed, doubling per consecutive failure from 30 s and capped at 480 s, read from the same consecutive-failure counter as the Critical LED, so the success that clears the red also brings the next deadline back to 30 s.
   A brief WiFi drop is therefore recovered inside one segment period, while an outage lasting hours settles into one attempt every eight minutes rather than spending radio power on a dead network.
+  Planned change (LED state machine below): offline rounds stop counting towards Critical, so the backoff gets its own attempt counter instead of reading `UploadHealth`.
+  A round skipped because NetworkManager does not report `full` connectivity is a local check that costs no radio time; it still advances the backoff counter, so an all-day walk settles at one local check every eight minutes, and any success resets both counters.
+  `UploadHealth` then counts only failures while connectivity is `full`, which is what the Critical LED needs, and `RetryBackoff`'s docstring changes with it.
   The *next process startup's* flush (step 5 above) remains the backstop for anything a run could not drain, and is still the only retry for flag markers, which their own worker owns while the daemon runs.
 - A retry round goes through the same upload path a segment does, so the 50 MB upload limit behaves identically: an oversized segment is split and its parts uploaded, and one that cannot be split under the limit is moved to `rejected/` and so leaves the queue for good, which is what keeps the limit from becoming a retry loop.
   A round's outcome feeds the same consecutive-failure counter a segment's own upload does, so retry failures escalate to Critical and a retry success clears it.
@@ -178,7 +181,7 @@ A single Python systemd service manages the full device lifecycle.
   Critical is a latched condition rather than a momentary one, so it is derived from the consecutive-failure counter (`UploadHealth`) instead of being applied once at the moment of escalation.
   That makes the red survive the following segments: while the counter is at or past the threshold, the segment's own upload shows red too, not the Uploading blue and the restored Recording green, and only the resetting success returns the LED to green or yellow.
   Critical outranks both low battery and uploading in `next_led_state`, matching the battery-halt path, which already applies Critical last so it cannot be overwritten.
-  Planned change (LED state machine below): failures while the pendant is offline will stop counting, and a nearly full SD card will also raise Critical.
+  Planned change (LED state machine below): failures without `full` NetworkManager connectivity will stop counting, the backoff moves to its own counter (see the retry paragraph above), and a nearly full SD card will also raise Critical.
 - On successful upload, local file is deleted to free SD space.
 
 ### Audio Capture (as-built)
@@ -278,82 +281,115 @@ Unlike a segment it gets no in-process retry, since the upload worker's retry ro
 
 **LED state machine:**
 
-Requirement (PRD v1, 2026-11-18): whenever the pendant has power, the LED shows exactly one state, and every state answers one question for the wearer and anyone nearby: is the camera recording?
-Off always means not recording.
+Requirement (PRD v1, 2026-11-18): whenever the daemon runs, the LED is lit and shows exactly one state, and every state answers one question for the wearer and anyone nearby: is the camera capturing right now?
+Dark means the daemon is not running (no power, or stopped by systemd), never "recording quietly".
+This section is the single owner of the LED table; the recording-control design (`2026-11-18-visio-recording-control-design.md`, PR #103), the local-first flag button (PR #100) and battery hardening (PR #101) defer to it for looks and priority.
 
-The LED shows the highest-priority state whose condition holds, resolved by one pure function in the spirit of today's `next_led_state`, so no code path sets a colour directly.
-The one exception is the flag acknowledgement, a short overlay that plays over whatever state is showing and then gives it back.
+The state is two orthogonal regions, resolved together by one pure function (the successor of today's `next_led_state`), so no code path sets a colour directly:
 
-| State | Look | Recording? | Condition | Status |
-|---|---|---|---|---|
-| Off | Dark | No | Daemon not running: stopped, crashed, or no power | Not guaranteed: the WS2812B latches its last frame, so a crash leaves the last colour lit |
-| Halted | Red, solid | No | Battery under the 10% halt threshold, QR onboarding gave up, Wi-Fi activation failed, or the capture loop stopped on an error | New (today the battery halt and a Wi-Fi activation failure show Critical, while onboarding giving up or a capture error leaves the last colour lit, usually Recording green) |
-| Paused | Dark | No | The wearer double-pressed the button to pause; a double press resumes | New |
-| Scanning | Cyan, pulsing | No | Looking for an onboarding QR code (first boot, or re-onboarding triggered by holding the button about 10 s, or by `visio-reonboard`) | New (today onboarding shows Recording green) |
-| Starting | White, dim solid | No | Daemon started, preflight and boot steps running, first capture not yet begun | New (today startup shows Recording green before onboarding) |
-| Critical | Red, flashing | Yes | Needs you now, or recording will stop: the SD card has under 1 GB free (about 30 minutes left), or the pendant is online yet 3+ consecutive uploads failed (latched by `UploadHealth`) | Partly built: today every failure counts, offline included, and there is no free-space check |
-| Low battery | Yellow, pulsing | Yes | Battery under 20% | Built |
-| Uploading | Blue, pulsing | Yes | A segment upload or retry round is in flight | Built |
-| Recording | Green, solid | Yes | Capturing; offline is normal and footage queues for later | Built |
-| Flag saved (overlay) | White, 2 quick blinks (~0.6 s) | Yes | A flag press was accepted (after the 2 s cooldown) | New |
+- **Capture region** - Booting, Scanning, Stopped, Recording, Shutting down, Halted.
+  It is driven by the recording-control state machine of PR #103 and decides whether the camera is capturing.
+- **Health region** - Critical, Low battery, Uploading, or nothing.
+  It is derived from conditions (`UploadHealth`, free space, `BatteryMonitor`, upload in flight) and only colours the LED while the capture region is Recording.
 
-Priority, highest first: Halted, Scanning, Starting, Paused (the non-recording phases, which exclude each other), then Critical, Low battery, Uploading, Recording (the recording states, as `next_led_state` ranks them today).
-Red solid versus red flashing is the only same-colour pair, which is why patterns must actually animate (see below).
+The capture region always wins the look, so a health condition can never make a stopped pendant look like it is recording.
+Health conditions that matter while the pendant is not recording (a low battery while Stopped, a failing backup) go to the phone instead.
+The one exception to "one resolved state" is the flag acknowledgement, a short overlay that plays over Recording and then gives it back.
+
+| State | Region | Look | Capturing? | Condition | Status |
+|---|---|---|---|---|---|
+| Off | - | Dark | No | Daemon not running: no power, or systemd stopped it (`ExecStopPost=` writes an all-off frame) | Partly built: no `ExecStopPost=` yet, and the WS2812B latches its last frame, so a crash leaves the last colour lit |
+| Shutting down | Capture | White, pulsing | No | SIGTERM or SIGINT received; the in-flight capture is cut (PR #103) and the queue drains within `TimeoutStopSec` | Designed (PR #103) |
+| Halted | Capture | Red, solid | No | Needs a person: battery halt confirmed by `BatteryMonitor` (PR #101), first-boot onboarding gave up, or capture failed 3 times in a row | New (today a battery halt and a Wi-Fi activation failure show Critical, and the other cases leave the last colour lit) |
+| Scanning | Capture | Cyan, pulsing | No | Looking for an onboarding QR code: first boot, a 10 s hold from Stopped, or `visio-reonboard` | New (today onboarding shows Recording green) |
+| Booting | Capture | White, dim solid (same look as Stopped) | No | Daemon started: preflight, battery check, registration, orphan recovery, startup flush | Designed (PR #103 shows STOPPED during boot) |
+| Stopped | Capture | White, dim solid | No | Every boot, after onboarding, or after a 2 s hold while Recording; a 2 s hold starts recording | Designed (PR #103) |
+| Critical | Health | Red, flashing bright/dim | Yes | Needs you: the SD card has under 1 GB free (about 30 min left at 4 Mbps), or uploads keep failing while NetworkManager reports full connectivity (3+ in a row, latched by `UploadHealth`) | Partly built: today every failure counts, offline included, and there is no free-space check |
+| Low battery | Health | Yellow, pulsing | Yes | `BatteryMonitor` latch: sets under 20%, clears at 25% (PR #101) | Built (reader stubbed until a meter is fitted; hysteresis in PR #101) |
+| Uploading | Health | Blue, pulsing | Yes | A segment upload or retry round is in flight while recording | Built |
+| Recording | Capture | Green, solid | Yes | Capturing, confirmed by evidence (the capture process is alive and the segment file is growing); offline is normal and footage queues | Built (today derived from intent, not evidence) |
+| Flag saved (overlay) | - | Magenta, 150 ms | Yes | A short press while Recording, after the marker is written and fsynced (PR #100) | Designed (PR #100) |
+
+Priority, highest first: Shutting down, Halted, Scanning, Booting, Stopped (capture states, which exclude each other and always win the look), then, only while Recording: Critical, Low battery, Uploading, and plain Recording.
+This changes PR #103's precedence (`SHUTTING_DOWN > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING or STOPPED`): a health condition no longer shows over Stopped, so a stopped pendant that is draining its queue stays dim white instead of turning blue.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Off
-    Off --> Starting: power on / systemd start
-    Starting --> Halted: battery below halt threshold
-    Starting --> Scanning: no session.json
-    Starting --> Recording: session on disk, first capture begins
-    Scanning --> Starting: QR decoded, activating Wi-Fi
+    Off --> Booting: power on / systemd start
+    Booting --> Halted: battery halt confirmed
+    Booting --> Scanning: no session.json
+    Booting --> Stopped: session on disk
+    Scanning --> Booting: QR decoded, Wi-Fi activated
     Scanning --> Halted: 60 attempts, first boot
-    Scanning --> Recording: re-onboard timed out (login already saved)
-    Starting --> Halted: Wi-Fi activation failed
-    state RecordingFamily {
-        Recording --> Uploading: upload starts
-        Uploading --> Recording
-        Recording --> LowBattery: battery under 20%
-        Uploading --> Critical: 3rd failure while online
-        Recording --> Critical: under 1 GB free
-        Critical --> Recording: any upload success
+    Scanning --> Stopped: re-onboard failed, old profile kept
+    Stopped --> Recording: hold 2 s
+    Stopped --> Scanning: hold 10 s or visio-reonboard
+    state Recording {
+        Capturing --> Uploading: upload starts
+        Uploading --> Capturing
+        Capturing --> LowBattery: battery latch set
+        Uploading --> Critical: 3rd failure, connectivity full
+        Capturing --> Critical: under 1 GB free
+        Critical --> Capturing: cause cleared
     }
-    RecordingFamily --> Paused: double press
-    Paused --> Recording: double press
-    Paused --> Scanning: hold 10 s
-    RecordingFamily --> Scanning: hold 10 s or visio-reonboard
-    RecordingFamily --> Halted: halt or capture error
-    RecordingFamily --> Off: SIGTERM stop
-    Halted --> Off: daemon exits (after a 30 s hold)
-    Off --> Starting: systemd restart on failure
+    Recording --> Stopped: hold 2 s or SD full
+    Recording --> Halted: battery halt or capture failing
+    Stopped --> Halted: battery halt confirmed
+    Recording --> ShuttingDown: SIGTERM
+    Stopped --> ShuttingDown: SIGTERM
+    ShuttingDown --> Off: process exits
+    Halted --> Off: battery halt, clean poweroff
 ```
 
-Inside the recording family the drawn edges are illustrative: the state is resolved by priority, not by the edges, so any recording state can move to any other.
+Inside Recording the drawn edges are illustrative: the health region is resolved by priority, not by the edges, so any health state can move to any other.
 
 Transition rules:
-- Scanning needs the camera, so entering it from the Recording family ends the current segment cleanly first, and recording resumes as soon as scanning ends either way.
-- Recording always requires `session.json`: no path reaches the recording states without a saved login.
-  The only Scanning to Recording edge is a re-onboard that timed out, which can only start from a device that already has `session.json`.
-- The button has three gestures, told apart by timing instead of the current 2 s flag cooldown: a single press flags a moment, a double press (two presses within about 0.5 s) pauses or resumes recording, and holding about 10 s starts re-onboarding.
-  A single press waits out the double-press window before it counts as a flag, and a flag press while paused is ignored, since nothing is being recorded.
-- Paused shows a dark LED, so "dark means not recording" holds for the wearer and anyone nearby, and pausing ends the current segment cleanly (a short segment is valid under the Segment Duration Contract).
-  The pendant reports `recording_active = false` while paused, and a planned `recording_changed_at` field lets the app show "Paused since 14:05".
-  Pausing survives neither a reboot nor a power cycle: the pendant always starts recording again on boot.
-- Re-onboarding never strands the device: if no QR code is read within the attempt limit, the pendant goes back to recording on its existing network rather than halting; only first boot, which has no network to fall back to, halts.
-- Halted holds solid red for 30 s before the daemon exits, so the reason is visible, then the LED goes off.
-- Every exit, clean or not, ends with the LED off: the systemd unit gains an `ExecStopPost=` helper that writes an all-off frame, which also covers crashes and `SIGKILL` (only power loss bypasses it, and that turns the LED off anyway).
-- Offline is normal, not a failure: the pendant records away from Wi-Fi for most of the day.
-  Before each upload attempt or retry round the worker checks whether NetworkManager has a connection up; if not, the segment stays queued and `UploadHealth` is left untouched, so a walk never turns the LED red.
-  Only failures while a connection is up count towards Critical, because those mean something is wrong that the wearer must fix (for example an expired login or a full storage bucket).
-- Backup problems that do not need action right now go to the phone, not the LED.
-  The pendant adds `oldest_pending_at` to its `device_status` row, the app's Device tab shows how much footage is waiting and since when, and the nightly pipeline sends a push notification when footage has been waiting more than 24 hours.
-- The flag overlay never changes the underlying state; if the state changes during the blinks, the new state shows when they end.
+- **Boot.** Every boot comes up Stopped and only a 2 s hold starts recording (PR #103, decisions D2-b and D3-a: a daemon crash-restart within one power cycle resumes the wearer's last choice through a `/run` marker, and finishing onboarding leaves the pendant Stopped).
+  Recording always requires `session.json`: no path reaches Recording without a saved login.
+  The unit drops `After=network-online.target` (keeping a plain `Wants=`), so an offline boot lights the LED within seconds instead of waiting for the network-online timeout; the startup flush already tolerates no network.
+- **Button gestures** (one button, GPIO 17, told apart by hold time with gpiozero's `Button(hold_time=2)` and `held_time`):
+  a short press while Recording flags a moment, and a short press while Stopped is ignored (D4-a);
+  holding 2 s toggles Recording and Stopped;
+  holding 10 s from Stopped starts re-onboarding.
+  So that a 10 s hold does not first toggle at 2 s, a hold that starts from Stopped commits on release: at 2 s the LED previews green (release to start recording), and at 10 s it switches to cyan (release to scan).
+  A hold that starts from Recording commits at 2 s as PR #103 designs, since there is no longer gesture to wait for; re-onboarding from Recording is a stop first, then a 10 s hold.
+  This replaces J12's earlier "hold about 10 s from any state" and the double-press pause, which a short-press flag would have had to wait out.
+- **Scanning** needs the camera, so it is reachable only from Stopped or first boot, never mid-recording.
+  First-boot activation failure (usually a mistyped password) goes back to scanning rather than halting, and only 60 attempts without a decode halt.
+  A re-onboard that times out or whose activation fails reactivates the previous NetworkManager profile and returns to Stopped, so re-onboarding never strands the device.
+- **Halted** shows solid red so the reason is visible, and is kept apart from Critical's flash.
+  A battery halt holds red while the queue drains for up to the drain timeout, then powers off cleanly (`systemctl poweroff`, with PiJuice wake-on-charge armed when fitted, PR #101); it never happens on external power.
+  Any other halt keeps the daemon alive and the LED solid red until a power cycle, instead of exiting into systemd's `Restart=on-failure` loop (red, dark, white, red, forever).
+  The unit also gains `StartLimitBurst=` and `StartLimitIntervalSec=` so a daemon that crashes on start cannot loop either.
+- **Critical** means the wearer has to act, and says what will happen if they do not.
+  The SD cause sets under 1 GB free and clears above 1.5 GB (hysteresis, so deleting one uploaded segment does not flicker it).
+  Under 256 MB free the pendant stops recording on its own, goes to Stopped, and reports `stop_reason = storage_full` so the app can say why; a 2 s hold restarts it once uploads have freed space.
+  The upload cause counts only failures while NetworkManager reports `full` connectivity (`nmcli networking connectivity`, which runs NetworkManager's own connectivity check), so a captive portal, a weak edge-of-range link or a Supabase outage reported as `limited` or `portal` never turns the LED red; it clears on the next success.
+- **Offline is normal, not a failure.**
+  Before each upload attempt, retry round, flag-marker upload (PR #100's worker) or `device_status` upsert, the sender checks connectivity locally; without `full` connectivity the item stays queued and `UploadHealth` is untouched, so a walk never turns the LED red.
+- **Backup problems that do not need action right now go to the phone, not the LED.**
+  The pendant adds `oldest_pending_at` to its `device_status` row, the app's Device tab shows how much footage is waiting, since when, and when the pendant was last seen (`updated_at`).
+  Because an offline or logged-out pendant cannot report, the alert is server-side: the nightly pipeline sends an Expo push when `oldest_pending_at` is over 24 h old, or when `updated_at` is over 24 h old while the last row said `recording_active = true`.
+- **Not on the LED, by design:** clock not synced (no RTC without the PiJuice, so an offline boot can misdate segments), thermal throttling and under-voltage (`vcgencmd get_throttled`).
+  These are reported to the phone through planned `device_status` fields (`clock_synced`, `throttled`) rather than adding looks a wearer cannot act on.
+- **Hangs.** `ExecStopPost=` covers every exit but not a hung daemon, so the unit gains `WatchdogSec=` and the recording loop sends `WATCHDOG=1` only while segments keep completing (or while idling in Stopped), through `python3-systemd`'s `systemd.daemon.notify`.
+  A watchdog kill then goes through the same `ExecStopPost=` all-off frame and the start limit above.
+- **Flag acknowledgement** fires only after the marker is written and fsynced (PR #100), on release (PR #103: a hold never also flags), and never changes the underlying state; a real state change during the 150 ms wins.
 
-Animation: pulsing (about 1 s breathe) and flashing (2 Hz on/off) need a small LED renderer thread that owns the driver, takes the resolved state from a queue, and animates it.
-That thread replaces direct `apply_led_state` calls; the resolver stays pure and unit-tested without threads, like `next_worker_step`.
+Animation: pulsing (about 1 s breathe) and flashing (2 Hz) run on `LedController`'s own thread (PR #100), which is the single owner of the driver; no second renderer thread is added.
+Patterns never reach zero brightness: pulsing breathes between about 20% and 100%, and flashing alternates bright and dim, so the LED is never dark while the daemon runs, and a controller that dies mid-pattern falls back to the state's solid colour rather than off.
+The resolver stays pure and unit-tested without threads, like `next_worker_step`.
 
-**LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour until the renderer thread above exists.
+Accessibility: no two looks may differ by hue alone where they can be confused.
+Recording (green solid) and Halted (red solid) are the risky pair for red-green colour blindness, so Halted runs at full brightness against Recording's normal brightness, and the app always names the state.
+Scanning (cyan pulsing) and Uploading (blue pulsing) only occur in different contexts (setup, with the QR on the phone screen, versus recording).
+The M2 exit check renders each look through a colour-blindness simulation (the open-source `daltonlens` package) as a unit test, then confirms them by eye at 2 m.
+
+Libraries over hand-written code: gpiozero's hold support for the gestures, NetworkManager's built-in connectivity check, systemd's watchdog, start limit and `ExecStopPost=`, `python3-systemd` for notify, and the Expo push API for the nightly alert.
+The capture region may use `python-statemachine` (MIT, pure Python) instead of a hand-rolled state class if PR #103's `RecordingControl` grows beyond toggle and stop; the health region stays a pure function, since it is priority resolution, not a state machine.
+
+**LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour until `LedController` animates them (see the state machine above).
 `Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).
 Each WS2812B bit becomes one SPI byte at a 6.4 MHz request: `0xC0` (2 high, 6 low) for a 0 and `0xF0` (4 high, 4 low) for a 1, sent green, red, blue, most significant bit first, between two 240-byte all-zero resets (300 us latch).
 The BCM2835 SPI block runs at core clock / an even divider that the kernel rounds up, so both of the Zero 2W's core clocks (400 MHz / 64 and 250 MHz / 40) produce 6.25 MHz: 320 ns / 960 ns for a 0 and 640 ns / 640 ns for a 1 (312/938 ns and 625/625 ns at the requested 6.4 MHz).
@@ -384,6 +420,7 @@ This avoids needing to configure a captive portal or AP mode (`hostapd`).
 
 **As-built activation:** after onboarding writes the keyfile, `main()` runs `nmcli connection reload` then `nmcli connection up visio` (behind a `ConnectionActivator` protocol with a subprocess-backed real implementation).
 On activation failure the daemon flashes the Critical red LED and exits 1; the keyfile and session are already on disk, so systemd's `Restart=on-failure` plus NetworkManager autoconnect retry from there rather than re-running onboarding.
+Planned change (LED state machine above): a first-boot activation failure returns to Scanning, and a re-onboard activation failure restores the previous profile and returns to Stopped, so neither exits into the restart loop.
 Because NetworkManager does not reliably load dropped-in keyfiles on its own, restart boots also retry the reload/up best-effort whenever the keyfile exists; that retry never fails the boot.
 
 ### Device Status Reporting
@@ -397,6 +434,8 @@ segments_rejected, audio_active, updated_at
 ```
 
 Planned: `oldest_pending_at`, the capture time of the oldest segment still waiting to upload, so the app and the nightly pipeline can tell a stale backup from a normal offline walk (see the LED state machine).
+Planned: `stop_reason` (`button` or `storage_full`), `clock_synced` and `throttled`, so conditions the LED deliberately does not show still reach the phone.
+The nightly pipeline also treats a stale `updated_at` as a backup problem, because a pendant that cannot reach Supabase cannot report its own backlog.
 `audio_active` says whether the pendant is recording its microphone (see Audio Capture).
 `segments_rejected` is the number of segments the firmware gave up uploading because they are over the storage size limit and could not be split (see Segment Size Contract).
 
