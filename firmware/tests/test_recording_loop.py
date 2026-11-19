@@ -65,6 +65,25 @@ def test_next_led_state_shows_recording_when_idle_and_healthy():
     )
 
 
+def test_a_battery_halt_shows_halted_solid_red_over_every_other_condition():
+    # Halted is its own state, not Critical: Critical (red, flashing) means
+    # "still recording, needs you", while a halt has stopped recording and is
+    # about to power off. The pendant spec's LED state machine (PR #102) keeps
+    # the two looks apart so a wearer can tell them apart.
+    for battery_is_low in (False, True):
+        for is_uploading in (False, True):
+            for upload_critical in (False, True):
+                assert (
+                    next_led_state(
+                        battery_is_low,
+                        is_uploading=is_uploading,
+                        upload_critical=upload_critical,
+                        battery_halted=True,
+                    )
+                    == LedState.HALTED
+                )
+
+
 def test_next_led_state_lets_upload_critical_outrank_every_other_condition():
     for battery_is_low in (False, True):
         for is_uploading in (False, True):

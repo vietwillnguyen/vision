@@ -38,6 +38,7 @@ EXPECTED_STATE_FRAMES = {
     LedState.UPLOADING: _frame(ALL_ZERO, ALL_ZERO, ALL_ONE),  # blue
     LedState.LOW_BATTERY: _frame(ALL_ONE, ALL_ONE, ALL_ZERO),  # yellow
     LedState.CRITICAL: _frame(ALL_ZERO, ALL_ONE, ALL_ZERO),  # red
+    LedState.HALTED: _frame(ALL_ZERO, ALL_ONE, ALL_ZERO),  # red
 }
 
 EXPECTED_STATE_COLOURS = {
@@ -45,6 +46,7 @@ EXPECTED_STATE_COLOURS = {
     LedState.UPLOADING: (0, 0, 255),
     LedState.LOW_BATTERY: (255, 255, 0),
     LedState.CRITICAL: (255, 0, 0),
+    LedState.HALTED: (255, 0, 0),
 }
 
 # What the BCM2835 SPI block actually produces for a 6.4 MHz request: the
@@ -143,7 +145,7 @@ def test_a_drifted_core_clock_breaks_the_encoding():
 def test_concurrent_set_calls_never_interleave_on_the_wire():
     # The upload worker and the main thread both drive the LED.
     driver, spi = _driver()
-    barrier = threading.Barrier(4)
+    barrier = threading.Barrier(len(LedState))
 
     def hammer(state: LedState) -> None:
         barrier.wait()
@@ -156,7 +158,7 @@ def test_concurrent_set_calls_never_interleave_on_the_wire():
     for t in threads:
         t.join()
     assert spi.overlapping_writes == 0
-    assert len(spi.writes) == 80
+    assert len(spi.writes) == 20 * len(LedState)
     assert set(spi.writes) == set(EXPECTED_STATE_FRAMES.values())
 
 

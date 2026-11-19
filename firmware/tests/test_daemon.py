@@ -54,6 +54,7 @@ from visio_recorder.recording_loop import DiskStats, LoopOutcome, RetryBackoff
 from visio_recorder.upload_queue import list_pending
 
 CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)
+HALTED_LED = ((255, 0, 0), LedPattern.SOLID)
 RECORDING_LED = ((0, 255, 0), LedPattern.SOLID)
 UPLOADING_LED = ((0, 0, 255), LedPattern.PULSING)
 LOW_BATTERY_LED = ((255, 255, 0), LedPattern.PULSING)
@@ -218,7 +219,7 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
     assert [u["segments_uploaded_today"] for u in status.upserts] == [0, 1, 2, 3, 3]
 
 
-def test_halt_battery_sets_critical_led_drains_queue_and_powers_off(tmp_path):
+def test_halt_battery_sets_halted_led_drains_queue_and_powers_off(tmp_path):
     stop = threading.Event()
     led = FakeLedDriver()
     storage = FakeStorageClient()
@@ -254,22 +255,22 @@ def test_halt_battery_sets_critical_led_drains_queue_and_powers_off(tmp_path):
     # Both recorded-before-halt segments were drained by the worker.
     assert len(storage.uploaded) == 2
     # The drained segments see the halted (low) battery, so each applies
-    # LOW_BATTERY twice; the halt CRITICAL must come after the whole drain so
+    # LOW_BATTERY twice; the halt HALTED must come after the whole drain so
     # a battery-halted device finishes red, never green/yellow.
-    assert led.calls == [LOW_BATTERY_LED] * 4 + [CRITICAL_LED]
-    assert led.calls[-1] == CRITICAL_LED
+    assert led.calls == [LOW_BATTERY_LED] * 4 + [HALTED_LED]
+    assert led.calls[-1] == HALTED_LED
     # And the halt ends in a power-off rather than leaving the Pi powered and
     # discharging, with the wake armed so nothing needs a human to come back.
     assert power.power_offs == [WAKE_ON_CHARGE_PCT]
 
 
-def test_halt_join_waits_for_slow_worker_before_applying_critical_led(tmp_path):
+def test_halt_join_waits_for_slow_worker_before_applying_halted_led(tmp_path):
     # Regression test: the halt path used to join(timeout=5), so a worker
     # call running past 5s let the main thread give up waiting and apply the
-    # halt CRITICAL LED while the worker was still mid-flight; the worker
+    # halt HALTED LED while the worker was still mid-flight; the worker
     # could then overwrite it with its own restore LED. Joining without a
     # timeout closes that race, so this proves the loop stays blocked well
-    # past the old 5s window and CRITICAL is applied only after the worker's
+    # past the old 5s window and HALTED is applied only after the worker's
     # own LED restore has already happened.
     stop = threading.Event()
     led = FakeLedDriver()
@@ -311,17 +312,17 @@ def test_halt_join_waits_for_slow_worker_before_applying_critical_led(tmp_path):
 
     assert upload_blocked.wait(timeout=5), "worker never reached the blocking upload"
     # Wait past the old 5s join timeout: with the bug, the main thread would
-    # have given up here and returned, applying CRITICAL while the worker was
+    # have given up here and returned, applying HALTED while the worker was
     # still blocked above.
     loop_thread.join(timeout=5.2)
     assert loop_thread.is_alive(), "join returned before the worker finished"
-    assert CRITICAL_LED not in led.calls
+    assert HALTED_LED not in led.calls
 
     release_upload.set()
     loop_thread.join(timeout=5)
     assert not loop_thread.is_alive()
 
-    assert led.calls == [LOW_BATTERY_LED, LOW_BATTERY_LED, CRITICAL_LED]
+    assert led.calls == [LOW_BATTERY_LED, LOW_BATTERY_LED, HALTED_LED]
 
 
 def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_path):
@@ -471,14 +472,14 @@ def test_battery_at_warn_threshold_shows_recording_led():
     assert led.calls == [RECORDING_LED]
 
 
-def test_a_battery_flat_across_every_boot_sample_halts_and_shows_critical():
+def test_a_battery_flat_across_every_boot_sample_halts_and_shows_halted():
     led = FakeLedDriver()
 
     result, slept = _startup(FakeTelemetryBatteryReader(pct=5), led)
 
     assert result.proceed is False
     assert result.battery_pct == 5
-    assert led.calls == [CRITICAL_LED]
+    assert led.calls == [HALTED_LED]
     # Three samples, so two waits: the whole cost of not trusting one reading.
     assert slept == [1.0, 1.0]
 
@@ -523,7 +524,7 @@ def test_a_gauge_faulted_from_power_on_refuses_the_boot_so_main_powers_off():
     assert result.battery is None
     assert reader.reads == HALT_CONFIRMATIONS
     assert slept == [1.0] * (HALT_CONFIRMATIONS - 1)
-    assert led.calls == [CRITICAL_LED]
+    assert led.calls == [HALTED_LED]
 
 
 def test_a_boot_read_that_fails_once_then_succeeds_still_records():
@@ -657,7 +658,7 @@ def test_battery_halt_reports_recording_inactive_after_the_drain(tmp_path):
 
     assert status.upserts[-1]["recording_active"] is False
     assert status.upserts[-1]["battery_pct"] == 5
-    assert led.calls[-1] == CRITICAL_LED
+    assert led.calls[-1] == HALTED_LED
 
 
 def test_a_confirmed_voltage_floor_halts_the_loop_the_same_way_a_flat_one_does(
@@ -685,7 +686,7 @@ def test_a_confirmed_voltage_floor_halts_the_loop_the_same_way_a_flat_one_does(
     )
 
     assert outcome is LoopOutcome.HALTED
-    assert led.calls[-1] == CRITICAL_LED
+    assert led.calls[-1] == HALTED_LED
     assert power.power_offs == [WAKE_ON_CHARGE_PCT]
 
 
@@ -750,7 +751,7 @@ def test_charge_returning_during_the_drain_cancels_the_power_off(tmp_path):
     assert power.power_offs == []
     # The red is shown while the halt is still a halt, then given up for the
     # live state once it is cancelled - a resuming pendant must not sit red.
-    assert CRITICAL_LED in led.calls
+    assert HALTED_LED in led.calls
     assert led.calls[-1] == RECORDING_LED
 
 
@@ -908,7 +909,7 @@ def test_a_gauge_that_stays_unreadable_halts_and_powers_off(tmp_path):
     # confirmation count.
     assert runner.record_count == HALT_CONFIRMATIONS
     assert status.upserts[-1]["recording_active"] is False
-    assert led.calls[-1] == CRITICAL_LED
+    assert led.calls[-1] == HALTED_LED
     assert power.power_offs == [WAKE_ON_CHARGE_PCT]
 
 
@@ -1732,6 +1733,7 @@ def test_a_fixed_full_percentage_only_source_never_halts_or_warns(tmp_path):
     assert power.power_offs == []
     assert LOW_BATTERY_LED not in led.calls
     assert CRITICAL_LED not in led.calls
+    assert HALTED_LED not in led.calls
 
 
 def test_a_fixed_full_percentage_only_source_boots_straight_into_recording():

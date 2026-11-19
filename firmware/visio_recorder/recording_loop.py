@@ -157,19 +157,20 @@ def next_led_state(
     recording stop/start control design adds, which slot in at priorities 2
     and 6 when that work lands.
 
-    ``battery_halted`` is first. A halt is terminal, and the red is the
+    ``battery_halted`` is first. A halt is terminal, and the solid red is the
     pendant's only chance to tell the wearer *why* it is about to go dark;
-    "charge me" is the one actionable message at that moment. It is also what
-    the halt path has always done by applying Critical last, after the upload
-    worker is joined, so no drained segment's LED restore can paint over it -
-    the invariant this function exists to hold.
+    "charge me" is the one actionable message at that moment. It is Halted,
+    not Critical: Critical's flash means "still recording, needs you", while a
+    halt has stopped recording. The halt path applies it last, after the
+    upload worker is joined, so no drained segment's LED restore can paint
+    over it - the invariant this function exists to hold.
 
     ``upload_critical`` outranks the running states below it for the same
     reason the halt outranks it: a device losing footage is worth more than
     reporting a low battery or an upload in flight.
     """
     if battery_halted:
-        return LedState.CRITICAL
+        return LedState.HALTED
     if upload_critical:
         return LedState.CRITICAL
     if battery_is_low:

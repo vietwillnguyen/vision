@@ -146,7 +146,7 @@ A single Python systemd service manages the full device lifecycle.
 
 1. PiJuice powers on Pi; systemd starts `visio-recorder` with `EnvironmentFile=/etc/visio-recorder.env` supplying Supabase credentials and the data-dir/segment/framerate tunables.
 2. Check the battery via the PiJuice API, debounced: `BATTERY_BOOT_SAMPLES` (3) samples one second apart rather than the single sample this used to take, so a pendant is never refused a day's recording over one bad read at power-on.
-   A confirmed halt (charge or voltage, and only while not externally powered) flashes the Critical red LED and runs the power-off sequence instead of exiting 0 - an exit left the Pi powered and discharging, which is how an idle pendant browns out mid-write.
+   A confirmed halt (charge or voltage, and only while not externally powered) shows the Halted solid red LED and runs the power-off sequence instead of exiting 0 - an exit left the Pi powered and discharging, which is how an idle pendant browns out mid-write.
    A confirmed low battery proceeds but shows the low-battery LED throughout, with the hysteresis band already applied.
    See Battery and Power Management for the thresholds, the debounce, and the power-off sequence.
 3. First boot only (no session file on disk yet): scan a QR code via `rpicam-still` + zbar to onboard WiFi (writes the NetworkManager keyfile) and Supabase auth, up to 60 attempts; exit 1 if onboarding never succeeds.
@@ -181,7 +181,7 @@ A single Python systemd service manages the full device lifecycle.
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
   Critical is a latched condition rather than a momentary one, so it is derived from the consecutive-failure counter (`UploadHealth`) instead of being applied once at the moment of escalation.
   That makes the red survive the following segments: while the counter is at or past the threshold, the segment's own upload shows red too, not the Uploading blue and the restored Recording green, and only the resetting success returns the LED to green or yellow.
-  Critical outranks both low battery and uploading in `next_led_state`, matching the battery-halt path, which already applies Critical last so it cannot be overwritten.
+  Critical outranks both low battery and uploading in `next_led_state`, while the battery-halt path applies its own Halted state last so it cannot be overwritten.
 - On successful upload, local file is deleted to free SD space.
 
 ### Audio Capture (as-built)
@@ -286,7 +286,7 @@ The ladder is the whole contract: conditions are not mutually exclusive (a penda
 
 | Priority | Condition | State | Color / Pattern |
 |---|---|---|---|
-| 1 | Battery halt confirmed | Critical | Red flash |
+| 1 | Battery halt confirmed | Halted | Red, solid |
 | 2 | Deliberate shutdown in progress (SIGTERM / SIGINT) | Shutting down | White, pulsing |
 | 3 | 3 consecutive upload failures, latched | Critical | Red flash |
 | 4 | Low-battery latch set (see Battery and Power Management) | Low battery | Pulsing yellow |
@@ -296,15 +296,15 @@ The ladder is the whole contract: conditions are not mutually exclusive (a penda
 
 Priorities 2 and 6-Stopped belong to the recording stop/start control design, which is approved but not yet implemented; whichever of the two features lands second composes with the first against this table rather than re-deriving an order.
 That design states the ladder as `SHUTTING_DOWN > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING or STOPPED`.
-This table refines it by splitting its single `CRITICAL` term in two, because the two things that paint the LED red are not the same event:
+This table refines it by giving the battery halt its own state, Halted, because the two things that paint the LED red are not the same event (the full two-region LED state machine is owned by the v1 PRD's pendant spec update, PR #102):
 
-- A **battery halt** is terminal and outranks everything, including a deliberate shutdown. It is the pendant's only chance to tell the wearer *why* it just went dark, and "charge me" is the one actionable message at that moment. It is also already applied last, after the upload worker is joined, so no drained segment's LED restore can paint over it - the invariant that made `next_led_state` exist.
+- A **battery halt** is terminal and outranks everything, including a deliberate shutdown. It shows Halted, solid red, so it is not mistaken for Critical's flash, which means "still recording, needs you". It is the pendant's only chance to tell the wearer *why* it just went dark, and "charge me" is the one actionable message at that moment. It is also already applied last, after the upload worker is joined, so no drained segment's LED restore can paint over it - the invariant that made `next_led_state` exist.
 - An **upload-failure** Critical is a running condition, not an ending one. A deliberate shutdown outranks it: while the pendant is powering off, "I am shutting down" is what the wearer needs, and the failed uploads are still queued for the next boot regardless.
 
 A battery halt therefore never shows Shutting down even though it ends in a power-off.
 Never "LED off" in any state: a dark pendant is indistinguishable from a dead one.
 
-`next_led_state` in `firmware/visio_recorder/recording_loop.py` is the single place this ladder is encoded, including the halt, which no longer applies `LedState.CRITICAL` by hand.
+`next_led_state` in `firmware/visio_recorder/recording_loop.py` is the single place this ladder is encoded, including the halt, which resolves to `LedState.HALTED` instead of applying `LedState.CRITICAL` by hand.
 
 **LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour.
 `Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).
@@ -403,7 +403,7 @@ A confirmed halt always powers off; there is no switch to suppress it, because a
 A pendant that halts must come back on its own.
 Two mechanisms cover the two cases, and they are deliberately different:
 
-- **Charge returns before the power-off.** The re-read at step 5 sees external power, the halt is cancelled, the Critical LED gives way to the live state, and the recording loop is re-entered with a fresh upload worker that inherits the upload-failure streak and the day's upload count, so the Critical latch and `segments_uploaded_today` carry across the restart. Plugging a pendant in during the drain therefore keeps it running rather than powering it off and waiting for the wake.
+- **Charge returns before the power-off.** The re-read at step 5 sees external power, the halt is cancelled, the Halted LED gives way to the live state, and the recording loop is re-entered with a fresh upload worker that inherits the upload-failure streak and the day's upload count, so the Critical latch and `segments_uploaded_today` carry across the restart. Plugging a pendant in during the drain therefore keeps it running rather than powering it off and waiting for the wake.
 - **Charge returns after the power-off.** `SetWakeUpOnCharge(25)` was armed in step 6, so the PiJuice powers the Pi back up once the pack reaches 25 %, and the ordinary boot sequence runs. Nothing waits for a human to press anything.
 
 Neither path needs a manual reboot, which was the behaviour this replaces.

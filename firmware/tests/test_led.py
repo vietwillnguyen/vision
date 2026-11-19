@@ -31,3 +31,9 @@ def test_critical_state_is_flashing_red():
     driver = FakeLedDriver()
     apply_led_state(driver, LedState.CRITICAL)
     assert driver.calls == [((255, 0, 0), LedPattern.FLASHING)]
+
+
+def test_halted_state_is_solid_red():
+    driver = FakeLedDriver()
+    apply_led_state(driver, LedState.HALTED)
+    assert driver.calls == [((255, 0, 0), LedPattern.SOLID)]

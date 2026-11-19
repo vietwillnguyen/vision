@@ -361,7 +361,7 @@ def _complete_battery_halt(
 ) -> LoopOutcome:
     """Show the halt, then either cancel it or power the pendant off.
 
-    The Critical red comes first and is the final LED state of a real halt: it
+    The Halted solid red comes first and is the final LED state of a real halt: it
     is applied after the worker join, so nothing a drained segment does can
     paint over it, and it is the pendant's only chance to tell the wearer why
     it is about to go dark.
@@ -411,9 +411,9 @@ def run_recording_loop(
 
     The main thread only records and enqueues. A single worker thread owns all
     upload state (segment count, the ``UploadHealth`` consecutive-failure
-    counter) and every LED call except the halt CRITICAL applied here at exit.
+    counter) and every LED call except the halt HALTED applied here at exit.
     Both the halt and stop paths drain the queue via a ``None`` sentinel before
-    joining the worker; on halt, the CRITICAL LED is applied after the drain so
+    joining the worker; on halt, the HALTED LED is applied after the drain so
     it is the final LED state and cannot be overwritten by the drained
     segments' LED restores.
 

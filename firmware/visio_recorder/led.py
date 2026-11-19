@@ -7,6 +7,7 @@ class LedState(Enum):
     UPLOADING = "uploading"
     LOW_BATTERY = "low_battery"
     CRITICAL = "critical"
+    HALTED = "halted"
 
 
 class LedPattern(Enum):
@@ -29,6 +30,11 @@ _STATE_TO_COLOR_PATTERN: dict[LedState, tuple[tuple[int, int, int], LedPattern]]
     LedState.UPLOADING: (BLUE, LedPattern.PULSING),
     LedState.LOW_BATTERY: (YELLOW, LedPattern.PULSING),
     LedState.CRITICAL: (RED, LedPattern.FLASHING),
+    # Solid, unlike Critical's flash: Critical is "still recording, needs you",
+    # Halted is "stopped recording, about to power off" (pendant spec, LED
+    # state machine). The SPI driver renders both as solid red until the LED
+    # controller animates patterns.
+    LedState.HALTED: (RED, LedPattern.SOLID),
 }
 
 
