@@ -18,7 +18,7 @@ from visio_recorder.capture import (
     record_segment,
     segment_path,
 )
-from visio_recorder.device_identity import load_or_create_device_id, register_device
+from visio_recorder.device_identity import load_paired_device_id
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
     PiJuiceBatteryReader,
@@ -28,11 +28,24 @@ from visio_recorder.flag_button import FlagUploadWorker, make_flag_press_handler
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
 from visio_recorder.onboarding import (
+    ConnectionActivator,
     NmcliConnectionActivator,
+    QrScanner,
     RpicamZbarScanner,
     activate_connection,
     reactivate_connection_if_configured,
     run_onboarding,
+)
+from visio_recorder.pairing import (
+    DEVICE_FILE,
+    PAIRING_FILE,
+    SESSION_FILE,
+    PairingRejectedError,
+    PairingState,
+    PairingUnavailableError,
+    clear_local_pairing,
+    complete_pairing,
+    pairing_state,
 )
 from visio_recorder.recording_loop import (
     DiskStatsReader,
@@ -56,7 +69,7 @@ from visio_recorder.segment_size import (
     default_segment_duration_ms,
     predicted_segment_bytes,
 )
-from visio_recorder.supabase_clients import build_supabase_clients
+from visio_recorder.supabase_clients import SessionRevokedError, build_supabase_clients
 from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
 from visio_recorder.uploader import StorageClient
 
@@ -64,7 +77,6 @@ _DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
 _ONBOARDING_MAX_ATTEMPTS = 60
 _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
 _NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
-_DEVICE_NAME = "visio-pendant"
 
 _logger = logging.getLogger(__name__)
 
@@ -449,6 +461,62 @@ def run_recording_loop(
         apply_led_state(deps.led_driver, LedState.CRITICAL)
 
 
+def ensure_paired(
+    data_dir: Path,
+    scanner: QrScanner,
+    activator: ConnectionActivator,
+    led_driver: LedDriver,
+    pair: Callable[[], str],
+    *,
+    nm_keyfile_path: Path = _NM_KEYFILE_PATH,
+    max_attempts: int = _ONBOARDING_MAX_ATTEMPTS,
+) -> str | None:
+    """The boot gate: the paired device id, or None when the daemon must exit 1.
+
+    ``UNPAIRED`` deletes any session first (a pendant onboarded the old way
+    still holds its owner's) and scans for a QR. ``PENDING`` (a scanned code
+    not yet claimed) and a fresh scan both bring Wi-Fi up before ``pair``,
+    so a first boot with no connectivity never reaches the network. Exiting 1
+    lets systemd's Restart=on-failure retry from whatever state is on disk.
+    """
+    state = pairing_state(data_dir)
+    if state is PairingState.PAIRED:
+        reactivate_connection_if_configured(
+            activator, _NM_CONNECTION_ID, nm_keyfile_path
+        )
+        return load_paired_device_id(data_dir / DEVICE_FILE)
+    if state is PairingState.UNPAIRED:
+        # Also drops an unreadable pairing.json, which cannot be resumed.
+        (data_dir / SESSION_FILE).unlink(missing_ok=True)
+        (data_dir / PAIRING_FILE).unlink(missing_ok=True)
+        payload = run_onboarding(
+            scanner, nm_keyfile_path, data_dir / PAIRING_FILE, max_attempts
+        )
+        if payload is None:
+            return None
+    if not activate_connection(activator, _NM_CONNECTION_ID, led_driver):
+        return None
+    try:
+        return pair()
+    except PairingRejectedError:
+        _logger.exception("pairing was refused; scanning for a new QR next boot")
+        apply_led_state(led_driver, LedState.CRITICAL)
+        return None
+    except PairingUnavailableError:
+        _logger.exception("pairing could not finish; retrying next boot")
+        return None
+
+
+def handle_revoked_login(data_dir: Path, led_driver: LedDriver) -> None:
+    """Go back to scanning after Remove device or a re-pair elsewhere.
+
+    Only a definite rejection of the login reaches here; network failures
+    never unpair. Queued footage stays on the SD card.
+    """
+    clear_local_pairing(data_dir)
+    apply_led_state(led_driver, LedState.CRITICAL)
+
+
 def main() -> int:
     """Compose the daemon from its already-tested parts.
 
@@ -459,9 +527,7 @@ def main() -> int:
     """
     config = load_config(os.environ)
 
-    session_path = config.data_dir / "session.json"
-    state_path = config.data_dir / "device.json"
-    registered_marker_path = config.data_dir / "device_registered"
+    session_path = config.data_dir / SESSION_FILE
     queue_dir = config.data_dir / "queue"
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -472,35 +538,26 @@ def main() -> int:
     if not startup.proceed:
         return 0
 
-    if not session_path.exists():
-        payload = run_onboarding(
-            RpicamZbarScanner(),
-            _NM_KEYFILE_PATH,
-            session_path,
-            _ONBOARDING_MAX_ATTEMPTS,
-        )
-        if payload is None:
-            return 1
-        if not activate_connection(
-            NmcliConnectionActivator(), _NM_CONNECTION_ID, led_driver
-        ):
-            # Keyfile and session are on disk; systemd's Restart=on-failure
-            # plus NetworkManager autoconnect retry from here.
-            return 1
-    else:
-        reactivate_connection_if_configured(
-            NmcliConnectionActivator(), _NM_CONNECTION_ID, _NM_KEYFILE_PATH
-        )
-
-    device_id = load_or_create_device_id(state_path)
-
-    clients = build_supabase_clients(
-        config.supabase_url, config.supabase_anon_key, session_path
+    device_id = ensure_paired(
+        config.data_dir,
+        RpicamZbarScanner(),
+        NmcliConnectionActivator(),
+        led_driver,
+        lambda: complete_pairing(
+            config.supabase_url, config.supabase_anon_key, config.data_dir
+        ),
     )
+    if device_id is None:
+        return 1
 
-    if not registered_marker_path.exists():
-        register_device(clients.registration, device_id, _DEVICE_NAME)
-        registered_marker_path.touch()
+    try:
+        clients = build_supabase_clients(
+            config.supabase_url, config.supabase_anon_key, session_path
+        )
+    except SessionRevokedError:
+        _logger.exception("this pendant's login was revoked; scanning next boot")
+        handle_revoked_login(config.data_dir, led_driver)
+        return 1
 
     command_runner = SubprocessCommandRunner()
     audio = resolve_audio(command_runner, config.audio)

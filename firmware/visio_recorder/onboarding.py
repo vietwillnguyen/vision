@@ -6,12 +6,12 @@ from typing import Protocol
 
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
+from visio_recorder.pairing import write_pending_pairing
 from visio_recorder.wifi_onboard import (
     OnboardingPayload,
     QrDecodeError,
     parse_onboarding_qr_payload,
     write_nm_keyfile,
-    write_session_credentials,
 )
 
 _logger = logging.getLogger(__name__)
@@ -42,24 +42,30 @@ class RpicamZbarScanner:
 def run_onboarding(
     scanner: QrScanner,
     nm_keyfile_path: Path,
-    session_path: Path,
+    pending_path: Path,
     max_attempts: int,
 ) -> OnboardingPayload | None:
+    """Scan for the app's QR; save its Wi-Fi profile and its pairing code.
+
+    Nothing here touches the network: the code is claimed only after the
+    Wi-Fi profile is brought up. A QR that does not parse (including one from
+    an older app, which carries the owner's session) counts as a failed
+    attempt and scanning continues.
+    """
     for _ in range(max_attempts):
         raw = scanner.scan()
         if raw is None:
             continue
         try:
             payload = parse_onboarding_qr_payload(raw)
-        except QrDecodeError:
+        except QrDecodeError as err:
+            _logger.warning("ignoring QR: %s", err)
             continue
         try:
             write_nm_keyfile(nm_keyfile_path, payload.ssid, payload.password)
-            write_session_credentials(
-                session_path, payload.user_access_token, payload.user_refresh_token
-            )
         except ValueError:
             continue
+        write_pending_pairing(pending_path, payload.pairing_code)
         return payload
     return None
 

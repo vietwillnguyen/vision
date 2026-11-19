@@ -15,7 +15,6 @@ class QrDecodeError(ValueError):
 # The QR contract the app writes; docs/superpowers/specs/
 # 2026-11-19-visio-device-pairing-design.md, "QR payload v2".
 QR_PAYLOAD_VERSION = 2
-_LEGACY_SESSION_FIELDS = ("user_access_token", "user_refresh_token")
 
 
 @dataclass(frozen=True)
@@ -45,7 +44,8 @@ def parse_onboarding_qr_payload(payload: str) -> OnboardingPayload:
         )
 
     version = data.get("v")
-    if version is None and any(field in data for field in _LEGACY_SESSION_FIELDS):
+    # v1 had no version field and carried session tokens instead of a code.
+    if "v" not in data and "pairing_code" not in data:
         raise QrDecodeError(
             f"QR is from an older app version; update the app (length={len(payload)})"
         )

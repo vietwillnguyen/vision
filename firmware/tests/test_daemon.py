@@ -25,15 +25,26 @@ from tests.ws2812_waveform import decode_frame
 from visio_recorder.capture import AudioSettings, VideoSettings
 from visio_recorder.daemon import (
     LoopDeps,
+    ensure_paired,
+    handle_revoked_login,
     load_config,
     resolve_audio,
     run_recording_loop,
     run_startup_sequence,
 )
+from visio_recorder.device_identity import store_paired_device_id
 from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.led import LedPattern
+from visio_recorder.pairing import (
+    PairingRejectedError,
+    PairingState,
+    PairingUnavailableError,
+    pairing_state,
+    write_pending_pairing,
+)
 from visio_recorder.recording_loop import DiskStats, RetryBackoff
 from visio_recorder.upload_queue import list_pending
+from visio_recorder.wifi_onboard import write_session_credentials
 
 CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)
 RECORDING_LED = ((0, 255, 0), LedPattern.SOLID)
@@ -1220,3 +1231,157 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
 
     assert "device-abc/20260703_235900.mp4" in storage.uploaded
     assert list_pending(queue_dir) == []
+
+
+# The pairing gate main() runs before anything touches Supabase.
+
+PAIRED_DEVICE_ID = "11111111-1111-1111-1111-111111111111"
+QR_V2 = (
+    '{"v": 2, "ssid": "HomeNet", "password": "hunter2secret", "pairing_code": "code-1"}'
+)
+
+
+class ScriptedScanner:
+    def __init__(self, results) -> None:
+        self._results = list(results)
+        self.scans = 0
+
+    def scan(self):
+        self.scans += 1
+        return self._results.pop(0) if self._results else None
+
+
+class RecordingActivator:
+    def __init__(self, events: list, fail: bool = False) -> None:
+        self._events = events
+        self._fail = fail
+
+    def activate(self, connection_id: str) -> None:
+        self._events.append(("activate", connection_id))
+        if self._fail:
+            raise RuntimeError("nmcli failed")
+
+
+@dataclass
+class PairingRig:
+    data_dir: Path
+    events: list = field(default_factory=list)
+    led: FakeLedDriver = field(default_factory=FakeLedDriver)
+    pair_error: Exception | None = None
+
+    def pair(self) -> str:
+        self.events.append("pair")
+        if self.pair_error is not None:
+            if isinstance(self.pair_error, PairingRejectedError):
+                # What complete_pairing does before raising it.
+                (self.data_dir / "pairing.json").unlink(missing_ok=True)
+                (self.data_dir / "session.json").unlink(missing_ok=True)
+            raise self.pair_error
+        store_paired_device_id(self.data_dir / "device.json", PAIRED_DEVICE_ID)
+        (self.data_dir / "pairing.json").unlink(missing_ok=True)
+        return PAIRED_DEVICE_ID
+
+    def run(self, scanner: ScriptedScanner, *, activation_fails: bool = False):
+        return ensure_paired(
+            self.data_dir,
+            scanner,
+            RecordingActivator(self.events, fail=activation_fails),
+            self.led,
+            self.pair,
+            nm_keyfile_path=self.data_dir / "visio.nmconnection",
+            max_attempts=3,
+        )
+
+
+def _session(data_dir: Path) -> None:
+    write_session_credentials(data_dir / "session.json", "at", "rt")
+
+
+def test_unpaired_deletes_a_stale_session_then_scans_activates_and_pairs(tmp_path):
+    # A pendant onboarded the old way still has the owner's session on disk.
+    (tmp_path / "device.json").write_text('{"device_id": "legacy"}')
+    _session(tmp_path)
+    rig = PairingRig(tmp_path)
+    scanner = ScriptedScanner([QR_V2])
+
+    device_id = rig.run(scanner)
+
+    assert device_id == PAIRED_DEVICE_ID
+    assert scanner.scans == 1
+    assert rig.events == [("activate", "visio"), "pair"]
+    assert not (tmp_path / "session.json").exists()
+
+
+def test_unpaired_without_a_good_scan_never_touches_the_network(tmp_path):
+    rig = PairingRig(tmp_path)
+
+    assert rig.run(ScriptedScanner([])) is None
+
+    assert rig.events == []
+
+
+def test_pending_resumes_without_scanning(tmp_path):
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path)
+    scanner = ScriptedScanner([QR_V2])
+
+    assert rig.run(scanner) == PAIRED_DEVICE_ID
+
+    assert scanner.scans == 0
+    assert rig.events == [("activate", "visio"), "pair"]
+
+
+def test_pending_with_failed_activation_keeps_the_code_and_shows_critical(tmp_path):
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path)
+
+    assert rig.run(ScriptedScanner([]), activation_fails=True) is None
+
+    assert "pair" not in rig.events
+    assert rig.led.calls[-1] == CRITICAL_LED
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_a_rejected_pairing_shows_critical_and_rescans_next_boot(tmp_path):
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path, pair_error=PairingRejectedError("used code"))
+
+    assert rig.run(ScriptedScanner([])) is None
+
+    assert rig.led.calls[-1] == CRITICAL_LED
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+
+
+def test_an_unavailable_pairing_retries_next_boot(tmp_path):
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path, pair_error=PairingUnavailableError("offline"))
+
+    assert rig.run(ScriptedScanner([])) is None
+
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_paired_boots_normally_without_scanning_or_pairing(tmp_path):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    (tmp_path / "visio.nmconnection").touch()
+    rig = PairingRig(tmp_path)
+    scanner = ScriptedScanner([QR_V2])
+
+    assert rig.run(scanner) == PAIRED_DEVICE_ID
+
+    assert scanner.scans == 0
+    # The best-effort reactivation a restart boot always does.
+    assert rig.events == [("activate", "visio")]
+
+
+def test_a_revoked_login_returns_the_pendant_to_scanning(tmp_path):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    led = FakeLedDriver()
+
+    handle_revoked_login(tmp_path, led)
+
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+    assert not (tmp_path / "session.json").exists()
+    assert led.calls[-1] == CRITICAL_LED
