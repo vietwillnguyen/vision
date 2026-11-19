@@ -1,41 +1,50 @@
+"""The pendant's device id, as adopted from ``claim_pairing``.
+
+The id is the owner's ``devices`` row that the pairing code named; the pendant
+never invents one. The ``"pairing": 2`` marker distinguishes a file written by
+a finished pairing from the one firmware wrote when it borrowed the owner's
+session, so a pendant onboarded the old way is treated as unpaired.
+"""
+
 import json
-import os
-import uuid
 from pathlib import Path
-from typing import Protocol
+
+from visio_recorder.wifi_onboard import _write_private_text_atomic
+
+PAIRING_MARKER = 2
 
 
-def _read_stored_device_id(state_path: Path) -> str | None:
+def _read(state_path: Path) -> dict[str, object] | None:
     try:
-        device_id = json.loads(state_path.read_text())["device_id"]
-    except (OSError, ValueError, KeyError, TypeError):
+        data = json.loads(state_path.read_text())
+    except (OSError, ValueError):
         return None
-    return device_id if isinstance(device_id, str) else None
+    return data if isinstance(data, dict) else None
 
 
-def load_or_create_device_id(state_path: Path) -> str:
-    if state_path.exists():
-        stored = _read_stored_device_id(state_path)
-        if stored is not None:
-            return stored
-
-    device_id = str(uuid.uuid4())
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = state_path.with_name(state_path.name + ".tmp")
-    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps({"device_id": device_id}))
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, state_path)
+def load_paired_device_id(state_path: Path) -> str | None:
+    """The paired device id, or None for a missing, corrupt or legacy file."""
+    data = _read(state_path)
+    if data is None:
+        return None
+    device_id = data.get("device_id")
+    marker = data.get("pairing")
+    if not isinstance(device_id, str) or not device_id:
+        return None
+    if type(marker) is not int or marker != PAIRING_MARKER:
+        return None
     return device_id
 
 
-class DeviceRegistrationClient(Protocol):
-    def upsert_device(self, device_id: str, name: str) -> None: ...
+def store_paired_device_id(state_path: Path, device_id: str) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_private_text_atomic(
+        state_path, json.dumps({"device_id": device_id, "pairing": PAIRING_MARKER})
+    )
 
 
-def register_device(
-    client: DeviceRegistrationClient, device_id: str, name: str
-) -> None:
-    client.upsert_device(device_id, name)
+def drop_pairing_marker(state_path: Path) -> None:
+    """Keep the device id for diagnosis but stop treating it as paired."""
+    device_id = load_paired_device_id(state_path)
+    if device_id is not None:
+        _write_private_text_atomic(state_path, json.dumps({"device_id": device_id}))

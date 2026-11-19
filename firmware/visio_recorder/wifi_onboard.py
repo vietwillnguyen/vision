@@ -41,15 +41,13 @@ def parse_onboarding_qr_payload(payload: str) -> OnboardingPayload:
         ) from exc
     if not isinstance(data, dict):
         raise QrDecodeError(
-            "invalid onboarding QR payload: not a JSON object "
-            f"(length={len(payload)})"
+            f"invalid onboarding QR payload: not a JSON object (length={len(payload)})"
         )
 
     version = data.get("v")
     if version is None and any(field in data for field in _LEGACY_SESSION_FIELDS):
         raise QrDecodeError(
-            "QR is from an older app version; update the app "
-            f"(length={len(payload)})"
+            f"QR is from an older app version; update the app (length={len(payload)})"
         )
     # bool is an int subclass, and "2" is not the JSON number 2.
     if type(version) is not int or version != QR_PAYLOAD_VERSION:
@@ -145,19 +143,14 @@ def write_nm_keyfile(path: Path, ssid: str, password: str) -> None:
     _write_private_text(path, render_nm_keyfile(ssid, password))
 
 
-def write_session_credentials(
-    path: Path, access_token: str, refresh_token: str
-) -> None:
-    """Replace ``session.json`` atomically, readable only by its owner.
+def _write_private_text_atomic(path: Path, content: str) -> None:
+    """Replace ``path`` with ``content`` atomically, readable only by its owner.
 
-    The refresh token rotates on every refresh and the old one stops working,
-    so this file is rewritten during normal running, not just at onboarding.
-    A power cut halfway through an in-place write would leave neither token,
-    and the pendant would need re-onboarding; writing a temporary file in the
-    same directory, fsyncing it and renaming it over the old one means the
-    file always holds one complete session.
+    A power cut halfway through an in-place write would leave a truncated
+    file. Writing a temporary file in the same directory, fsyncing it,
+    renaming it over the old one and fsyncing the directory means the file
+    always holds either the old or the new content in full.
     """
-    content = json.dumps({"access_token": access_token, "refresh_token": refresh_token})
     tmp_path = path.with_name(f".{path.name}.tmp")
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
@@ -175,3 +168,17 @@ def write_session_credentials(
         os.fsync(dir_fd)
     finally:
         os.close(dir_fd)
+
+
+def write_session_credentials(
+    path: Path, access_token: str, refresh_token: str
+) -> None:
+    """Replace ``session.json`` atomically, readable only by its owner.
+
+    The refresh token rotates on every refresh and the old one stops working,
+    so this file is rewritten during normal running, not just at pairing. A
+    torn write would leave neither token and the pendant would need pairing
+    again, hence the atomic replace.
+    """
+    content = json.dumps({"access_token": access_token, "refresh_token": refresh_token})
+    _write_private_text_atomic(path, content)
