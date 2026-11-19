@@ -4,13 +4,26 @@ import React from 'react';
 import { DeviceContainer } from '../../src/containers/DeviceContainer';
 import type { VisionClient } from '../../src/lib/supabase';
 
-function fakeClient(row: Record<string, unknown>): VisionClient {
+const ROW = {
+  battery_pct: 55,
+  storage_used_gb: 1,
+  storage_free_gb: 10,
+  segments_pending: 0,
+  segments_uploaded_today: 3,
+  recording_active: false,
+};
+
+function fakeClient(
+  row: Record<string, unknown>,
+  rpc: jest.Mock = jest.fn(() => Promise.resolve({ data: null, error: null })),
+): VisionClient {
   return {
     from: () => ({
       select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: row, error: null }) }) }),
     }),
     channel: () => ({ on: () => ({ subscribe: () => ({}) }) }),
     removeChannel: () => {},
+    rpc,
   } as unknown as VisionClient;
 }
 
@@ -32,6 +45,8 @@ it('wires useDeviceStatus into DeviceScreen', async () => {
         recording_active: false,
       })}
       deviceId="dev-1"
+      paired
+      onDeviceChanged={jest.fn()}
       navigation={fakeNavigation()}
       route={{ key: 'DeviceHome', name: 'DeviceHome' }}
     />,
@@ -53,6 +68,8 @@ it('navigates to Reonboard when the re-onboard button is pressed', async () => {
         recording_active: false,
       })}
       deviceId="dev-1"
+      paired
+      onDeviceChanged={jest.fn()}
       navigation={navigation}
       route={{ key: 'DeviceHome', name: 'DeviceHome' }}
     />,
@@ -91,6 +108,8 @@ it('keeps showing the last known status when the status row is deleted', async (
     <DeviceContainer
       client={client}
       deviceId="dev-1"
+      paired
+      onDeviceChanged={jest.fn()}
       navigation={fakeNavigation()}
       route={{ key: 'DeviceHome', name: 'DeviceHome' }}
     />,
@@ -101,4 +120,69 @@ it('keeps showing the last known status when the status row is deleted', async (
 
   expect(screen.getByText('Battery: 55%')).toBeTruthy();
   expect(screen.queryByText('Battery: undefined%')).toBeNull();
+});
+
+async function renderPaired(rpc: jest.Mock, onDeviceChanged = jest.fn()) {
+  await render(
+    <DeviceContainer
+      client={fakeClient(ROW, rpc)}
+      deviceId="dev-1"
+      paired
+      onDeviceChanged={onDeviceChanged}
+      navigation={fakeNavigation()}
+      route={{ key: 'DeviceHome', name: 'DeviceHome' }}
+    />,
+  );
+  await waitFor(() => expect(screen.getByTestId('remove-device-button')).toBeTruthy());
+}
+
+it('removes the device only after confirmation, then refreshes it', async () => {
+  const rpc = jest.fn(() => Promise.resolve({ data: null, error: null }));
+  const onDeviceChanged = jest.fn();
+  await renderPaired(rpc, onDeviceChanged);
+
+  await fireEvent.press(screen.getByTestId('remove-device-button'));
+  expect(rpc).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByTestId('confirm-remove-button'));
+
+  expect(rpc).toHaveBeenCalledWith('unpair_device', { p_device_id: 'dev-1' });
+  await waitFor(() => expect(onDeviceChanged).toHaveBeenCalled());
+  expect(screen.queryByTestId('remove-confirmation')).toBeNull();
+});
+
+it('cancelling the confirmation calls nothing', async () => {
+  const rpc = jest.fn();
+  await renderPaired(rpc);
+
+  await fireEvent.press(screen.getByTestId('remove-device-button'));
+  await fireEvent.press(screen.getByTestId('cancel-remove-button'));
+
+  expect(rpc).not.toHaveBeenCalled();
+  expect(screen.getByTestId('remove-device-button')).toBeTruthy();
+});
+
+it('shows an error from the removal', async () => {
+  const rpc = jest.fn(() =>
+    Promise.resolve({ data: null, error: { message: 'device not found' } }),
+  );
+  const onDeviceChanged = jest.fn();
+  await renderPaired(rpc, onDeviceChanged);
+
+  await fireEvent.press(screen.getByTestId('remove-device-button'));
+  await fireEvent.press(screen.getByTestId('confirm-remove-button'));
+
+  await waitFor(() =>
+    expect(screen.getByTestId('remove-error')).toHaveTextContent('device not found'),
+  );
+  expect(onDeviceChanged).not.toHaveBeenCalled();
+});
+
+it('shows an error when the removal request fails outright', async () => {
+  const rpc = jest.fn(() => Promise.reject(new Error('fetch failed')));
+  await renderPaired(rpc);
+
+  await fireEvent.press(screen.getByTestId('remove-device-button'));
+  await fireEvent.press(screen.getByTestId('confirm-remove-button'));
+
+  await waitFor(() => expect(screen.getByTestId('remove-error')).toHaveTextContent('fetch failed'));
 });

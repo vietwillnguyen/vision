@@ -56,8 +56,8 @@ export function ReonboardScreen({
         <View style={styles.buttonWrap}>
           <Button
             testID="done-button"
-            title="Done"
-            color={colors.accent}
+            title="Close"
+            color={colors.textMuted}
             accessibilityLabel="Close the pairing code"
             onPress={onDone}
           />
@@ -107,6 +107,16 @@ export function ReonboardScreen({
             onPress={onNewCode}
           />
         </View>
+        <View style={styles.buttonWrap}>
+          <Button
+            testID="cancel-button"
+            title="Cancel"
+            color={colors.textMuted}
+            accessibilityLabel="Cancel pairing"
+            disabled={isSubmitting}
+            onPress={onDone}
+          />
+        </View>
       </View>
     );
   }
@@ -130,12 +140,28 @@ export function ReonboardScreen({
             onPress={onRetry}
           />
         </View>
+        <View style={styles.buttonWrap}>
+          <Button
+            testID="cancel-button"
+            title="Cancel"
+            color={colors.textMuted}
+            accessibilityLabel="Cancel pairing"
+            disabled={isSubmitting}
+            onPress={onDone}
+          />
+        </View>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
+      <Text style={styles.title} accessibilityRole="header">
+        Pair your pendant
+      </Text>
+      <Text style={styles.body}>
+        Enter the Wi-Fi network your pendant should join. You will get a code to show to its camera.
+      </Text>
       <TextInput
         testID="ssid-input"
         style={styles.input}
@@ -164,6 +190,16 @@ export function ReonboardScreen({
           accessibilityLabel="Generate onboarding QR code"
           disabled={!ssid || !password || isSubmitting}
           onPress={() => onSubmit(ssid, password)}
+        />
+      </View>
+      <View style={styles.buttonWrap}>
+        <Button
+          testID="cancel-button"
+          title="Cancel"
+          color={colors.textMuted}
+          accessibilityLabel="Cancel pairing"
+          disabled={isSubmitting}
+          onPress={onDone}
         />
       </View>
     </View>

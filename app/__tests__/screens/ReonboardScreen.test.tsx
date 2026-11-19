@@ -252,4 +252,49 @@ describe('ReonboardScreen', () => {
     await fireEvent.press(screen.getByTestId('new-code-button'));
     expect(onNewCode).toHaveBeenCalled();
   });
+
+  it('explains the form and lets the user back out of it', async () => {
+    const onDone = jest.fn();
+    await render(
+      <ReonboardScreen
+        step="form"
+        ssid=""
+        password=""
+        qrValue=""
+        errorMessage=""
+        isSubmitting={false}
+        onSsidChange={noop}
+        onPasswordChange={noop}
+        onSubmit={noop}
+        onDone={onDone}
+        onRetry={noop}
+        onNewCode={noop}
+      />,
+    );
+    expect(screen.getByText('Pair your pendant')).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('cancel-button'));
+    expect(onDone).toHaveBeenCalled();
+  });
+
+  it.each(['expired', 'error'] as const)('lets the user back out of the %s step', async (step) => {
+    const onDone = jest.fn();
+    await render(
+      <ReonboardScreen
+        step={step}
+        ssid="HomeNet"
+        password="hunter2"
+        qrValue=""
+        errorMessage="boom"
+        isSubmitting={false}
+        onSsidChange={noop}
+        onPasswordChange={noop}
+        onSubmit={noop}
+        onDone={onDone}
+        onRetry={noop}
+        onNewCode={noop}
+      />,
+    );
+    await fireEvent.press(screen.getByTestId('cancel-button'));
+    expect(onDone).toHaveBeenCalled();
+  });
 });

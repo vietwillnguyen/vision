@@ -1,19 +1,20 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
-import React from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { Button, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { ArchiveContainer } from './src/containers/ArchiveContainer';
 import { AuthContainer } from './src/containers/AuthContainer';
 import { ArchiveIcon, DeviceIcon, RawFootageIcon, TodayReelIcon } from './src/components/TabIcons';
 import { DeviceStack } from './src/navigation/DeviceStack';
 import { RawFootageContainer } from './src/containers/RawFootageContainer';
+import { ReonboardContainer } from './src/containers/ReonboardContainer';
 import { TodayReelContainer } from './src/containers/TodayReelContainer';
 import { useAuth } from './src/hooks/useAuth';
 import { useDevice } from './src/hooks/useDevice';
 import { supabase } from './src/lib/supabase';
-import { colors } from './src/theme';
+import { colors, spacing } from './src/theme';
 import type { VisionClient } from './src/lib/supabase';
 
 const Tab = createBottomTabNavigator();
@@ -46,6 +47,7 @@ export function AppRoot({ client }: { client: VisionClient }) {
 
 function SignedInApp({ client }: { client: VisionClient }) {
   const device = useDevice(client);
+  const [settingUp, setSettingUp] = useState(false);
 
   if (device.kind === 'loading') {
     return (
@@ -64,14 +66,47 @@ function SignedInApp({ client }: { client: VisionClient }) {
     );
   }
   if (device.kind === 'none') {
+    if (settingUp) {
+      // A code with no device: the pendant's claim creates the account's
+      // first device, which the refresh then finds.
+      return (
+        <View style={styles.setupPairing}>
+          <ReonboardContainer
+            client={client}
+            deviceId={null}
+            onDone={() => {
+              setSettingUp(false);
+              device.refresh();
+            }}
+          />
+          <StatusBar style="light" />
+        </View>
+      );
+    }
     return (
       <View style={styles.splash}>
-        <Text style={styles.muted}>No device linked to this account yet.</Text>
+        <View style={styles.setup}>
+          <Text style={styles.setupTitle} accessibilityRole="header">
+            Set up your Visio
+          </Text>
+          <Text style={styles.setupBody}>
+            Pair your pendant: enter your Wi-Fi details, then show the code to the pendant&apos;s
+            camera.
+          </Text>
+          <Button
+            testID="setup-button"
+            title="Pair your pendant"
+            color={colors.accent}
+            accessibilityLabel="Pair your pendant"
+            onPress={() => setSettingUp(true)}
+          />
+        </View>
+        <StatusBar style="light" />
       </View>
     );
   }
 
-  const deviceId = device.deviceId;
+  const { deviceId, paired, refresh } = device;
   return (
     <NavigationContainer theme={DarkTheme}>
       <Tab.Navigator
@@ -95,7 +130,14 @@ function SignedInApp({ client }: { client: VisionClient }) {
           {() => <RawFootageContainer client={client} deviceId={deviceId} />}
         </Tab.Screen>
         <Tab.Screen name="Device" options={{ tabBarIcon: DeviceIcon }}>
-          {() => <DeviceStack client={client} deviceId={deviceId} />}
+          {() => (
+            <DeviceStack
+              client={client}
+              deviceId={deviceId}
+              paired={paired}
+              onDeviceChanged={refresh}
+            />
+          )}
         </Tab.Screen>
         <Tab.Screen name="Archive" options={{ tabBarIcon: ArchiveIcon }}>
           {() => <ArchiveContainer client={client} deviceId={deviceId} />}
@@ -118,6 +160,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   splashTitle: { color: colors.text, fontSize: 40, fontWeight: '700' },
+  setup: { width: '100%', maxWidth: 420, paddingHorizontal: spacing.md },
+  setupTitle: { color: colors.text, fontSize: 28, fontWeight: '700', marginBottom: spacing.sm },
+  setupBody: { color: colors.textMuted, fontSize: 16, marginBottom: spacing.lg },
+  setupPairing: { flex: 1, backgroundColor: colors.background, paddingTop: spacing.lg },
   muted: { color: colors.textMuted, fontSize: 16 },
   error: { color: colors.danger, fontSize: 16 },
   tabLabel: { lineHeight: 14, flexShrink: 0 },
