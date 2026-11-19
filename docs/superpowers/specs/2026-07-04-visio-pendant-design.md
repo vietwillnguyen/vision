@@ -145,10 +145,14 @@ A single Python systemd service manages the full device lifecycle.
 
 1. PiJuice powers on Pi; systemd starts `visio-recorder` with `EnvironmentFile=/etc/visio-recorder.env` supplying Supabase credentials and the data-dir/segment/framerate tunables.
 2. Check battery level via PiJuice API. If below the halt threshold (<10%), flash LED red and exit 0 without recording; below the 20% low-battery threshold, proceed but show the low-battery LED throughout.
-3. First boot only (no session file on disk yet): scan a QR code via `rpicam-still` + zbar to onboard WiFi (writes the NetworkManager keyfile) and Supabase auth, up to 60 attempts; exit 1 if onboarding never succeeds.
-   Then activate the connection (`nmcli connection reload` + `nmcli connection up visio`); on activation failure, flash the Critical red LED and exit 1 so systemd retries.
-   On restart boots (session file already on disk), the same reload/up runs again as a best-effort retry whenever the keyfile exists, so a first boot whose activation failed is not stranded offline; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
-4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
+3. Pairing gate (as-built, device pairing, [`2026-11-19-visio-device-pairing-design.md`](2026-11-19-visio-device-pairing-design.md)): the daemon reads its pairing state from the data dir.
+   `UNPAIRED` (no finished pairing, including a pendant onboarded under the old contract) deletes any `session.json`, then scans a QR code via `rpicam-still` + zbar, up to 60 attempts, which writes the NetworkManager keyfile and saves the one-time pairing code to `pairing.json`; exit 1 if no QR ever parses.
+   `UNPAIRED` after a good scan and `PENDING` (a saved code not yet claimed) both activate the connection (`nmcli connection reload` + `nmcli connection up visio`; on failure, flash the Critical red LED and exit 1 so systemd retries), then sign in anonymously and claim the code with `claim_pairing`, which returns the owner's `device_id`.
+   A refused code clears the attempt, flashes Critical and exits 1, so the next boot scans again; a network or server failure exits 1 and keeps the code for the next boot.
+   `PAIRED` boots run the same reload/up as a best-effort retry whenever the keyfile exists; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
+4. Set the pendant's own session (`build_supabase_clients`).
+   A definite rejection (the login was removed in the app or replaced by a re-pair) clears the local pairing, flashes Critical and exits 1, so the next boot scans for a QR; network failures never unpair.
+   The pendant no longer writes `devices`: the device id comes from the claim.
 5. Flush any pending upload queue left over from a previous run, then recover orphaned captures that an unclean stop (SIGTERM mid-capture, power cut, crash) left at the top level of the data dir, and flush again only if anything was recovered.
    A lone or interrupted `.h264` is (re-)muxed and queued, and a lone `.mp4` is queued as is.
    On a mux failure the partial `.mp4` is removed, but the `.h264` is deleted only when it is zero bytes; a non-empty capture is kept for the next boot, since the failure may be transient (for example a full SD card).
@@ -314,7 +318,11 @@ This avoids needing to configure a captive portal or AP mode (`hostapd`).
 **As-built deviation:** the daemon writes a NetworkManager keyfile (`/etc/NetworkManager/system-connections/visio.nmconnection`) instead of `wpa_supplicant.conf`, because stock Raspberry Pi OS Bookworm uses NetworkManager and does not honor `wpa_supplicant.conf`.
 
 **As-built activation:** after onboarding writes the keyfile, `main()` runs `nmcli connection reload` then `nmcli connection up visio` (behind a `ConnectionActivator` protocol with a subprocess-backed real implementation).
-On activation failure the daemon flashes the Critical red LED and exits 1; the keyfile and session are already on disk, so systemd's `Restart=on-failure` plus NetworkManager autoconnect retry from there rather than re-running onboarding.
+On activation failure the daemon flashes the Critical red LED and exits 1; the keyfile and the pairing code are already on disk, so systemd's `Restart=on-failure` plus NetworkManager autoconnect retry from there rather than re-running onboarding.
+
+**As-built (device pairing, 2026-11):** the QR carries the Wi-Fi credentials plus a one-time pairing code (payload v2), never a login.
+The pendant signs in anonymously once Wi-Fi is up and claims the code, so it holds a login of its own that the phone refreshing or logging out cannot touch.
+See [`2026-11-19-visio-device-pairing-design.md`](2026-11-19-visio-device-pairing-design.md).
 Because NetworkManager does not reliably load dropped-in keyfiles on its own, restart boots also retry the reload/up best-effort whenever the keyfile exists; that retry never fails the boot.
 
 ### Device Status Reporting
@@ -492,7 +500,12 @@ Per day of full 8-hour recording (~14.4GB raw footage at 4 Mbps, ~480 one-minute
 - Recording active / paused indicator.
 - Settings: WiFi re-onboarding (show QR code), resolution, segment length, score weights.
 
-**As-built gap:** resolved - see [`2026-07-20-wifi-reonboard-qr-screen-design.md`](2026-07-20-wifi-reonboard-qr-screen-design.md). The Re-onboard button navigates to a QR display screen that encodes the WiFi credentials plus the signed-in user's current Supabase session tokens.
+**As-built gap:** resolved - see [`2026-07-20-wifi-reonboard-qr-screen-design.md`](2026-07-20-wifi-reonboard-qr-screen-design.md). The Re-onboard button navigates to a QR display screen.
+
+**As-built (device pairing, 2026-11):** that QR now encodes the Wi-Fi credentials plus a one-time pairing code, and the screen reports "Pendant paired" once the pendant claims it, or offers a new code when it expires.
+The tab also has "Remove device", which revokes the pendant's login behind a confirmation and keeps the device and its footage; a device without a pendant shows "Not paired" with a "Pair pendant" button.
+An account with no device sees "Set up your Visio", which starts the same pairing and creates the device when the pendant claims the code.
+See [`2026-11-19-visio-device-pairing-design.md`](2026-11-19-visio-device-pairing-design.md).
 
 **Tab 4 - Archive**
 
@@ -502,7 +515,9 @@ Per day of full 8-hour recording (~14.4GB raw footage at 4 Mbps, ~480 one-minute
 ### Auth
 
 Supabase Auth with email/password.
-Each device is linked to a user account via a `device_id` UUID generated on first boot.
+Each device is linked to a user account via a `device_id` UUID.
+
+**As-built (device pairing, 2026-11):** the `devices` row is created by the database when a pendant claims the owner's first pairing code, not by the pendant, and each pendant signs in as its own anonymous auth user linked by `devices.device_user_id`.
 
 ---
 
@@ -510,7 +525,8 @@ Each device is linked to a user account via a `device_id` UUID generated on firs
 
 ```sql
 users            -- Supabase Auth managed
-devices          -- device_id, user_id, name, created_at
+devices          -- device_id, user_id, name, created_at, push_token,
+                 --   device_user_id (the paired pendant's own anonymous login, unique)
 device_status    -- device_id, battery_pct, storage_used_gb, storage_free_gb,
                  --   segments_pending, segments_uploaded_today, recording_active, updated_at
 segments         -- id, device_id, recorded_at, duration_sec, s3_key,

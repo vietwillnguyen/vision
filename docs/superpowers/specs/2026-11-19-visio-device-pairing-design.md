@@ -1,7 +1,7 @@
 # Visio Device Pairing - Design Spec
 
 **Date:** 2026-11-19
-**Status:** Design approved by the product owner; not yet implemented.
+**Status:** Implemented on PR #105 (`fix/device-own-session`); see "As-built notes" at the end for where the build differs from the text above.
 **Implementation plan:** [`../plans/2026-11-19-visio-device-pairing.md`](../plans/2026-11-19-visio-device-pairing.md)
 **Supersedes:** the QR payload in [`2026-07-20-wifi-reonboard-qr-screen-design.md`](2026-07-20-wifi-reonboard-qr-screen-design.md) (payload v1).
 
@@ -74,7 +74,7 @@ Three gaps in the current app matter for this design:
 ## Data model and migrations
 
 One migration, `supabase/migrations/20261119120000_device_pairing.sql`.
-The SQL below was run against the local stack inside a rolled-back transaction, with every claim in the "Security analysis" section exercised by hand; pgTAP will hold it in place.
+The SQL below is what the migration contains; `supabase/tests/database/device_pairing.test.sql`, `rls_policies.test.sql` and `storage_buckets.test.sql` hold it in place.
 
 ### `devices.device_user_id`
 
@@ -710,6 +710,28 @@ Firmware and app roll back together with it, since v1 and v2 payloads are mutual
    Recommendation: a follow-up that enters scanning on a long press of the flag button (about 5 s), which deletes `session.json` locally.
    Until then the path is `sudo rm /var/lib/visio-recorder/session.json` over SSH and a restart.
 3. **Storage-api and `owner_id` in the insert check.**
-   The insert policy requires `owner_id = auth.uid()`, which storage-api sets from the JWT and Supabase documents for exactly this use.
-   It is verified by SQL here but not yet through storage-api with a real anonymous user, because the running local stack has anonymous sign-ins off.
-   The first live integration test settles it; if storage-api does not populate `owner_id` before the check, drop that clause from the insert policy only and keep it on the read policy.
+   Resolved: kept.
+   `test_the_paired_pendant_uploads_and_reports_and_the_owner_reads_both` in `integration/tests/test_device_session_live.py` uploads through storage-api as a real anonymous device user, and the insert policy's `owner_id = auth.uid()` clause passes, so no fallback was needed.
+
+Questions 1 and 2 were decided by the product owner: "Remove device" is revoke-only as designed, and re-onboarding a paired pendant whose Wi-Fi is gone stays out of scope (issues #113 and #114).
+
+## As-built notes
+
+Where the implementation differs from, or adds to, the text above:
+
+- **Refused claim, by SQLSTATE.**
+  supabase-py does not expose the HTTP status of a PostgREST error, so firmware treats a claim as definitely refused only when it fails with the errors `claim_pairing` raises itself (`P0001`, `42501`).
+  Anything else, including PostgREST's own `PGRST` codes (for example the function missing because the migration is not applied yet) and a proxy's 5xx, is retried on the next boot instead of clearing the code.
+- **A resumed session that is gone.**
+  If the anonymous session saved during an unfinished pairing is refused with a definite 4xx (the daily purge deletes an unlinked anonymous user after a day), firmware deletes it and signs in anonymously again, keeping the code.
+- **An unreadable `pairing.json`** counts as `UNPAIRED`, since there is no code to resume with; the scan path deletes it.
+- **v1 detection.**
+  A payload with neither `v` nor `pairing_code` is reported as "QR is from an older app version"; any other missing or wrong `v` is "unsupported QR version".
+  Both keep scanning, as designed.
+- **409 handling** applies to every queued file, flag markers included, through the same `rejected/` path.
+- **App confirmation** for "Remove device" is an inline card on the Device tab rather than a native alert, because React Native Web's `Alert` has no buttons.
+- **App pairing screens** gained a title, a Cancel button on the form, expired and error steps, and a "Close" button (instead of "Done") while the QR is still waiting for the pendant.
+  The QR sits on a white quiet zone so the dark theme does not touch the modules.
+- **Not paired** shows the device's last status report in muted text under the "Pair pendant" card, so footage counts stay visible after a removal.
+- **Integration helpers** for pairing live in `integration/tests/pendant.py`; `integration/tests/__init__.py` makes the suite a package so tests can import them.
+- **Live app test.** `app/__tests__/hooks/useDeviceStatus.live.test.tsx` now writes `device_status` as a paired pendant, since the owner no longer can.

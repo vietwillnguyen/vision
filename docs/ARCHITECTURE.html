@@ -28,11 +28,11 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 16618ecaf15a7a37f0c0cdf99a0a7ce0a5779bdf75199bee174845c0a76d77d0  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
-<!-- source-sha256: 31f884e638e4f0e441a3a10f0e15c28a566c6ce0c526c7e57beba1fe5b2c393c  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
+<!-- source-sha256: e5f3c4f2de8b2375155bc32917f90e5101da236766ab5e9f1421761f15c76480  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: d1457ce232a7e8251217875decdb0d313cd0a74b0de6cb37fc63978e8cad2178  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- source-sha256: 9f9b7e978508b17d85f92f6f5bbe30787d218e3a7bc1a9a664fdc7cf7863dcda  docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md -->
-<!-- regenerated-at: 2026-11-19 (device pairing design added, planned) -->
+<!-- source-sha256: a960f9b45b364d4b98b94e09c42debecdab306204f45c689f9be345f39a5309e  docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md -->
+<!-- regenerated-at: 2026-11-19 (device pairing built) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -53,7 +53,7 @@
     </ul>
   </div>
   <div class="navbar-end">
-    <span class="badge badge-ghost text-xs">regenerated 2026-07-23</span>
+    <span class="badge badge-ghost text-xs">regenerated 2026-11-19</span>
   </div>
 </div>
 
@@ -171,6 +171,7 @@ flowchart TD
                 <span class="badge badge-success badge-soft">#18/#19 flag button + NM activation — landed</span>
                 <span class="badge badge-success badge-soft">#8 app screen wiring — merged (PR #22)</span>
                 <span class="badge badge-success badge-soft">WiFi re-onboarding QR — merged (PR #25)</span>
+                <span class="badge badge-info badge-soft">device pairing (own pendant login) — built, PR #105 open</span>
                 <span class="badge badge-success badge-soft">#9 FLAG date fix — merged (PR #13)</span>
                 <span class="badge badge-success badge-soft">#6/#12 CI hardening — merged (PR #11/#14)</span>
                 <span class="badge badge-warning badge-soft">device provisioning + preflight — draft (PR #26, blocked on physical Pi test)</span>
@@ -193,18 +194,22 @@ flowchart TD
 flowchart TD
   A["systemd starts visio-recorder<br/>EnvironmentFile=/etc/visio-recorder.env"] --> B{"battery below 10%?"}
   B -- yes --> B1["CRITICAL LED, exit 0"]
-  B -- no --> C{"session.json exists?"}
-  C -- "no (first boot)" --> D["QR onboarding: WiFi NM keyfile<br/>+ Supabase auth, up to 60 attempts"]
+  B -- no --> C{"pairing state?"}
+  C -- "UNPAIRED" --> D0["delete session.json"]
+  D0 --> D["scan QR v2: WiFi NM keyfile<br/>+ pairing.json, up to 60 attempts"]
   D -- "never succeeds" --> D1["exit 1"]
   D -- "succeeds" --> D2["nmcli connection reload<br/>+ up visio"]
+  C -- "PENDING (code saved)" --> D2
   D2 -- "activation fails" --> D3["CRITICAL LED, exit 1<br/>(systemd retries)"]
-  D2 -- ok --> E
-  C -- yes --> C1["best-effort nmcli reload + up<br/>(if keyfile exists; never fatal)"]
-  C1 --> E["load_or_create_device_id"]
-  E --> F{"device_registered marker exists?"}
-  F -- no --> G["register_device, then touch marker"]
-  F -- yes --> H
-  G --> H["flush_pending queue"]
+  D2 -- ok --> P["anonymous sign-in,<br/>claim_pairing(code)"]
+  P -- "code refused" --> P1["clear pairing, CRITICAL LED,<br/>exit 1 (rescan next boot)"]
+  P -- "unreachable" --> P2["exit 1 (retry next boot)"]
+  P -- "device_id" --> E
+  C -- "PAIRED" --> C1["best-effort nmcli reload + up<br/>(if keyfile exists; never fatal)"]
+  C1 --> E["set_session (own login)"]
+  E -- "login revoked" --> E1["clear pairing, CRITICAL LED,<br/>exit 1 (rescan next boot)"]
+  E -- ok --> G
+  G["login ready"] --> H["flush_pending queue"]
   H --> R["recover_orphaned_segments<br/>(mux + queue leftover .h264/.mp4;<br/>keep non-empty captures on mux failure)"]
   R -- "recovered any" --> H2["flush_pending again"]
   R -- none --> I0
@@ -254,7 +259,7 @@ flowchart TD
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
         <li>Segment size is pinned, not defaulted: <span class="font-mono text-xs bg-base-200 rounded px-1">--width 1280 --height 720 --framerate 30 --bitrate 4000000</span> are passed explicitly, and the default segment length (60 s) is derived from the bitrate so a segment fits the hosted 50 MiB upload limit with a 1.66x margin. See the segment size contract below.</li>
         <li>Upload retry is <em>in-process</em>, owned by the existing upload worker: while segments are queued it blocks on its work queue only until a retry deadline, armed when the queue becomes non-empty and again after each round, and retries everything still queued once that deadline passes. A segment arriving does not restart the deadline, so a steady stream of segments cannot postpone a round. Each deadline is set from the backoff when armed, doubling per consecutive failure from 30 s to a 480 s cap and indexed by the same <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter that drives the CRITICAL LED, so retry failures escalate and a retry success clears it. The decision is the pure <span class="font-mono text-xs bg-base-200 rounded px-1">next_worker_step</span>, unit-tested without threads. A stopping worker never starts a round, and a round that tries no file (the queue emptied, or it was cancelled before its first file) leaves the counter and the LED untouched. No second thread and no scheduler; a new segment or the shutdown sentinel still wakes the worker at once, and a round in flight stops early once the loop is shutting down so a backlog is never uploaded through a battery halt. The startup flush is now the backstop rather than the only retry - and remains the only retry for flag markers, which <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> owns while the daemon runs.</li>
-        <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
+        <li>The pendant never writes <span class="font-mono text-xs bg-base-200 rounded px-1">devices</span>: its device id comes from <span class="font-mono text-xs bg-base-200 rounded px-1">claim_pairing</span> and is saved in <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> with a <span class="font-mono text-xs bg-base-200 rounded px-1">"pairing": 2</span> marker, so a pendant onboarded under the old contract rescans. Every pairing step is resumable after a power cut. See <a href="#pairing" class="link link-primary">Device Pairing</a>.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
         <li>The upload-failure CRITICAL LED is <em>latched</em>, not momentary: both of <span class="font-mono text-xs bg-base-200 rounded px-1">on_segment_complete</span>'s LED states are derived from the shared <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter, and <span class="font-mono text-xs bg-base-200 rounded px-1">upload_critical</span> outranks low battery and uploading in <span class="font-mono text-xs bg-base-200 rounded px-1">next_led_state</span>. Red therefore survives the following segments' upload blue and recording green until the success that resets the counter. Previously the worker applied red only after those two colours had already been written, so a sustained outage looked normal for most of every segment.</li>
@@ -302,7 +307,7 @@ flowchart TD
       <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, and hands it to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread never touches the network); a 2s cooldown drops bounce/double-taps, and a failed upload leaves the marker queued for next-boot flush; unlike segments it gets no in-process retry, so it never races the upload worker.</span>
     </div>
     <div class="alert alert-success alert-soft" role="alert">
-      <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
+      <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + pairing code are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
     </div>
     <div class="alert alert-warning alert-soft" role="alert">
       <span><strong>LED SPI rewire: provisioning follow-ups and bench checks open (2026-11).</strong> The firmware now drives the LED over SPI0 MOSI, freeing GPIO 18 for I2S audio and removing the <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span> need that kept the daemon on root. Draft PR #26 still installs and checks <span class="font-mono text-xs bg-base-200 rounded px-1">rpi_ws281x</span>; it needs <span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>, SPI and <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> enabled, and a <span class="font-mono text-xs bg-base-200 rounded px-1">spidev</span> preflight check. Dropping root additionally needs onboarding to create the WiFi profile with <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection add</span> instead of writing a keyfile (NetworkManager rejects non-root-owned keyfiles, and its D-Bus policy denies <span class="font-mono text-xs bg-base-200 rounded px-1">ReloadConnections</span> to non-root callers), a <span class="font-mono text-xs bg-base-200 rounded px-1">visio</span> user in <span class="font-mono text-xs bg-base-200 rounded px-1">video gpio i2c spi</span> and a polkit rule for <span class="font-mono text-xs bg-base-200 rounded px-1">settings.modify.system</span> + <span class="font-mono text-xs bg-base-200 rounded px-1">network-control</span>. On the bench: move the data wire to header pin 19, check each colour, confirm a 3.3 V data line drives the WS2812B reliably, and confirm the fitted part is a WS2812B-V5. Full list: <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26">provisioning spec, LED SPI rewire follow-ups</a>.</span>
@@ -318,7 +323,7 @@ flowchart TD
       <table class="table table-sm">
         <thead><tr><th>Table</th><th>Key columns</th></tr></thead>
         <tbody>
-          <tr><td class="font-mono">devices</td><td>device_id, user_id, name, created_at</td></tr>
+          <tr><td class="font-mono">devices</td><td>device_id, user_id, name, created_at, push_token, device_user_id (the paired pendant's own anonymous login, unique)</td></tr>
           <tr><td class="font-mono">device_status</td><td>device_id, battery_pct, storage_used_gb, storage_free_gb, segments_pending, segments_uploaded_today, recording_active, segments_rejected, audio_active, updated_at</td></tr>
           <tr><td class="font-mono">segments</td><td>id, device_id, recorded_at, duration_sec, s3_key, motion_score, audio_score, scene_score, composite_score, manually_flagged, user_feedback</td></tr>
           <tr><td class="font-mono">reels</td><td>id, device_id, date, s3_key, duration_sec, style, created_at; unique (device_id, date) so same-day pipeline re-runs upsert</td></tr>
@@ -328,7 +333,7 @@ flowchart TD
       </table>
     </div>
     <div class="alert alert-info alert-soft text-sm" role="alert">
-      <span><span class="font-mono text-xs bg-base-200 rounded px-1">device_status</span> write access: the firmware daemon authenticates as <span class="font-mono text-xs bg-base-200 rounded px-1">authenticated</span> (its own user session), not <span class="font-mono text-xs bg-base-200 rounded px-1">service_role</span> — grant added in <span class="font-mono text-xs bg-base-200 rounded px-1">20260710090000_grant_device_status_writes.sql</span>, row-filtered by the existing owner-scoped RLS policy.</span>
+      <span><span class="font-mono text-xs bg-base-200 rounded px-1">device_status</span> write access: only the paired pendant's own anonymous login writes its device's row (and uploads into its <span class="font-mono text-xs bg-base-200 rounded px-1">segments/{device_id}/</span> folder); the owner reads, and the pipeline uses <span class="font-mono text-xs bg-base-200 rounded px-1">service_role</span>. See <a href="#pairing" class="link link-primary">Device Pairing</a>, migration <span class="font-mono text-xs bg-base-200 rounded px-1">20261119120000_device_pairing.sql</span>.</span>
     </div>
   </section>
 
@@ -391,7 +396,7 @@ score = base_score * 1.5  (if manually flagged)
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Device</h3>
-        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime with a stale banner on channel error. Re-onboard button opens a QR display screen encoding WiFi credentials plus the signed-in user's current Supabase session tokens.</p>
+        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime with a stale banner on channel error. Re-onboard opens a QR with the Wi-Fi credentials and a one-time pairing code, then reports "Pendant paired" or an expired code. "Remove device" revokes the pendant's login behind a confirmation; the device then shows "Not paired" with a "Pair pendant" button. With no device, the app shows "Set up your Visio" and runs the same pairing.</p>
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Archive</h3>
@@ -405,13 +410,13 @@ score = base_score * 1.5  (if manually flagged)
       <span><strong>Regenerate bottom sheet not wired.</strong> It has no backend consumer yet, so it stays out of scope for issue #8; the regenerate button surfaces as inert/"not available yet" rather than functional.</span>
     </div>
     <div class="alert alert-info alert-soft text-sm" role="alert">
-      <span><strong>WiFi re-onboarding QR screen - resolved.</strong> The Device tab's Re-onboard button now navigates to a <span class="font-mono text-xs bg-base-200 rounded px-1">@react-navigation/native-stack</span> route rendering a form (SSID/password) then a <span class="font-mono text-xs bg-base-200 rounded px-1">react-native-qrcode-svg</span> QR code, encoding the exact <span class="font-mono text-xs bg-base-200 rounded px-1">{ssid, password, user_access_token, user_refresh_token}</span> shape firmware's <span class="font-mono text-xs bg-base-200 rounded px-1">parse_onboarding_qr_payload</span> expects.</span>
+      <span><strong>WiFi re-onboarding QR screen - resolved.</strong> The Device tab's Re-onboard button now navigates to a <span class="font-mono text-xs bg-base-200 rounded px-1">@react-navigation/native-stack</span> route rendering a form (SSID/password) then a <span class="font-mono text-xs bg-base-200 rounded px-1">react-native-qrcode-svg</span> QR code, now encoding payload v2, <span class="font-mono text-xs bg-base-200 rounded px-1">{v: 2, ssid, password, pairing_code}</span>, the shape firmware's <span class="font-mono text-xs bg-base-200 rounded px-1">parse_onboarding_qr_payload</span> accepts (the v1 session-token payload is refused).</span>
     </div>
   </section>
 
   <section id="pairing" class="space-y-4">
-    <h2 class="text-2xl font-bold">Device Pairing <span class="badge badge-warning badge-soft align-middle">planned, not built</span></h2>
-    <p class="text-base-content/70 max-w-3xl">Today the Re-onboard QR hands the pendant the phone's own Supabase session, so the pendant loses its login when the phone refreshes twice or the user logs out. The <a class="link link-primary" href="superpowers/specs/2026-11-19-visio-device-pairing-design.md">device pairing spec</a> gives the pendant its own login instead, with no service-role code on the pairing path. Plan: <a class="link link-primary" href="superpowers/plans/2026-11-19-visio-device-pairing.md">2026-11-19-visio-device-pairing.md</a>.</p>
+    <h2 class="text-2xl font-bold">Device Pairing <span class="badge badge-success badge-soft align-middle">built (PR #105)</span></h2>
+    <p class="text-base-content/70 max-w-3xl">The Re-onboard QR used to hand the pendant the phone's own Supabase session, so the pendant lost its login when the phone refreshed twice or the user logged out. Per the <a class="link link-primary" href="superpowers/specs/2026-11-19-visio-device-pairing-design.md">device pairing spec</a> the pendant now has its own login, with no service-role code on the pairing path; the two live tests that pinned those failures pass. Plan: <a class="link link-primary" href="superpowers/plans/2026-11-19-visio-device-pairing.md">2026-11-19-visio-device-pairing.md</a>.</p>
     <div class="card bg-base-100 shadow p-4">
       <pre class="mermaid">
 sequenceDiagram
@@ -446,7 +451,7 @@ sequenceDiagram
       </div>
     </div>
     <div class="alert alert-warning alert-soft text-sm" role="alert">
-      <span><strong>Manual step:</strong> anonymous sign-ins must be enabled on the hosted project (CAPTCHA off, no session time-box), and the test pendant is re-onboarded once after the change ships. Firmware rejects the old v1 QR payload rather than accept the owner's session again.</span>
+      <span><strong>Manual step:</strong> anonymous sign-ins must be enabled on the hosted project (CAPTCHA off, no session time-box), the migration applied, firmware and app shipped together, and the test pendant re-onboarded once. Firmware rejects the old v1 QR payload rather than accept the owner's session again.</span>
     </div>
   </section>
 

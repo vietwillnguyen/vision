@@ -48,6 +48,27 @@ to end" bullet. It needs `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
 (`conftest.py`'s `live_supabase_env` fixture skips the test automatically
 when they're unset, e.g. in this sandbox where Docker is unavailable).
 
+`tests/test_row_schema_contract.py` also checks the pairing RPCs: the fixture's
+`functions` section (from `information_schema.routines`) must carry
+`create_pairing_code`, `claim_pairing` and `unpair_device` with their argument
+names, and firmware's `CLAIM_RPC`/`CLAIM_ARG` must match `claim_pairing`.
+Firmware has no generated client, so this is its "migration changed, build goes
+red" check.
+
+`tests/test_device_session_live.py` pairs a pendant through the real flow
+(`tests/pendant.py`: the owner's client calls `create_pairing_code`, the v2 QR
+payload goes through firmware's parser, and firmware's `complete_pairing` signs
+in anonymously and claims the code) and proves the pendant keeps its own login
+when the phone refreshes or logs out. It also pins what that login may and may
+not do, that "Remove device" and a re-pair revoke it, and that a used code or an
+unpaired anonymous user gets nothing. Code expiry cannot be aged through the
+public API, so the pgTAP suite covers it.
+`tests/test_firmware_upload_live.py` and `tests/test_storage_ingestion_live.py`
+upload through the same `paired_device` fixture (`conftest.py`), because only
+the pendant's own login may write to storage. The local stack enables
+anonymous sign-ins and raises their per-IP rate limit for this
+(`supabase/config.toml`).
+
 This suite runs in CI: `.github/workflows/tests.yml`'s `integration` job
 starts a local Supabase instance via `supabase/setup-cli` + `supabase
 start`, exports its connection details into `SUPABASE_*` env vars, then runs
@@ -66,11 +87,10 @@ lives outside this Python package, in
 `@supabase/supabase-js` `createClient()` (the same call as
 `app/src/lib/supabase.ts`) against a live local Supabase instance: an
 authenticated device owner subscribes through the real `useDeviceStatus`
-hook, then that same client - standing in for the firmware daemon, which
-authenticates as the device owner's own session rather than holding a
-service-role key (see
-`supabase/migrations/20260710090000_grant_device_status_writes.sql`) - upserts
-the owner's `device_status` row, and the test asserts the hook's `realtime`
+hook, then a pendant paired the way firmware pairs (an anonymous sign-in that
+claims the owner's pairing code, see
+`supabase/migrations/20261119120000_device_pairing.sql`) upserts the device's
+`device_status` row under its own login, and the test asserts the hook's `realtime`
 field reaches `'live'` and its `status`
 reflects the row over the wire - not a mocked channel callback like every
 other `useDeviceStatus` test. It reads the same `SUPABASE_URL` /
