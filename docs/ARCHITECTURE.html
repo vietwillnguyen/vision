@@ -307,11 +307,7 @@ flowchart TD
       </div>
       <div class="grid gap-4 mt-3">
         <div><h4 class="font-semibold text-sm mb-1">Capture region</h4>
-      <pre class="mermaid">
----
-config:
-  layout: elk
----
+      <pre class="mermaid" data-layout="elk">
 stateDiagram-v2
     [*] --> Off
     Off --> Booting: power on
@@ -335,11 +331,7 @@ stateDiagram-v2
     ShuttingDown --> Off: process exits
       </pre></div>
         <div><h4 class="font-semibold text-sm mb-1">Upload region (at the same time, worker thread)</h4>
-      <pre class="mermaid" style="max-width:420px;margin:0 auto">
----
-config:
-  layout: elk
----
+      <pre class="mermaid" data-layout="elk" style="max-width:420px;margin:0 auto">
 stateDiagram-v2
     [*] --> Idle
     Idle --> Uploading: file queued, online
@@ -563,7 +555,14 @@ score = base_score * 1.5  (if manually flagged)
     return darkQuery.matches;
   }
 
-  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.textContent }));
+  // The source stays plain Mermaid so other tools can read it; a diagram that
+  // asks for another layout engine via data-layout gets it only at render time.
+  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({
+    el,
+    src: el.dataset.layout
+      ? `---\nconfig:\n  layout: ${el.dataset.layout}\n---\n${el.textContent}`
+      : el.textContent,
+  }));
   let applied;
   let rendering = false;
   let queued = false;
