@@ -41,6 +41,7 @@ from visio_recorder.onboarding import (
 )
 from visio_recorder.pairing import (
     DEVICE_FILE,
+    MAX_FAILED_PENDING_ACTIVATIONS,
     PAIRING_FILE,
     SESSION_FILE,
     Pairing,
@@ -50,6 +51,8 @@ from visio_recorder.pairing import (
     clear_local_pairing,
     complete_pairing,
     pairing_state,
+    record_failed_activation,
+    reset_failed_activations,
 )
 from visio_recorder.recording_loop import (
     DiskStatsReader,
@@ -504,8 +507,16 @@ def ensure_paired(
         )
         if payload is None:
             return None
+    pending_path = data_dir / PAIRING_FILE
     if not activate_connection(activator, _NM_CONNECTION_ID, led_driver):
+        if record_failed_activation(pending_path):
+            _logger.error(
+                "Wi-Fi did not come up on %d boots in a row; dropping the pairing "
+                "code and scanning for a new QR next boot (check the Wi-Fi password)",
+                MAX_FAILED_PENDING_ACTIVATIONS,
+            )
         return None
+    reset_failed_activations(pending_path)
     try:
         return pair()
     except PairingRejectedError:

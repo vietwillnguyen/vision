@@ -38,6 +38,12 @@ PAIRING_FILE = "pairing.json"
 SESSION_FILE = "session.json"
 DEVICE_FILE = "device.json"
 
+# Boots in a row that a pending pairing may fail to bring Wi-Fi up before the
+# code is dropped and the pendant scans again. A mistyped Wi-Fi password at
+# first pairing can never connect; a router that is briefly down usually
+# comes back within a couple of restarts.
+MAX_FAILED_PENDING_ACTIVATIONS = 3
+
 
 class PairingState(Enum):
     # Nothing to resume: delete any session and scan for a QR.
@@ -48,11 +54,18 @@ class PairingState(Enum):
     PAIRED = "paired"
 
 
-def write_pending_pairing(path: Path, pairing_code: str) -> None:
-    write_private_text_atomic(path, json.dumps({"pairing_code": pairing_code}))
+def write_pending_pairing(
+    path: Path, pairing_code: str, failed_activations: int = 0
+) -> None:
+    write_private_text_atomic(
+        path,
+        json.dumps(
+            {"pairing_code": pairing_code, "failed_activations": failed_activations}
+        ),
+    )
 
 
-def read_pending_pairing(path: Path) -> str | None:
+def _read_pending(path: Path) -> tuple[str, int] | None:
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
@@ -60,7 +73,42 @@ def read_pending_pairing(path: Path) -> str | None:
     if not isinstance(data, dict):
         return None
     code = data.get("pairing_code")
-    return code if isinstance(code, str) and code else None
+    if not isinstance(code, str) or not code:
+        return None
+    failures = data.get("failed_activations", 0)
+    if type(failures) is not int or failures < 0:
+        failures = 0
+    return code, failures
+
+
+def read_pending_pairing(path: Path) -> str | None:
+    pending = _read_pending(path)
+    return None if pending is None else pending[0]
+
+
+def record_failed_activation(path: Path) -> bool:
+    """Count a boot whose Wi-Fi did not come up; True once it is time to give up.
+
+    Giving up deletes ``pairing.json``, so the next boot is unpaired and
+    scans for a new QR (with, presumably, the right Wi-Fi password).
+    """
+    pending = _read_pending(path)
+    if pending is None:
+        return False
+    code, failures = pending
+    failures += 1
+    if failures >= MAX_FAILED_PENDING_ACTIVATIONS:
+        path.unlink(missing_ok=True)
+        return True
+    write_pending_pairing(path, code, failures)
+    return False
+
+
+def reset_failed_activations(path: Path) -> None:
+    """Wi-Fi came up, so earlier failures were not a wrong password."""
+    pending = _read_pending(path)
+    if pending is not None and pending[1] != 0:
+        write_pending_pairing(path, pending[0])
 
 
 def pairing_state(data_dir: Path) -> PairingState:

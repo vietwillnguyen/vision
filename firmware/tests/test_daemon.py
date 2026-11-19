@@ -37,6 +37,7 @@ from visio_recorder.device_identity import store_paired_device_id
 from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.led import LedPattern
 from visio_recorder.pairing import (
+    MAX_FAILED_PENDING_ACTIVATIONS,
     Pairing,
     PairingRejectedError,
     PairingState,
@@ -1345,6 +1346,48 @@ def test_pending_with_failed_activation_keeps_the_code_and_shows_critical(tmp_pa
 
     assert "pair" not in rig.events
     assert rig.led.calls[-1] == CRITICAL_LED
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_pending_gives_up_on_the_code_after_repeated_failed_activations(tmp_path):
+    # A mistyped Wi-Fi password at first pairing can never connect, so
+    # retrying the saved code forever would leave the pendant stuck.
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path)
+
+    for _ in range(MAX_FAILED_PENDING_ACTIVATIONS - 1):
+        assert rig.run(ScriptedScanner([]), activation_fails=True) is None
+        assert pairing_state(tmp_path) is PairingState.PENDING
+    assert rig.run(ScriptedScanner([]), activation_fails=True) is None
+
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+    assert "pair" not in rig.events
+    assert rig.led.calls[-1] == CRITICAL_LED
+    scanner = ScriptedScanner([QR_V2])
+    assert rig.run(scanner) == PAIRED_DEVICE_ID
+    assert scanner.scans == 1
+
+
+def test_a_fresh_scan_whose_activation_fails_counts_towards_giving_up(tmp_path):
+    rig = PairingRig(tmp_path)
+
+    assert rig.run(ScriptedScanner([QR_V2]), activation_fails=True) is None
+    for _ in range(MAX_FAILED_PENDING_ACTIVATIONS - 1):
+        rig.run(ScriptedScanner([]), activation_fails=True)
+
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+
+
+def test_a_successful_activation_resets_the_failed_activation_count(tmp_path):
+    # A home router that was briefly down is not a wrong password.
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path, pair_error=PairingUnavailableError("offline"))
+    for _ in range(MAX_FAILED_PENDING_ACTIVATIONS - 1):
+        rig.run(ScriptedScanner([]), activation_fails=True)
+    rig.run(ScriptedScanner([]))
+    for _ in range(MAX_FAILED_PENDING_ACTIVATIONS - 1):
+        rig.run(ScriptedScanner([]), activation_fails=True)
+
     assert pairing_state(tmp_path) is PairingState.PENDING
 
 

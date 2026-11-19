@@ -19,6 +19,7 @@ from visio_recorder.pairing import (
     complete_pairing,
     pairing_state,
     read_pending_pairing,
+    record_failed_activation,
     write_pending_pairing,
 )
 from visio_recorder.wifi_onboard import write_session_credentials
@@ -128,7 +129,10 @@ def test_write_pending_pairing_round_trips_private_and_atomic(tmp_path):
     write_pending_pairing(path, CODE)
 
     assert read_pending_pairing(path) == CODE
-    assert json.loads(path.read_text()) == {"pairing_code": CODE}
+    assert json.loads(path.read_text()) == {
+        "pairing_code": CODE,
+        "failed_activations": 0,
+    }
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert [p.name for p in tmp_path.iterdir()] == ["pairing.json"]
 
@@ -496,3 +500,16 @@ def test_the_pairing_code_is_never_logged(tmp_path, caplog):
         _pair(tmp_path, client)
 
     assert CODE not in caplog.text
+
+
+def test_a_pending_file_without_a_failure_count_starts_counting_from_zero(tmp_path):
+    # pairing.json as the first build of pairing wrote it.
+    path = tmp_path / "pairing.json"
+    path.write_text(json.dumps({"pairing_code": CODE}))
+
+    assert record_failed_activation(path) is False
+
+    assert json.loads(path.read_text()) == {
+        "pairing_code": CODE,
+        "failed_activations": 1,
+    }
