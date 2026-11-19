@@ -22,7 +22,7 @@ insert into public.devices (device_id, user_id, name, device_user_id) values
 create temp table codes (label text primary key, code text, expires_at timestamptz);
 grant all on codes to authenticated;
 
-select plan(38);
+select plan(52);
 
 -- devices.device_user_id
 
@@ -243,6 +243,105 @@ select ok(
   not has_function_privilege('anon', 'public.create_pairing_code(uuid)', 'execute')
     and not has_function_privilege('anon', 'public.claim_pairing(text)', 'execute'),
   'anon cannot execute the pairing functions'
+);
+
+-- unpair_device
+
+-- a3 stands in for a device user that attached an email to itself.
+insert into auth.users (id, email, is_anonymous) values
+  ('00000000-0000-0000-0000-0000000000a3', 'upgraded@example.com', false);
+insert into public.devices (device_id, user_id, name, device_user_id) values
+  ('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000a1', 'upgraded-device', '00000000-0000-0000-0000-0000000000a3');
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000a2", "role": "authenticated"}';
+select throws_ok(
+  $$select public.unpair_device('00000000-0000-0000-0000-0000000000b2')$$,
+  '42501', null,
+  'another account cannot unpair a device it does not own'
+);
+reset role;
+select results_eq(
+  $$select device_user_id from public.devices where device_id = '00000000-0000-0000-0000-0000000000b2'$$,
+  $$values ('00000000-0000-0000-0000-0000000000f2'::uuid)$$,
+  'a refused unpair changes nothing'
+);
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000a1", "role": "authenticated"}';
+select lives_ok(
+  $$select public.unpair_device('00000000-0000-0000-0000-0000000000b2')$$,
+  'the owner can unpair its device'
+);
+select lives_ok(
+  $$select public.unpair_device('00000000-0000-0000-0000-0000000000b4')$$,
+  'the owner can unpair a device whose user is not anonymous'
+);
+reset role;
+select results_eq(
+  $$select device_user_id from public.devices where device_id = '00000000-0000-0000-0000-0000000000b2'$$,
+  $$values (null::uuid)$$,
+  'unpairing clears the link and keeps the device'
+);
+select is_empty(
+  $$select 1 from auth.users where id = '00000000-0000-0000-0000-0000000000f2'$$,
+  'unpairing deletes the anonymous device user'
+);
+select is_empty(
+  $$select 1 from private.device_pairing_codes
+    where device_id = '00000000-0000-0000-0000-0000000000b2' and claimed_at is null$$,
+  'unpairing deletes the device''s unclaimed pairing codes'
+);
+select results_eq(
+  $$select device_user_id from public.devices where device_id = '00000000-0000-0000-0000-0000000000b4'$$,
+  $$values (null::uuid)$$,
+  'unpairing clears a non-anonymous link'
+);
+select isnt_empty(
+  $$select 1 from auth.users where id = '00000000-0000-0000-0000-0000000000a3'$$,
+  'unpairing never deletes a non-anonymous user'
+);
+select ok(
+  not has_function_privilege('anon', 'public.unpair_device(uuid)', 'execute'),
+  'anon cannot execute unpair_device'
+);
+
+-- purge_stale_pairing_state
+
+insert into auth.users (id, email, is_anonymous, created_at) values
+  ('00000000-0000-0000-0000-0000000000c1', null, true, now() - interval '2 days'),
+  ('00000000-0000-0000-0000-0000000000c2', null, true, now() - interval '2 days'),
+  ('00000000-0000-0000-0000-0000000000c3', null, true, now() - interval '1 hour'),
+  ('00000000-0000-0000-0000-0000000000c4', 'old@example.com', false, now() - interval '2 days');
+insert into public.devices (device_id, user_id, name, device_user_id) values
+  ('00000000-0000-0000-0000-0000000000b5', '00000000-0000-0000-0000-0000000000a2', 'old-pairing', '00000000-0000-0000-0000-0000000000c2');
+insert into private.device_pairing_codes (code_hash, user_id, expires_at) values
+  (extensions.digest('long-expired', 'sha256'), '00000000-0000-0000-0000-0000000000a2', now() - interval '2 days'),
+  (extensions.digest('recently-expired', 'sha256'), '00000000-0000-0000-0000-0000000000a2', now() - interval '1 hour');
+
+select private.purge_stale_pairing_state();
+
+select set_eq(
+  $$select id from auth.users where id in (
+    '00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-0000000000c2',
+    '00000000-0000-0000-0000-0000000000c3', '00000000-0000-0000-0000-0000000000c4')$$,
+  $$values ('00000000-0000-0000-0000-0000000000c2'::uuid), ('00000000-0000-0000-0000-0000000000c3'::uuid),
+           ('00000000-0000-0000-0000-0000000000c4'::uuid)$$,
+  'the purge deletes only unlinked anonymous users older than a day'
+);
+select set_eq(
+  $$select code_hash from private.device_pairing_codes
+    where code_hash in (extensions.digest('long-expired', 'sha256'), extensions.digest('recently-expired', 'sha256'))$$,
+  $$values (extensions.digest('recently-expired', 'sha256'))$$,
+  'the purge deletes codes expired more than a day ago'
+);
+select isnt_empty(
+  $$select 1 from cron.job where jobname = 'purge-stale-pairing-state'$$,
+  'the purge runs as a daily cron job'
+);
+select ok(
+  not has_function_privilege('authenticated', 'private.purge_stale_pairing_state()', 'execute'),
+  'authenticated cannot run the purge'
 );
 
 select * from finish();

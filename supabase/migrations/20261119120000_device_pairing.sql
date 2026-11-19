@@ -140,3 +140,55 @@ $$;
 
 revoke all on function public.create_pairing_code(uuid), public.claim_pairing(text) from public, anon;
 grant execute on function public.create_pairing_code(uuid), public.claim_pairing(text) to authenticated;
+
+-- unpair_device: "Remove device" in the app. Clearing device_user_id is the
+-- revocation: every policy resolves the link at query time, so the pendant's
+-- still-valid access token is denied on its next request. Deleting the
+-- anonymous user cascades to its sessions and refresh tokens. The device row
+-- and its footage stay. The is_anonymous guard means a real account is never
+-- deleted, even one a device user upgraded itself into.
+create function public.unpair_device(p_device_id uuid)
+  returns void
+  language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_uid uuid := (select auth.uid());
+  v_previous uuid;
+begin
+  select d.device_user_id into v_previous from public.devices d
+    where d.device_id = p_device_id and d.user_id = v_uid for update;
+  if not found then
+    raise exception 'device not found' using errcode = '42501';
+  end if;
+  update public.devices set device_user_id = null where device_id = p_device_id;
+  delete from private.device_pairing_codes c where c.device_id = p_device_id and c.claimed_at is null;
+  if v_previous is not null then
+    delete from auth.users u where u.id = v_previous and u.is_anonymous;
+  end if;
+end;
+$$;
+
+revoke all on function public.unpair_device(uuid) from public, anon;
+grant execute on function public.unpair_device(uuid) to authenticated;
+
+-- An anonymous user that never completes a pairing has no permissions but
+-- would sit in auth.users forever. This relies on anonymous sign-in being used
+-- in this project only for pendants: if the app ever offers anonymous accounts
+-- to people, narrow this first.
+create function private.purge_stale_pairing_state() returns void
+  language sql security definer set search_path = ''
+as $$
+  delete from private.device_pairing_codes c
+    where c.expires_at < now() - interval '1 day';
+  delete from auth.users u
+    where u.is_anonymous
+      and u.created_at < now() - interval '1 day'
+      and not exists (select 1 from public.devices d where d.device_user_id = u.id);
+$$;
+revoke all on function private.purge_stale_pairing_state() from public;
+
+create extension if not exists pg_cron with schema pg_catalog;
+select cron.schedule(
+  'purge-stale-pairing-state', '17 3 * * *',
+  $$select private.purge_stale_pairing_state()$$
+);
