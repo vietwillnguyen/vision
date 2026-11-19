@@ -29,11 +29,12 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 27aae06ea5c8efa02fb447e8aca437e64464615c4806913b8359594c6f799674  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 8563d6d1c00deb8fa375d3c1d0a52f0315ee5a4675b0a41e3d507813ed83bbba  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- regenerated-at: 2026-11-19 (merged main's LED state machine into local-first flag markers: in-process marker retry,
-     the acknowledgement blink, and markers uploaded before their segments) -->
+<!-- source-sha256: 094d493fc847aa8a8ddd523a2500b03cdb51da4f5516bffad3f104401ed75277  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
+<!-- regenerated-at: 2026-11-19 (merged interruptible capture and bounded shutdown into local-first flag markers: the stop drain
+     flushes markers before the cut-short segment without the restart-gap wait, on a 5 s bound) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -46,6 +47,7 @@
       <li><a href="#system">System</a></li>
       <li><a href="#epics">Epics</a></li>
       <li><a href="#firmware">Firmware</a></li>
+      <li><a href="#recording">Recording</a></li>
       <li><a href="#gaps">As-built gaps</a></li>
       <li><a href="#data">Data model</a></li>
       <li><a href="#pipeline">Pipeline</a></li>
@@ -69,6 +71,8 @@
         <a class="link link-primary" href="superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md">WiFi re-onboarding QR</a>
         and
         <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">device provisioning &amp; preflight</a>
+        and
+        <a class="link link-primary" href="superpowers/specs/2026-11-18-visio-recording-control-design.md">recording stop/start control</a>
         specs (source of truth - edit those files, then regenerate this page).
         A wearable pendant that records the moments the wearer chooses (sized for about 2 h a day) and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
       </p>
@@ -215,9 +219,9 @@ flowchart TD
         <h3 class="font-semibold mb-2">Recording loop concurrency</h3>
         <pre class="mermaid">
 flowchart TD
-  M["main thread"] -- "rpicam-vid per 1-min segment" --> Q["queue.Queue"]
+  M["main thread"] -- "rpicam-vid -s per 1-min segment,\ncancellable mid-capture" --> Q["queue.Queue"]
   Q -- "get(timeout=until deadline)" --> W["upload worker thread\n(sole owner of upload state)"]
-  W -- "after the 3 s restart gap,\nflush pending markers first,\nwait up to 30 s" --> FW["flag-upload worker thread\n(sole owner of every marker upload)"]
+  W -- "after the 3 s restart gap,\nflush pending markers first,\nwait up to 30 s\n(stopping: no gap wait, 5 s)" --> FW["flag-upload worker thread\n(sole owner of every marker upload)"]
   FW --> S["Supabase Storage"]
   W -- "mux + upload" --> S
   W -- "retry deadline passed,\nnew segments or not;\nnever while stopping" --> R["retry everything still queued\n(30 s doubling to 480 s)"]
@@ -225,6 +229,8 @@ flowchart TD
   W --> H["UploadHealth\n(consecutive-failure counter)"]
   H -- "3 in a row: latched" --> CRIT["CRITICAL LED held through\nevery following segment's upload"]
   H -- "any success" --> RESET["reset counter, LED back to green/yellow"]
+  M -- "SIGTERM / SIGINT" --> CUT["cancel the in-flight capture:\nSIGUSR2, then SIGTERM, then SIGKILL;\nthe short segment is queued like any other"]
+  CUT --> Q
   M -- "battery halt or stop signal" --> DRAIN["drain queue, join() worker"]
   DRAIN --> OFF["upsert recording_active=false\n(any exit path; never raises)"]
   OFF --> HALT["apply CRITICAL after worker fully joins (halt only)"]
@@ -374,13 +380,15 @@ stateDiagram-v2
     <div class="card bg-base-100 shadow p-4">
       <h3 class="font-semibold mb-2">Key as-built decisions</h3>
       <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
-        <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted.</li>
+        <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted. Each run is passed <span class="font-mono text-xs bg-base-200 rounded px-1">-s</span> (<span class="font-mono text-xs bg-base-200 rounded px-1">--signal</span>), which costs nothing until a signal is sent and is what makes a capture interruptible.</li>
+        <li>The capture is the one command that runs through an <em>interruptible</em> runner: <span class="font-mono text-xs bg-base-200 rounded px-1">SubprocessInterruptibleRunner</span> polls <span class="font-mono text-xs bg-base-200 rounded px-1">Popen.wait</span> every 200 ms, and when the loop's stop event is set it sends SIGUSR2 (rpicam-vid's documented quit, which finalises the file), escalating to SIGTERM and then SIGKILL after 5 s each. The mux, the oversize split and the ALSA probe keep the plain blocking <span class="font-mono text-xs bg-base-200 rounded px-1">CommandRunner</span>. A cut-short capture is not an error: it returns its path, is muxed, queued and uploaded like a full segment, and a non-zero exit after a cancel is reported rather than raised. Only a cancel landing before the first frame leaves nothing to mux - an empty file, or none at all - and that is discarded instead of queued. Measured end to end with a simulated camera: a stop that used to wait out the rest of the segment (6.2 s of an 8 s segment) now returns in 0.3 s and keeps the 2.1 s already recorded.</li>
         <li>Segment size is pinned, not defaulted: <span class="font-mono text-xs bg-base-200 rounded px-1">--width 1280 --height 720 --framerate 30 --bitrate 4000000</span> are passed explicitly, and the default segment length (60 s) is derived from the bitrate so a segment fits the hosted 50 MiB upload limit with a 1.66x margin. See the segment size contract below.</li>
         <li>Upload retry is <em>in-process</em>, owned by the existing upload worker: while segments are queued it blocks on its work queue only until a retry deadline, armed when the queue becomes non-empty and again after each round, and retries everything still queued once that deadline passes. A segment arriving does not restart the deadline, so a steady stream of segments cannot postpone a round. Each deadline is set from the backoff when armed, doubling per consecutive failure from 30 s to a 480 s cap and indexed by the same <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter that drives the CRITICAL LED, so retry failures escalate and a retry success clears it. The decision is the pure <span class="font-mono text-xs bg-base-200 rounded px-1">next_worker_step</span>, unit-tested without threads. A stopping worker never starts a round, and a round that tries no file (the queue emptied, or it was cancelled before its first file) leaves the counter and the LED untouched. No second thread and no scheduler; a new segment or the shutdown sentinel still wakes the worker at once, and a round in flight stops early once the loop is shutting down so a backlog is never uploaded through a battery halt. The startup flush is now the backstop rather than the only retry, for flag markers too: <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> runs the same decision over its own queue (see the flag press path above). Planned (LED state machine): the backoff gets its own attempt counter, advanced by rounds skipped for lack of NetworkManager connectivity <span class="font-mono text-xs bg-base-200 rounded px-1">full</span>, so the 30-480 s schedule still settles offline while <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counts only failures on a working connection.</li>
         <li>A flag press is durable before it is acknowledged and acknowledged before it is uploaded: <span class="font-mono text-xs bg-base-200 rounded px-1">write_flag_marker</span> fsyncs the marker and the queue directory, the press handler then asks <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> for a 150 ms magenta blink, and only then hands the path to the flag-upload worker. The blink runs on the controller's own thread with its wait outside the controller's lock, so the gpiozero callback thread neither sleeps nor touches the driver, and a real state change landing mid-blink wins.</li>
-        <li>Flag markers travel with their footage. <span class="font-mono text-xs bg-base-200 rounded px-1">flush_pending</span> drains markers before segments (<span class="font-mono text-xs bg-base-200 rounded px-1">markers_before_segments</span>), and while the daemon runs the upload worker asks the flag-upload worker to flush its pending markers - before the segment it just recorded and before each retry round - and waits, the flush itself bounded at 30 s. Before that flush the worker waits until the segment's end plus the 3 s restart gap, since a press in that gap flags the segment that just ended and its marker would otherwise be uploaded after that segment; the gap wait is capped at the gap, so neither an upload nor a stop, shutdown or battery halt is ever held longer than 3 s, and a retry round waits on the newest segment the run has queued. Markers keep exactly one uploader, so the two threads never race one, and if the flush cannot finish the segment is still uploaded: footage outranks marker ordering, and the pipeline's late-marker handling is the backstop.</li>
+        <li>Flag markers travel with their footage. <span class="font-mono text-xs bg-base-200 rounded px-1">flush_pending</span> drains markers before segments (<span class="font-mono text-xs bg-base-200 rounded px-1">markers_before_segments</span>), and while the daemon runs the upload worker asks the flag-upload worker to flush its pending markers - before the segment it just recorded and before each retry round - and waits, the flush itself bounded at 30 s. Before that flush the worker waits until the segment's end plus the 3 s restart gap, since a press in that gap flags the segment that just ended and its marker would otherwise be uploaded after that segment; the gap wait is capped at the gap, so it never holds an upload longer than 3 s, and a retry round waits on the newest segment the run has queued. Once the loop is stopping (a stop, shutdown or battery halt) the gap is not waited and the flush is bounded at 5 s (<span class="font-mono text-xs bg-base-200 rounded px-1">STOP_MARKER_FLUSH_TIMEOUT_SEC</span>): markers on the card still go up ahead of every segment the drain uploads, the cut-short last segment included, without a 30 s flush spending systemd's <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span>; flags are only taken while recording, and a press in those last seconds goes up on the flag-upload worker's retries or the next boot's flush. A capture that wrote no footage is discarded before the worker sees it, so it costs no flush and does not move the end time a retry round waits on. Markers keep exactly one uploader, so the two threads never race one, and if the flush cannot finish the segment is still uploaded: footage outranks marker ordering, and the pipeline's late-marker handling is the backstop.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
+        <li>Shutdown is bounded by the unit, not by the segment length: <span class="font-mono text-xs bg-base-200 rounded px-1">KillMode=mixed</span> so systemd signals only the daemon (the default control-group mode would signal <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> too and lose the segment the daemon is finalising), and <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span> in place of systemd's 90 s default, which the old segment-long stop used to run into.</li>
         <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
         <li>The upload-failure CRITICAL LED is <em>latched</em>, not momentary: both of <span class="font-mono text-xs bg-base-200 rounded px-1">on_segment_complete</span>'s LED states are derived from the shared <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter, and <span class="font-mono text-xs bg-base-200 rounded px-1">upload_critical</span> outranks low battery and uploading in <span class="font-mono text-xs bg-base-200 rounded px-1">next_led_state</span>. Red therefore survives the following segments' upload blue and recording green until the success that resets the counter. Previously the worker applied red only after those two colours had already been written, so a sustained outage looked normal for most of every segment.</li>
       </ul>
@@ -417,6 +425,84 @@ stateDiagram-v2
           </tbody>
         </table>
       </div>
+    </div>
+  </section>
+
+  <section id="recording" class="space-y-4">
+    <h2 class="text-2xl font-bold">Recording Stop/Start Control</h2>
+    <p class="text-base-content/70 max-w-3xl">
+      From the
+      <a class="link link-primary" href="superpowers/specs/2026-11-18-visio-recording-control-design.md">recording stop/start design spec</a>
+      (accepted 2026-11-18). The pendant gets a hold-to-toggle record button, a stopped state the wearer can see on the LED and in the app, and a boot that comes up stopped.
+      It ships in phases; only phase 1 has landed, so everything below marked <span class="badge badge-ghost badge-sm">designed</span> is the plan, not today's behaviour.
+    </p>
+
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">Stopping a recording</h3>
+      <pre class="mermaid">
+flowchart TD
+  T["SIGTERM / SIGINT\n(systemctl stop, poweroff)"] --> H["handler sets stop,\nwhich is the capture's cancel event"]
+  H --> C["the interruptible capture runner\nnotices within 200 ms"]
+  C --> U["SIGUSR2 to rpicam-vid:\nfinalise the file and quit"]
+  U -- "still running after 5 s" --> TERM["SIGTERM"]
+  TERM -- "still running after 5 s" --> KILL["SIGKILL"]
+  U --> S["a complete, shorter segment"]
+  TERM --> S
+  KILL --> S
+  S --> M["mux and queue\nthe cut segment"]
+  M --> D["recording_active=false,\nwell inside TimeoutStopSec=30"]
+  D --> W["the worker drains the queue;\nan upload cut off by the budget\nresumes on the next boot"]
+      </pre>
+      <p class="text-xs text-base-content/70 mt-2">Before this, the loop observed the stop only between segments, so a stop waited up to a whole segment - 300 s measured on the device with the old five-minute segments, 60 s with today's derived default - and systemd's 90 s default stop timeout turned the overrun into a SIGKILL that lost the in-flight segment.</p>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">States <span class="badge badge-ghost badge-sm">designed</span></h3>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>State</th><th>Entered when</th><th>LED</th><th>Leaves when</th></tr></thead>
+          <tbody>
+            <tr><td class="font-semibold">BOOTING</td><td>process start: battery check, onboarding, registration, orphan recovery, startup flush</td><td>STOPPED (dim white); a low battery goes to the app</td><td>the recording loop starts</td></tr>
+            <tr><td class="font-semibold">STOPPED</td><td>loop start on every boot; a hold while RECORDING</td><td>STOPPED</td><td>a hold (to RECORDING); SIGTERM; battery halt</td></tr>
+            <tr><td class="font-semibold">RECORDING</td><td>a hold while STOPPED</td><td>RECORDING, LOW_BATTERY or CRITICAL (uploads no longer show on the LED)</td><td>a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt</td></tr>
+            <tr><td class="font-semibold">SHUTTING_DOWN</td><td>SIGTERM or SIGINT in any state</td><td>SHUTTING_DOWN (white, pulsing)</td><td>the process exits</td></tr>
+            <tr><td class="font-semibold">HALTED</td><td>battery under the halt threshold, recording or idle</td><td>HALTED (red, solid; PR #101), applied last</td><td>the queue drains, then a clean power-off (PR #101)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-base-content/70 mt-2">A <span class="font-mono text-xs bg-base-200 rounded px-1">RecordingControl</span> object will own three events - <span class="font-mono text-xs bg-base-200 rounded px-1">recording</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">cancel_capture</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">wake</span> - so the gpiozero callback thread and the signal handler only set events and every transition is observed on the main thread. Phase 1 uses the loop's existing stop event as the cancel event, which is the same mechanism with one caller.</p>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">Phases</h3>
+        <div class="overflow-x-auto">
+          <table class="table table-xs">
+            <thead><tr><th>#</th><th>Ship</th><th class="whitespace-nowrap">Status</th></tr></thead>
+            <tbody>
+              <tr><td>0</td><td>Pipeline measures every segment's real duration</td><td><span class="badge badge-success badge-soft badge-sm">Merged #72</span></td></tr>
+              <tr class="bg-base-200/40"><td>1</td><td>Interruptible capture and bounded shutdown</td><td><span class="badge badge-info badge-soft badge-sm">this change</span></td></tr>
+              <tr><td>2</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">LedState.STOPPED</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">SHUTTING_DOWN</span>, a <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> owning every LED call</td><td><span class="badge badge-ghost badge-sm">designed</span></td></tr>
+              <tr><td>3</td><td>Hold-to-toggle button dispatch, the in-process stopped state, and a <span class="font-mono text-xs bg-base-200 rounded px-1">visio-record start|stop</span> CLI for the M1 bench</td><td><span class="badge badge-ghost badge-sm">designed</span></td></tr>
+              <tr><td>4</td><td>Default stopped: boot comes up stopped, <span class="font-mono text-xs bg-base-200 rounded px-1">/run</span> marker, app label</td><td><span class="badge badge-ghost badge-sm">designed</span></td></tr>
+              <tr><td>5</td><td>Remote stop from the app - only if decision 1 is revisited</td><td><span class="badge badge-ghost badge-sm">not planned</span></td></tr>
+            </tbody>
+          </table>
+      </div>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">Decisions, ruled on 2026-11-18</h3>
+      <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
+        <li><strong>Remote control from the app:</strong> display only. The app shows Recording or Stopped live and has no control, so no <span class="font-mono text-xs bg-base-200 rounded px-1">device_commands</span> table, no inbound firmware channel and no new attack surface on a wearable camera.</li>
+        <li><strong>Daemon crash-restart inside one power cycle:</strong> resume the wearer's last choice via a <span class="font-mono text-xs bg-base-200 rounded px-1">/run</span> marker that any reboot clears, so a crash continues the session the button started while a reboot still comes up stopped.</li>
+        <li><strong>Completing first-boot onboarding:</strong> the device stays stopped and waits for a hold - the first thing a new wearer learns is that the button is what starts it.</li>
+        <li><strong>Short press while stopped:</strong> ignored. A hold toggles in both directions, so the gesture is symmetric and blind-operable, and a tap in a bag never starts a camera.</li>
+      </ul>
+      <p class="text-xs text-base-content/70 mt-2">Aligned with the pendant spec's LED state machine (PR #102): precedence is HALTED &gt; SHUTTING_DOWN &gt; STOPPED (when not recording) &gt; CRITICAL &gt; LOW_BATTERY &gt; RECORDING, so no health colour ever shows over STOPPED, and uploads, which run concurrently, never show on the LED. A hold from RECORDING stops at 2 s; a hold from STOPPED commits on release (2-5 s starts recording, 10 s or more re-onboards); a 5 s hold in any state powers off gracefully through SHUTTING_DOWN; green, white-pulsing and cyan previews read from gpiozero's <span class="font-mono text-xs bg-base-200 rounded px-1">held_time</span>.</p>
+    </div>
+
+    <div class="alert alert-warning alert-soft" role="alert">
+      <span><strong>Open bench checks (none block a PR).</strong> BENCH-1: that <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid -s</span> exits 0 on SIGUSR2 and the cut <span class="font-mono text-xs bg-base-200 rounded px-1">.h264</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">.ts</span> remux with <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg -c copy</span> - the runner tolerates a non-zero exit, so a failure degrades to the orphan-recovery path rather than a lost segment. BENCH-2: that a 2 s hold is reliably distinguishable from a tap through clothing. BENCH-3: that cancel, mux, enqueue and the final <span class="font-mono text-xs bg-base-200 rounded px-1">recording_active=false</span> push on a Zero 2W fit inside <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span>; they run before the upload drain, so an upload the budget cuts off leaves the app correct and its segment queued for the next boot.</span>
     </div>
   </section>
 

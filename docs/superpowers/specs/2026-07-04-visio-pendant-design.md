@@ -151,7 +151,7 @@ A single Python systemd service manages the full device lifecycle.
    Then activate the connection (`nmcli connection reload` + `nmcli connection up visio`); on activation failure, flash the Critical red LED and exit 1 so systemd retries.
    On restart boots (session file already on disk), the same reload/up runs again as a best-effort retry whenever the keyfile exists, so a first boot whose activation failed is not stranded offline; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
 4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
-5. Flush any pending upload queue left over from a previous run, then recover orphaned captures that an unclean stop (SIGTERM mid-capture, power cut, crash) left at the top level of the data dir, and flush again only if anything was recovered.
+5. Flush any pending upload queue left over from a previous run, then recover orphaned captures that an unclean stop (a capture killed instead of finalised, power cut, crash) left at the top level of the data dir, and flush again only if anything was recovered.
    The flush drains flag markers before segments (`markers_before_segments`), so a boot that cannot finish a backlog never sends a day's segments and leaves their flags behind; see Manual flag button.
    A lone or interrupted `.h264` is (re-)muxed and queued, and a lone `.mp4` is queued as is.
    On a mux failure the partial `.mp4` is removed, but the `.h264` is deleted only when it is zero bytes; a non-empty capture is kept for the next boot, since the failure may be transient (for example a full SD card).
@@ -304,8 +304,12 @@ Keeping that the exception rather than the rule needs the device to upload every
   The flush itself is bounded at 30 s; if that elapses, or the flush could not send everything, the segment is uploaded anyway, because footage is worth more than marker ordering and the pipeline's late-marker handling is the backstop.
 - before that flush, the upload worker waits until the segment's end plus the 3 s restart gap (`RESTART_GAP_SEC`, the pipeline's `RESTART_GAP_TOLERANCE_SEC`), because a press in that gap flags the segment that just ended, and without the wait its marker would be uploaded after that segment had already reached storage.
   The end is when the capture returned, and a retry round waits on the newest segment the run has queued.
-  The gap wait is capped at the gap itself, so it never holds an upload longer than 3 s, and a stop, shutdown or battery halt drains through it with the same bound.
+  The gap wait is capped at the gap itself, so it never holds an upload longer than 3 s.
   Most of the gap is spent muxing the segment, which happens first.
+- once the loop is stopping (a stop, shutdown or battery halt), the gap is not waited and the flush is bounded at 5 s (`STOP_MARKER_FLUSH_TIMEOUT_SEC`) instead of 30 s.
+  Markers already on the card still go up ahead of every segment the drain uploads, the cut-short last segment the main thread queued itself included, but the drain runs inside systemd's `TimeoutStopSec=30`, and a 30 s flush alone would spend it before that segment started uploading.
+  The gap only matters to a recording that carries on: the recording-control design flags only while recording, and a press that still lands in those seconds is fsynced and goes up on the flag-upload worker's retries or the next boot's flush, with the pipeline's late-marker handling as the backstop.
+  A capture that wrote no footage is discarded on the main thread, so it never reaches the worker, costs no flush and does not move the end time a retry round waits on.
 
 The rule is deliberately coarser than the pipeline's matching window: rather than work out which segment each marker belongs to, every pending marker goes first.
 Together with the gap wait, that covers both a marker inside a segment and one in the 3 s restart gap, which the pipeline attaches to the segment that just ended.

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from visio_recorder.battery import BatteryReader
+from visio_recorder.capture import CaptureExit, InterruptibleCommandRunner
 from visio_recorder.led import LedDriver, LedPattern
 from visio_recorder.muxer import CommandRunner
 from visio_recorder.recording_loop import DiskStats
@@ -118,16 +119,11 @@ class SimulatedSpiDevice:
 
 
 class FakeCommandRunner(CommandRunner):
-    """Fake runner for both ``rpicam-vid`` (record) and ``ffmpeg`` (mux).
+    """Fake ``ffmpeg``: copies the ``-i`` input to the output, as a mux would.
 
-    - ``rpicam-vid`` writes an empty file at its ``-o`` output path so the
-      recording loop produces a real ``.h264`` for the worker to mux.
-    - ``ffmpeg`` copies the ``-i`` input into the output path, standing in for
-      the mux step.
-
-    ``on_record`` is invoked (with the running record count) after each
-    ``rpicam-vid`` call, letting tests drive cycle counts deterministically
-    from the main loop thread.
+    Every command the daemon runs apart from the capture goes through a
+    ``CommandRunner``; the capture has its own interruptible protocol and its
+    own fake, ``FakeCaptureRunner``.
 
     ``mux_gate``, when given, blocks each ``ffmpeg`` call until the event is
     set. The mux is the first thing the upload worker does per segment, so a
@@ -136,34 +132,80 @@ class FakeCommandRunner(CommandRunner):
     observed).
     """
 
-    def __init__(
-        self,
-        on_record: Callable[[int], None] | None = None,
-        mux_gate: threading.Event | None = None,
-    ) -> None:
+    def __init__(self, mux_gate: threading.Event | None = None) -> None:
         self._lock = threading.Lock()
-        self._on_record = on_record
         self._mux_gate = mux_gate
         self.calls: list[list[str]] = []
-        self.record_count = 0
 
     def run(self, args: list[str]) -> None:
         with self._lock:
             self.calls.append(args)
-        if args and args[0] == "rpicam-vid":
-            output_path = Path(args[args.index("-o") + 1])
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(b"")
-            self.record_count += 1
-            if self._on_record is not None:
-                self._on_record(self.record_count)
-        elif "ffmpeg" in args:
+        if "ffmpeg" in args:
             if self._mux_gate is not None:
                 assert self._mux_gate.wait(timeout=5), "mux_gate never opened"
             input_path = Path(args[args.index("-i") + 1])
             output_path = Path(args[args.index("copy") + 1])
             if input_path.exists():
                 output_path.write_bytes(input_path.read_bytes())
+
+
+class FakeCaptureRunner(InterruptibleCommandRunner):
+    """Fake ``rpicam-vid``: blocks until its scripted duration or ``cancel``.
+
+    It writes a non-empty file either way, because that is what the real
+    capture leaves behind when it is cut short: a shorter segment with
+    footage in it, not an empty file. ``duration_sec`` defaults to zero so a
+    capture returns at once, which is what every test that only counts
+    cycles wants; a test about the stop path scripts a segment long enough to
+    be provably cut in half.
+
+    ``on_record`` is invoked (with the running record count) after each
+    capture, letting tests drive cycle counts deterministically from the main
+    loop thread, and ``on_capture_start`` fires before the capture blocks, so
+    a test can send a signal while one is genuinely in flight.
+
+    ``exit_code_after_cancel`` scripts what a cancelled capture exits with,
+    which is BENCH-1 in the recording-control design spec: whether
+    ``rpicam-vid -s`` really exits 0 on SIGUSR2 is unverified on the device,
+    so the loop has to queue the footage either way.
+    """
+
+    CAPTURE_BYTES = b"h264-data"
+
+    def __init__(
+        self,
+        on_record: Callable[[int], None] | None = None,
+        duration_sec: float = 0.0,
+        exit_code_after_cancel: int = 0,
+        on_capture_start: Callable[[], None] | None = None,
+    ) -> None:
+        self._lock = threading.Lock()
+        self._on_record = on_record
+        self._on_capture_start = on_capture_start
+        self._duration_sec = duration_sec
+        self._exit_code_after_cancel = exit_code_after_cancel
+        self.calls: list[list[str]] = []
+        self.record_count = 0
+        self.cancelled_captures = 0
+
+    def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+        with self._lock:
+            self.calls.append(args)
+        output_path = Path(args[args.index("-o") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._on_capture_start is not None:
+            self._on_capture_start()
+        cancelled = cancel.wait(timeout=self._duration_sec)
+        output_path.write_bytes(self.CAPTURE_BYTES)
+        self.record_count += 1
+        if cancelled:
+            self.cancelled_captures += 1
+        if self._on_record is not None:
+            self._on_record(self.record_count)
+        return CaptureExit(
+            returncode=self._exit_code_after_cancel if cancelled else 0,
+            cancelled=cancelled,
+        )
 
 
 class FakeStorageClient(StorageClient):

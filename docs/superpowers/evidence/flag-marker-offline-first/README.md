@@ -57,8 +57,9 @@ The segment upload is blocked inside the storage client when the button is press
 
 The segment is already muxed when the wearer presses 2.5 s after it ended, inside the 3 s gap the pipeline attaches to that segment.
 
-- The upload worker waited out the rest of the gap - 2.96 s of the unscaled 3 s - before flushing markers, and no longer.
+- The upload worker waited out the rest of the gap - 2.93 s of the unscaled 3 s - before flushing markers, and no longer.
 - Storage received the marker first and the segment it flags second, so the pipeline sees the segment with its flag rather than relying on the late-marker backstop.
+- Recording carries on into a second segment and the stop lands there, because a stopping loop deliberately skips the gap wait (see the pendant spec's flag-button section); that cut-short segment went up last without a second wait.
 
 `overlapping_writes == 0` on every scenario: no two threads interleaved a frame on the wire.
 

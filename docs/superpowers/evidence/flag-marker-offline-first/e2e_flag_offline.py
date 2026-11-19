@@ -39,7 +39,7 @@ sys.path.insert(0, str(FIRMWARE))
 
 from tests.fakes import FakeBatteryReader, FakeClock, SimulatedSpiDevice  # noqa: E402
 from tests.ws2812_waveform import decode_frame  # noqa: E402
-from visio_recorder.capture import VideoSettings  # noqa: E402
+from visio_recorder.capture import CaptureExit, VideoSettings  # noqa: E402
 from visio_recorder.daemon import (  # noqa: E402
     LoopDeps,
     run_recording_loop,
@@ -146,17 +146,25 @@ class Network:
 
 
 class SimulatedCamera:
-    """rpicam-vid becomes ffmpeg writing H.264 to the -o path."""
+    """rpicam-vid becomes ffmpeg writing H.264 to the -o path.
+
+    One object serves as both runners the loop takes: called with a cancel
+    event it is the interruptible capture runner, and without one it is the
+    command runner that muxes. The simulated capture is short enough that it
+    always runs to completion, so it never reports a cancel.
+    """
 
     def __init__(self, on_capture=None) -> None:
         self.captures = 0
         self._mux = SubprocessCommandRunner()
         self._on_capture = on_capture
 
-    def run(self, args: list[str]) -> None:
+    def run(
+        self, args: list[str], cancel: threading.Event | None = None
+    ) -> CaptureExit | None:
         if args[0] != "rpicam-vid":
             self._mux.run(args[:1] + ["-loglevel", "error"] + args[1:])
-            return
+            return None
         self.captures += 1
         output = args[args.index("-o") + 1]
         subprocess.run(
@@ -181,6 +189,7 @@ class SimulatedCamera:
         )
         if self._on_capture is not None:
             self._on_capture(self.captures)
+        return CaptureExit(returncode=0, cancelled=False)
 
 
 class Status:
@@ -202,6 +211,7 @@ def _deps(
     data_dir.mkdir(parents=True, exist_ok=True)
     return LoopDeps(
         command_runner=runner,
+        capture_runner=runner,
         storage_client=storage,
         status_client=Status(),
         led_driver=led,
@@ -601,7 +611,20 @@ def scenario_5_press_in_the_restart_gap() -> None:
             time.sleep(seconds)
 
         stop = threading.Event()
-        runner = SimulatedCamera(lambda n: stop.set())
+
+        def stop_once_the_first_segment_is_stored(captures: int) -> None:
+            # Recording carries on past the gap: a stop ends the run without
+            # waiting out a gap, so the stop lands on the next capture, once
+            # the segment under test has reached storage.
+            if captures < 2:
+                return
+            with storage.changed:
+                storage.changed.wait_for(
+                    lambda: f"{DEVICE}/20260704_120000.mp4" in storage.stored, 20
+                )
+            stop.set()
+
+        runner = SimulatedCamera(stop_once_the_first_segment_is_stored)
         assert run_startup_sequence(FakeBatteryReader(85), led).proceed
         deps = _deps(
             tmp,
@@ -634,6 +657,7 @@ def scenario_5_press_in_the_restart_gap() -> None:
             == [
                 f"{DEVICE}/FLAG_20260704_120102.marker",
                 f"{DEVICE}/20260704_120000.mp4",
+                f"{DEVICE}/20260704_120100.mp4",
             ],
             str(storage.stored),
         )

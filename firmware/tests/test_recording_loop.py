@@ -9,6 +9,7 @@ from tests.fakes import (
     FailingSplitRunner,
     FailingStorageClient,
     FakeBatteryReader,
+    FakeCaptureRunner,
     FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
@@ -20,7 +21,7 @@ from tests.fakes import (
     SizeCheckedStorageClient,
     unlimited_upload_limit,
 )
-from visio_recorder.capture import VideoSettings
+from visio_recorder.capture import CaptureExit, VideoSettings
 from visio_recorder.daemon import LoopDeps, run_recording_loop
 from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
@@ -40,6 +41,7 @@ from visio_recorder.recording_loop import (
     pending_segments,
     recover_orphaned_segments,
     retry_pending_segments,
+    upload_segment,
     wait_out_restart_gap,
 )
 from visio_recorder.upload_limit import UploadLimit, rejected_dir
@@ -542,17 +544,18 @@ def test_capture_killed_mid_segment_is_uploaded_on_the_next_boot(tmp_path):
     data_dir = tmp_path / "data"
     queue_dir = data_dir / "queue"
 
-    class KilledOnSecondCapture(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and self.record_count == 1:
+    class KilledOnSecondCapture(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if self.record_count == 1:
                 output = Path(args[args.index("-o") + 1])
                 output.write_bytes(b"partial frames")
                 raise subprocess.CalledProcessError(-15, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     storage = FakeStorageClient()
     deps = LoopDeps(
-        command_runner=KilledOnSecondCapture(),
+        command_runner=FakeCommandRunner(),
+        capture_runner=KilledOnSecondCapture(),
         storage_client=storage,
         status_client=FakeStatusClient(),
         led_driver=FakeLedDriver(),
@@ -1124,6 +1127,35 @@ def test_on_segment_complete_flushes_the_markers_before_its_own_upload(tmp_path)
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        flush_markers=storage.flush_markers,
+    )
+
+    assert storage.uploaded == ["<marker flush>", "device-abc/20260704_120000.mp4"]
+
+
+def test_upload_segment_flushes_the_markers_before_an_already_queued_segment(
+    tmp_path,
+):
+    # The stop path: the main thread muxes and queues the cut-short last
+    # segment itself, so the worker uploads it through upload_segment rather
+    # than on_segment_complete. Its flags must still go up first.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    storage = OrderedStorageClient()
+
+    upload_segment(
+        queued_path=queue_dir / "20260704_120000.mp4",
+        audio_active=False,
+        queue_dir=queue_dir,
+        storage_client=storage,
+        status_client=FakeStatusClient(),
+        led_driver=FakeLedDriver(),
+        battery_reader=FakeBatteryReader(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
         data_dir=tmp_path,
         upload_limit=unlimited_upload_limit(),

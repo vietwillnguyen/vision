@@ -10,10 +10,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Protocol
 
 from visio_recorder.battery import BatteryReader, read_battery_status
 from visio_recorder.capture import (
     AudioSettings,
+    InterruptibleCommandRunner,
+    SubprocessInterruptibleRunner,
     VideoSettings,
     probe_audio_device,
     record_segment,
@@ -48,8 +51,10 @@ from visio_recorder.recording_loop import (
     next_worker_step,
     on_segment_complete,
     pending_segments,
+    queue_segment,
     recover_orphaned_segments,
     retry_pending_segments,
+    upload_segment,
     wait_out_restart_gap,
 )
 from visio_recorder.segment_size import (
@@ -68,6 +73,11 @@ _ONBOARDING_MAX_ATTEMPTS = 60
 _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
 _NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
 _DEVICE_NAME = "visio-pendant"
+# How long a stopping (or halting) upload worker gives the flag worker to send
+# the markers queued ahead of a segment. A normal flush may take the flag
+# worker's own 30 s timeout, but that alone would spend systemd's whole
+# TimeoutStopSec=30 before the cut-short last segment starts uploading.
+STOP_MARKER_FLUSH_TIMEOUT_SEC = 5.0
 
 _logger = logging.getLogger(__name__)
 
@@ -197,9 +207,19 @@ def run_startup_sequence(
     return StartupResult(proceed=True, battery_pct=status.pct)
 
 
+class MarkerFlush(Protocol):
+    """``FlagUploadWorker.flush_markers``: send every queued marker now."""
+
+    def __call__(self, timeout: float | None = None) -> bool: ...
+
+
 @dataclass
 class LoopDeps:
     command_runner: CommandRunner
+    # The capture is the one command a stop has to be able to cut short, so it
+    # runs through its own interruptible runner; ``command_runner`` keeps the
+    # mux, the split and the ALSA probe.
+    capture_runner: InterruptibleCommandRunner
     storage_client: StorageClient
     status_client: StatusClient
     led_driver: LedDriver
@@ -222,23 +242,66 @@ class LoopDeps:
     # FlagUploadWorker.flush_markers: run before any segment is uploaded, once
     # the segment's restart gap has passed, so flags reach storage with the
     # footage the pipeline would score them on.
-    flush_markers: Callable[[], bool] | None = None
+    flush_markers: MarkerFlush | None = None
     restart_gap_sec: float = RESTART_GAP_SEC
+    # The flush timeout once the loop is stopping, when the gap is not waited.
+    stop_marker_flush_timeout_sec: float = STOP_MARKER_FLUSH_TIMEOUT_SEC
+
+
+class _StopAwareStatusClient:
+    """The one path every ``device_status`` upsert of a recording run takes.
+
+    Once ``stopping`` is set a row reports ``recording_active=False`` whatever
+    it was built with, and the lock makes that check and the upsert one step,
+    so a per-segment upsert built before the stop can never land after the
+    stop's own push and turn the app back to Recording.
+    """
+
+    def __init__(self, inner: StatusClient, stopping: threading.Event) -> None:
+        self._inner = inner
+        self._stopping = stopping
+        self._lock = threading.Lock()
+
+    def upsert_device_status(self, status: dict) -> None:
+        with self._lock:
+            if self._stopping.is_set():
+                status = {**status, "recording_active": False}
+            self._inner.upsert_device_status(status)
+
+
+@dataclass(frozen=True)
+class _CapturedSegment:
+    """A finished capture for the worker to mux, queue and upload.
+
+    ``ended_at`` is when the capture returned, on ``LoopDeps.monotonic``: the
+    start of the restart gap whose presses the pipeline gives this segment.
+    """
+
+    path: Path
+    ended_at: float
+
+
+@dataclass(frozen=True)
+class _QueuedSegment:
+    """A segment the main thread already muxed and queued, left to upload."""
+
+    path: Path
+    audio_active: bool
+    ended_at: float
 
 
 def _push_recording_status(
     deps: LoopDeps,
+    status_client: StatusClient,
     segments_uploaded_today: int,
     recording_active: bool,
     audio_active: bool,
 ) -> None:
     """Tell the app whether the device is recording, without ever raising.
 
-    Called from the main thread only while the worker is idle (before the
-    first segment, after the drain), so it never races the worker's own
-    per-segment upserts. A failure is logged and swallowed: at shutdown the
-    network is often already gone, and neither a clean stop nor the start of
-    recording may depend on reaching Supabase.
+    A failure is logged and swallowed: at shutdown the network is often
+    already gone, and neither a clean stop nor the start of recording may
+    depend on reaching Supabase.
     """
     try:
         status = build_device_status(
@@ -251,11 +314,25 @@ def _push_recording_status(
             recording_active=recording_active,
             audio_active=audio_active,
         )
-        deps.status_client.upsert_device_status(asdict(status))
+        status_client.upsert_device_status(asdict(status))
     except Exception:
         _logger.exception(
             "could not report recording_active=%s to device_status", recording_active
         )
+
+
+def _has_footage(capture_path: Path) -> bool:
+    """Whether a capture left anything worth muxing.
+
+    A capture cut short before its first frame leaves an empty file, or no
+    file at all when it was signalled before it opened the output. Either way
+    there is nothing to mux, and the loop must not turn that into an
+    exception: it happens on the ordinary stop path.
+    """
+    try:
+        return capture_path.stat().st_size > 0
+    except FileNotFoundError:
+        return False
 
 
 def run_recording_loop(
@@ -311,10 +388,39 @@ def run_recording_loop(
     result is ignored: footage outranks marker ordering, and the pipeline's
     late-marker handling is the backstop.
 
+    ``stop`` is also the in-flight capture's cancel event, so a SIGTERM or
+    SIGINT landing mid-segment cuts the capture short instead of being
+    observed only when it ends - the wait that used to cost a whole segment
+    (60 s by default, 300 s at the hard cap) and ran into systemd's stop
+    timeout. The cut-short file is a complete, shorter segment and is uploaded
+    like any other; only a cancel that lands before the first
+    frame leaves nothing to mux - an empty file, or none at all - and that is
+    discarded rather than queued, exactly as the audio-failure path treats an
+    empty partial. A discarded capture never reaches the worker, so it
+    neither uploads nor moves the restart-gap clock a retry round flushes on.
+
+    Once ``stopping`` is set (a stop or a halt) the worker no longer waits out
+    the restart gap before a flush, and gives the flush only
+    ``deps.stop_marker_flush_timeout_sec``. Markers already on the card still
+    go up ahead of the segment, the cut-short last one included, but nothing
+    a stop has left to do may spend systemd's ``TimeoutStopSec=30`` budget on
+    a gap that only matters to a recording that carries on: the
+    recording-control design flags only while recording, and a press that
+    still lands in those seconds is fsynced and goes up on the flag worker's
+    own retries or the next boot's flush, with the pipeline's late-marker
+    handling as the backstop.
+
     ``device_status.recording_active`` is pushed True before the first capture
     and False once the loop has exited for any reason (stop, halt, or a
-    capture failure escaping), after the drain so the final row carries the
-    final counts. Per-segment upserts in between report True.
+    capture failure escaping). The False push comes before the worker drains
+    the queue: on a stop the main thread muxes and queues the last segment
+    itself first, so the row counts it as pending, and only then hands it to
+    the worker to upload. An upload that outlasts systemd's stop timeout is
+    then killed with the app already showing the stop, and the segment stays
+    queued for the next boot's ``flush_pending``. Every upsert from the moment
+    ``stopping`` is set reports False, so a drained segment's own upsert
+    cannot undo that, and a second False push after the drain carries the
+    final counts. Per-segment upserts before the stop report True.
 
     With ``deps.audio`` set, each segment records the microphone too. If such
     a capture fails while the loop is not stopping (the microphone vanished,
@@ -326,12 +432,14 @@ def run_recording_loop(
     for the following whole second if needed, so its second-resolution
     filename never collides with the failed capture's.
     """
-    work: queue.Queue[tuple[Path, float] | None] = queue.Queue()
-    # Written only by the worker; read by the main thread only after join().
+    work: queue.Queue[_CapturedSegment | _QueuedSegment | None] = queue.Queue()
+    # Written only by the worker; the main thread reads it for its status
+    # pushes, and only the push after join() is guaranteed the final count.
     uploaded_today = [0]
     # Set before the sentinel is queued, so a retry round in flight can give
     # up on the rest of its backlog instead of uploading through a halt.
     stopping = threading.Event()
+    status_client = _StopAwareStatusClient(deps.status_client, stopping)
 
     def worker() -> None:
         segments_uploaded_today = 0
@@ -345,6 +453,8 @@ def run_recording_loop(
                 return None
 
             def flush() -> bool:
+                if stopping.is_set():
+                    return flush_markers(timeout=deps.stop_marker_flush_timeout_sec)
                 wait_out_restart_gap(
                     ended_at,
                     gap_sec=deps.restart_gap_sec,
@@ -399,29 +509,46 @@ def run_recording_loop(
                 continue
             if item is None:
                 return
-            capture, last_ended_at = item
+            last_ended_at = item.ended_at
             try:
-                result = on_segment_complete(
-                    h264_path=capture,
-                    queue_dir=deps.queue_dir,
-                    command_runner=deps.command_runner,
-                    storage_client=deps.storage_client,
-                    status_client=deps.status_client,
-                    led_driver=deps.led_driver,
-                    battery_reader=deps.battery_reader,
-                    device_id=deps.device_id,
-                    segments_uploaded_today=segments_uploaded_today,
-                    framerate=deps.video.framerate,
-                    disk_stats_reader=deps.disk_stats_reader,
-                    data_dir=deps.data_dir,
-                    upload_limit=deps.upload_limit,
-                    upload_health=upload_health,
-                    flush_markers=flush_after_gap(last_ended_at),
-                )
+                if isinstance(item, _QueuedSegment):
+                    result = upload_segment(
+                        queued_path=item.path,
+                        audio_active=item.audio_active,
+                        queue_dir=deps.queue_dir,
+                        storage_client=deps.storage_client,
+                        status_client=status_client,
+                        led_driver=deps.led_driver,
+                        battery_reader=deps.battery_reader,
+                        device_id=deps.device_id,
+                        segments_uploaded_today=segments_uploaded_today,
+                        disk_stats_reader=deps.disk_stats_reader,
+                        data_dir=deps.data_dir,
+                        upload_limit=deps.upload_limit,
+                        upload_health=upload_health,
+                        flush_markers=flush_after_gap(item.ended_at),
+                    )
+                else:
+                    result = on_segment_complete(
+                        h264_path=item.path,
+                        queue_dir=deps.queue_dir,
+                        command_runner=deps.command_runner,
+                        storage_client=deps.storage_client,
+                        status_client=status_client,
+                        led_driver=deps.led_driver,
+                        battery_reader=deps.battery_reader,
+                        device_id=deps.device_id,
+                        segments_uploaded_today=segments_uploaded_today,
+                        framerate=deps.video.framerate,
+                        disk_stats_reader=deps.disk_stats_reader,
+                        data_dir=deps.data_dir,
+                        upload_limit=deps.upload_limit,
+                        upload_health=upload_health,
+                        flush_markers=flush_after_gap(item.ended_at),
+                    )
             except Exception:
                 _logger.exception(
-                    "on_segment_complete failed for segment %s; worker continuing",
-                    capture,
+                    "uploading segment %s failed; worker continuing", item.path
                 )
                 continue
             segments_uploaded_today = result.segments_uploaded_today
@@ -430,6 +557,7 @@ def run_recording_loop(
     audio = deps.audio
     _push_recording_status(
         deps,
+        status_client,
         segments_uploaded_today=0,
         recording_active=True,
         audio_active=audio is not None,
@@ -438,6 +566,7 @@ def run_recording_loop(
     worker_thread.start()
     halted = False
     not_before: datetime | None = None
+    last_segment: _CapturedSegment | None = None
     try:
         while True:
             battery_status = read_battery_status(deps.battery_reader)
@@ -455,12 +584,13 @@ def run_recording_loop(
                 not_before = None
             try:
                 h264_path = record_segment(
-                    deps.command_runner,
+                    deps.capture_runner,
                     deps.data_dir,
                     started_at,
                     deps.segment_duration_ms,
                     deps.video,
                     audio,
+                    cancel=stop,
                 )
             except subprocess.CalledProcessError:
                 if audio is None or stop.is_set():
@@ -474,17 +604,55 @@ def run_recording_loop(
                 not_before = started_at.replace(microsecond=0) + timedelta(seconds=1)
                 if partial.exists():
                     if partial.stat().st_size > 0:
-                        work.put((partial, deps.monotonic()))
+                        work.put(_CapturedSegment(partial, deps.monotonic()))
                     else:
                         partial.unlink()
                 continue
-            work.put((h264_path, deps.monotonic()))
+            ended_at = deps.monotonic()
+            if not _has_footage(h264_path):
+                _logger.info(
+                    "the capture of %s wrote no footage; discarding it",
+                    h264_path.name,
+                )
+                h264_path.unlink(missing_ok=True)
+                continue
+            if stop.is_set():
+                last_segment = _CapturedSegment(h264_path, ended_at)
+                break
+            work.put(_CapturedSegment(h264_path, ended_at))
     finally:
         stopping.set()
+        queued_last: _QueuedSegment | None = None
+        if last_segment is not None:
+            try:
+                queued_last = _QueuedSegment(
+                    path=queue_segment(
+                        deps.command_runner,
+                        last_segment.path,
+                        deps.queue_dir,
+                        deps.video.framerate,
+                    ),
+                    audio_active=last_segment.path.suffix == ".ts",
+                    ended_at=last_segment.ended_at,
+                )
+            except Exception:
+                _logger.exception(
+                    "could not queue the last segment %s", last_segment.path.name
+                )
+        _push_recording_status(
+            deps,
+            status_client,
+            segments_uploaded_today=uploaded_today[0],
+            recording_active=False,
+            audio_active=audio is not None,
+        )
+        if queued_last is not None:
+            work.put(queued_last)
         work.put(None)
         worker_thread.join()
         _push_recording_status(
             deps,
+            status_client,
             segments_uploaded_today=uploaded_today[0],
             recording_active=False,
             audio_active=audio is not None,
@@ -549,6 +717,7 @@ def main() -> int:
         registered_marker_path.touch()
 
     command_runner = SubprocessCommandRunner()
+    capture_runner = SubprocessInterruptibleRunner()
     audio = resolve_audio(command_runner, config.audio)
     upload_limit = UploadLimit(
         max_bytes=config.max_upload_bytes,
@@ -573,6 +742,10 @@ def main() -> int:
     stop = threading.Event()
 
     def _handle_signal(signum: int, frame: object) -> None:
+        # ``stop`` is also the capture's cancel event, so this ends the
+        # in-flight capture as well as the loop: a systemctl stop or a
+        # poweroff finishes within the unit's TimeoutStopSec instead of
+        # waiting out the segment and being SIGKILLed.
         stop.set()
 
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -592,6 +765,7 @@ def main() -> int:
 
     deps = LoopDeps(
         command_runner=command_runner,
+        capture_runner=capture_runner,
         storage_client=clients.storage,
         status_client=clients.status,
         led_driver=led_driver,
