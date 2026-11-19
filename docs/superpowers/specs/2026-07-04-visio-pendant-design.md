@@ -285,20 +285,25 @@ Requirement (PRD v1, 2026-11-18): whenever the daemon runs, the LED is lit and s
 Dark means the daemon is not running (no power, or stopped by systemd), never "recording quietly".
 This section is the single owner of the LED table; the recording-control design (`2026-11-18-visio-recording-control-design.md`, PR #103), the local-first flag button (PR #100) and battery hardening (PR #101) defer to it for looks and priority.
 
-The state is two orthogonal regions, resolved together by one pure function (the successor of today's `next_led_state`), so no code path sets a colour directly:
+The pendant runs several activities at once, so its state is a set of concurrent regions, not one list: it can be recording and uploading at the same moment.
+The LED cannot show all of them on one pixel, so a single pure resolver (the successor of today's `next_led_state`) projects the regions onto one look, and no code path sets a colour directly.
 
 - **Capture region** - Booting, Scanning, Setup needed, Stopped, Recording, Shutting down, Halted (battery or camera).
-  It is driven by the recording-control state machine of PR #103 and decides whether the camera is capturing.
-- **Health region** - Critical, Low battery, Uploading, or nothing.
-  It is derived from conditions (`UploadHealth`, free space, `BatteryMonitor`, upload in flight) and only colours the LED while the capture region is Recording.
+  Exactly one at a time; driven by the recording-control state machine of PR #103; decides whether the camera is capturing.
+- **Upload region** - Idle, Waiting, Uploading.
+  Exactly one at a time; owned by the upload worker thread; runs alongside Stopped and Recording, and never changes the LED.
+- **Health conditions** - SD low, uploads failing, battery low.
+  Flags with their own set and clear thresholds, not states; any number can hold at once.
 
-The capture region always wins the look, so a health condition can never make a stopped pendant look like it is recording.
-Health conditions that matter while the pendant is not recording (a low battery while Stopped, a failing backup) go to the phone instead.
-The one exception to "one resolved state" is the flag acknowledgement, a short overlay that plays over Recording and then gives it back.
+The capture region always wins the look, and health conditions only colour the LED while Recording, so a stopped pendant never looks like it is recording.
+Upload progress is never on the LED: none of the products this design was compared with (Limitless, Plaud, GoPro, Narrative Clip, Ray-Ban Meta, Nest) show sync on the device, and backup status already goes to the phone.
+The one exception to "one resolved look" is the flag acknowledgement, a short overlay that plays over Recording and then gives it back.
 
 **Upload queue.** The `queue/` directory on the SD card holds finished MP4 segments and flag markers that have not reached Supabase yet.
 A file leaves the queue only when its upload succeeds (then it is deleted) or it is rejected as oversized (moved to `rejected/`); it survives reboots and power loss, and every boot flushes it.
 "Draining the queue" below means letting the upload already in flight finish; it never means uploading the whole backlog before acting.
+
+Capture region:
 
 | State | Look | Capturing? | Enters when | Exits when (to) | Status |
 |---|---|---|---|---|---|
@@ -307,10 +312,7 @@ A file leaves the queue only when its upload succeeds (then it is deleted) or it
 | Scanning | Cyan, pulsing | No | First boot with no `session.json`; a 10 s hold released from Stopped; Setup needed and any press; `visio-reonboard` | QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; SIGTERM (Shutting down) | New (today onboarding shows Recording green, and giving up exits 1 into a restart loop) |
 | Setup needed | Cyan, dim solid | No | First-boot scanning used its 60 attempts | Any press or hold (Scanning, a fresh 60 attempts); power cycle (Booting, then Scanning); SIGTERM (Shutting down) | New |
 | Stopped | White, dim solid | No | Every boot with a session; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (`stop_reason = storage_full`); a re-onboard that timed out or was cancelled | A hold released between 2 and 10 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); SIGTERM (Shutting down) | Designed (PR #103) |
-| Recording | Green, solid (or a health look below) | Yes | A hold released between 2 and 10 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b) | A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); SIGTERM (Shutting down) | Built (today derived from intent, not evidence) |
-| - Critical | Red, flashing bright/dim | Yes | Under 1 GB free, or the 3rd upload failure in a row while NetworkManager reports `full` connectivity | Free space back above 1.5 GB, and the next upload success; or leaving Recording | Partly built: today every failure counts, offline included, and there is no free-space check |
-| - Low battery | Yellow, pulsing | Yes | `BatteryMonitor` latch set: under 20% (PR #101) | Charge back at 25% or external power; or leaving Recording | Built (reader stubbed; hysteresis in PR #101) |
-| - Uploading | Blue, pulsing | Yes | An upload or retry round starts | That upload ends; or leaving Recording | Built |
+| Recording | Green, solid (red flashing or yellow pulsing while a health condition holds, see the resolver) | Yes | A hold released between 2 and 10 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b) | A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); SIGTERM (Shutting down) | Built (today derived from intent, not evidence) |
 | Flag saved (overlay) | Magenta, 150 ms | Yes | A short press released while Recording, once the marker is fsynced (PR #100) | After 150 ms, back to the underlying state | Designed (PR #100) |
 | Shutting down | White, pulsing | No | SIGTERM or SIGINT in any state: a reboot, `systemctl stop`, or a watchdog restart (during a battery halt's own power-off the LED stays Halted red, which outranks this) | The process exits (Off), at most `TimeoutStopSec=30` later, after which systemd kills it | Designed (PR #103) |
 | Halted, battery | Red, solid, full brightness | No | `BatteryMonitor` confirms a halt: under 10% on 3 readings, under the 3300 mV floor on 2, or an unreadable gauge on 3, never while on external power (PR #101) | External power appears while it drains (back to the state it came from); otherwise the in-flight upload finishes or 120 s pass, then a clean power-off (Off). With a PiJuice the HAT wakes the Pi at 25% charge (Booting, then Stopped); without one, the wearer charges and powers on | Designed (PR #101) |
@@ -324,46 +326,85 @@ What the wearer can do in each state that needs them:
 - **Halted, battery:** plug in a charger; during the drain that cancels the halt and the pendant carries on, after it the pendant powers off and comes back by itself (PiJuice) or when powered on.
 - **Halted, camera:** hold 2 s to retry; if it fails again, power off and reseat the camera ribbon.
 
-Priority, highest first: Shutting down, Halted, Scanning, Setup needed, Booting, Stopped (capture states, which exclude each other and always win the look), then, only while Recording: Critical, Low battery, Uploading, and plain Recording.
-This changes PR #103's precedence (`SHUTTING_DOWN > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING or STOPPED`): a health condition no longer shows over Stopped, so a stopped pendant that is draining its queue stays dim white instead of turning blue.
+Upload region (the upload worker; it runs while the daemon is in Stopped or Recording, finishes only its in-flight upload during a battery halt, and drains within the `TimeoutStopSec=30` budget during Shutting down):
+
+| State | Enters when | Exits when (to) |
+|---|---|---|
+| Idle | The queue is empty | A segment finishes or a flag is written: with `full` connectivity (Uploading), without it (Waiting) |
+| Waiting | Files are queued but there is no `full` connectivity, or an upload just failed | The backoff deadline passes (30 s doubling to 480 s, on its own counter) and connectivity is `full`, or a new file arrives while online (Uploading); the daemon stops (it ends; the queue stays on the SD card) |
+| Uploading | One file is in flight | Success and the queue is empty (Idle); success with more queued (the next file, still Uploading); failure (Waiting); the halt or stop budget runs out (it ends; the file stays queued) |
+
+Health conditions (flags, evaluated continuously; they only affect the LED while Recording):
+
+| Condition | Sets when | Clears when |
+|---|---|---|
+| SD low | Under 1 GB free (about 30 min left at 4 Mbps) | Above 1.5 GB free |
+| Uploads failing | The 3rd consecutive failure while NetworkManager reports `full` connectivity (`UploadHealth`) | The next upload success |
+| Battery low | `BatteryMonitor` latch under 20% (PR #101) | At 25%, or on external power |
+
+LED resolver, first matching rule wins:
+
+| # | When | Look | Means for a person |
+|---|---|---|---|
+| 1 | Capture is Shutting down | White, pulsing | Powering down; not recording |
+| 2 | Capture is Halted (battery or camera) | Red, solid, full brightness | Not recording; needs you (see the table above) |
+| 3 | Capture is Scanning | Cyan, pulsing | Looking for a QR code; not recording |
+| 4 | Capture is Setup needed | Cyan, dim solid | Press to scan again; not recording |
+| 5 | Capture is Booting or Stopped | White, dim solid | Powered and fine; not recording |
+| 6 | Recording, and SD low or uploads failing | Red, flashing bright/dim (Critical) | Recording, but needs you |
+| 7 | Recording, and battery low | Yellow, pulsing | Recording; charge soon |
+| 8 | Recording | Green, solid | Recording |
+| - | Overlay: a flag saved while Recording | Magenta, 150 ms | Your press was saved |
+
+The Uploading look (blue, pulsing) is removed; `LedState.UPLOADING` exists in today's firmware and goes when the resolver lands.
+Compared with PR #103's precedence (`SHUTTING_DOWN > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING or STOPPED`), health no longer shows over Stopped and UPLOADING is gone.
+
+Capture region diagram:
 
 ```mermaid
 stateDiagram-v2
     [*] --> Off
-    Off --> Booting: power on / systemd start
+    Off --> Booting: power on
     Booting --> Scanning: no session.json
     Booting --> Stopped: session on disk
-    Booting --> HaltedBattery: battery halt confirmed
+    Booting --> HaltedBattery: battery halt
     Scanning --> Booting: QR read, Wi-Fi up
     Scanning --> SetupNeeded: 60 attempts, first boot
     Scanning --> Stopped: re-onboard gave up
     SetupNeeded --> Scanning: any press
     Stopped --> Recording: release at 2-10 s
     Stopped --> Scanning: release at 10 s+
-    state Recording {
-        Capturing --> Uploading: upload starts
-        Uploading --> Capturing: upload ends
-        Capturing --> LowBattery: under 20%
-        LowBattery --> Capturing: back at 25%
-        Uploading --> Critical: 3rd failure, connectivity full
-        Capturing --> Critical: under 1 GB free
-        Critical --> Capturing: cause cleared
-    }
-    Recording --> Stopped: hold 2 s or under 256 MB free
-    Recording --> HaltedCamera: 3 capture failures
-    HaltedCamera --> Recording: hold 2 s, capture works
-    Recording --> HaltedBattery: battery halt confirmed
-    Stopped --> HaltedBattery: battery halt confirmed
-    HaltedBattery --> Recording: charger plugged in during drain
-    HaltedBattery --> Off: drain done or 120 s, clean poweroff
-    Stopped --> ShuttingDown: SIGTERM
+    Recording --> Stopped: hold 2 s or SD full
+    Recording --> HaltedCamera: camera fails 3x
+    HaltedCamera --> Recording: hold 2 s, retry ok
+    Recording --> HaltedBattery: battery halt (also from Stopped)
+    HaltedBattery --> Recording: charger
+    HaltedBattery --> Off: clean poweroff
     Recording --> ShuttingDown: SIGTERM
+    Stopped --> ShuttingDown: SIGTERM
     ShuttingDown --> Off: process exits
 ```
 
-The diagram leaves out SIGTERM from Scanning, Setup needed and Halted, camera (each goes to Shutting down) and the return to Stopped when a charger cancels a halt that started from Stopped, to stay readable; the table is complete.
+Upload region, running at the same time on the worker thread:
 
-Inside Recording the drawn edges are illustrative: the health region is resolved by priority, not by the edges, so any health state can move to any other.
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Uploading: file queued, online
+    Idle --> Waiting: file queued, offline
+    Uploading --> Idle: queue empty
+    Uploading --> Waiting: upload failed
+    Waiting --> Uploading: deadline passed, online
+```
+
+The two diagrams are concurrent regions of one device: capture runs on the main thread and uploads on the worker thread at the same time; a success with more files queued goes straight to the next file.
+The diagram leaves out SIGTERM from Scanning, Setup needed and Halted, camera (each goes to Shutting down) and the return to Stopped when a charger cancels a halt that started from Stopped, to stay readable; the tables are complete.
+
+**Upload policy (open decision for M3).** Today, and through v1 on USB power, the pendant uploads whenever it is online, recording or not.
+For the battery build, the alternative is to upload only while charging, as GoPro's cloud auto-upload and the Narrative Clip do, because Wi-Fi uploads cost battery and heat on a Zero 2W that is also encoding video.
+The cost is a later backup: 8 h of footage is about 14.4 GB, which needs about 8 Mbps of upload for 4 h of overnight charging, so the nightly pipeline (02:00 ICT) would have to wait for the upload or run on whatever arrived.
+A middle option is to upload while recording only above a charge threshold (for example 50%) and otherwise wait for the charger.
+Decide at M3 with the measured power cost of uploading; it changes only the Waiting to Uploading rule above.
 
 Transition rules:
 - **Boot.** Every boot comes up Stopped and only a 2 s hold starts recording (PR #103, decisions D2-b and D3-a: a daemon crash-restart within one power cycle resumes the wearer's last choice through a `/run` marker, and finishing onboarding leaves the pendant Stopped).
@@ -405,11 +446,11 @@ The resolver stays pure and unit-tested without threads, like `next_worker_step`
 
 Accessibility: no two looks may differ by hue alone where they can be confused.
 Recording (green solid) and Halted (red solid) are the risky pair for red-green colour blindness, so Halted runs at full brightness against Recording's normal brightness, and the app always names the state.
-Scanning (cyan pulsing) and Uploading (blue pulsing) only occur in different contexts (setup, with the QR on the phone screen, versus recording).
+Scanning (cyan pulsing) and Setup needed (cyan, dim solid) differ by pattern and brightness and only occur during setup, with the QR on the phone screen; removing the blue Uploading look also removed the cyan and blue pair.
 The M2 exit check renders each look through a colour-blindness simulation (the open-source `daltonlens` package) as a unit test, then confirms them by eye at 2 m.
 
 Libraries over hand-written code: gpiozero's hold support for the gestures, NetworkManager's built-in connectivity check, systemd's watchdog, start limit and `ExecStopPost=`, `python3-systemd` for notify, and the Expo push API for the nightly alert.
-The capture region may use `python-statemachine` (MIT, pure Python) instead of a hand-rolled state class if PR #103's `RecordingControl` grows beyond toggle and stop; the health region stays a pure function, since it is priority resolution, not a state machine.
+The capture region may use `python-statemachine` (MIT, pure Python) instead of a hand-rolled state class if PR #103's `RecordingControl` grows beyond toggle and stop; the LED resolver stays a pure function, since it is priority resolution, not a state machine.
 
 **LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour until `LedController` animates them (see the state machine above).
 `Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).
