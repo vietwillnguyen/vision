@@ -153,9 +153,9 @@ def next_led_state(
     The conditions are not mutually exclusive - a pendant can be low on
     battery, uploading and halting at once - so this is a priority ladder, and
     it is the single place that ladder is written down. The pendant spec's LED
-    state machine table is the same ladder, including the two states the
-    recording stop/start control design adds, which slot in at priorities 2
-    and 6 when that work lands.
+    state machine section owns the target design; its pure resolver replaces
+    this function as the capture region, health conditions and the states the
+    recording stop/start control design adds land.
 
     ``battery_halted`` is first. A halt is terminal, and the solid red is the
     pendant's only chance to tell the wearer *why* it is about to go dark;

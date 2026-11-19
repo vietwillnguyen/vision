@@ -1,5 +1,7 @@
 # Visio Device Provisioning & Preflight Implementation Plan
 
+> **Superseded (2026-11-19):** the LED states and boot-to-Recording behaviour in this executed plan are superseded by the LED state machine in the pendant spec (PR #102); this plan is kept as history and not rewritten.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An idempotent device-provisioning script and a firmware-level preflight check for the Visio pendant's Raspberry Pi Zero 2W, both aware that the PiJuice battery HAT is currently unavailable and must not block on its absence.
@@ -1124,9 +1126,9 @@ Run the pendant on its pack, charger disconnected, until the cell is genuinely d
 sudo journalctl -u visio-recorder -f
 ```
 
-Expected, in order: the LED turns low-battery yellow once the smoothed charge falls under 20 %; a `confirmed below 10%` line (or `confirmed below the 3300 mV floor`, if the voltage gets there first) naming the halt reason; recording stops and the upload queue drains, or `did not drain within 120 s` is logged; the LED goes Critical red; `battery halt: powering off`; and the Pi halts.
+Expected, in order: the LED turns low-battery yellow once the smoothed charge falls under 20 %; a `confirmed below 10%` line (or `confirmed below the 3300 mV floor`, if the voltage gets there first) naming the halt reason; recording stops and the upload queue drains, or `did not drain within 120 s` is logged; the LED goes Halted solid red; `battery halt: powering off`; and the Pi halts.
 No `pijuice SetWakeUpOnCharge`, `SetSystemPowerSwitch` or `SetPowerOff` error line appears - those calls log only when the HAT refuses them.
-Then confirm the wake: leave the pack where it halted, connect the charger, and confirm the Pi powers up on its own at about 25 % with no button press and no manual reboot, and boots into recording with a green rather than yellow LED.
+Then confirm the wake: leave the pack where it halted, connect the charger, and confirm the Pi powers up on its own at about 25 % with no button press and no manual reboot, and boots with no yellow low-battery LED: with today's firmware it goes straight to recording (green), and once the default-stopped boot from the LED state machine lands it comes up Stopped (dim white) instead.
 This is the step the whole feature exists for, and the wake is the half that cannot be faked at all - `SetWakeUpOnCharge` writes a register the HAT acts on after the Pi is already off.
 
 - [ ] **Step 14: Confirm `systemctl poweroff` succeeds as the service user**
@@ -1151,7 +1153,7 @@ sudo /opt/visio-recorder/.venv/bin/python3 -c "from pijuice import PiJuice; s=Pi
 sudo journalctl -u visio-recorder --since "5 minutes ago" | grep -i "halt\|powering off"
 ```
 
-Expected: `GetStatus` reports `powerInput` (or `powerInput5vIo`) as `PRESENT` and `battery` as a `CHARGING_FROM_*` state while the charge reads under 10 %; the LED stays low-battery yellow, never Critical red; new segments keep arriving in the app; and the journal grep is empty - no halt and no power-off.
+Expected: `GetStatus` reports `powerInput` (or `powerInput5vIo`) as `PRESENT` and `battery` as a `CHARGING_FROM_*` state while the charge reads under 10 %; the LED stays low-battery yellow, never Halted red; new segments keep arriving in the app; and the journal grep is empty - no halt and no power-off.
 Then, still under 10 %, disconnect the charger and confirm the halt proceeds after the confirmation count, ending in the same sequence as Step 13, which is the same check from the other side.
 
 - [ ] **Step 16: Record the outcome**
