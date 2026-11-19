@@ -31,7 +31,7 @@
 <!-- source-sha256: 02deb8a63fe5bbacf7e91f0111dda31aa086d7a98c8948f0039ffe8aa47feaf9  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- source-sha256: 214704a0a49401a6ea7730d21f334164b49e9decf006df87f9e0d51dfad22c40  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
+<!-- source-sha256: 094d493fc847aa8a8ddd523a2500b03cdb51da4f5516bffad3f104401ed75277  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
 <!-- regenerated-at: 2026-11-18 (interruptible capture, bounded shutdown, recording stop/start design) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
@@ -354,7 +354,7 @@ flowchart TD
               <tr><td>0</td><td>Pipeline measures every segment's real duration</td><td><span class="badge badge-success badge-soft badge-sm">Merged #72</span></td></tr>
               <tr class="bg-base-200/40"><td>1</td><td>Interruptible capture and bounded shutdown</td><td><span class="badge badge-info badge-soft badge-sm">this change</span></td></tr>
               <tr><td>2</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">LedState.STOPPED</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">SHUTTING_DOWN</span>, a <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> owning every LED call</td><td><span class="badge badge-ghost badge-sm">designed</span></td></tr>
-              <tr><td>3</td><td>Hold-to-toggle button dispatch and the in-process stopped state</td><td><span class="badge badge-ghost badge-sm">designed</span></td></tr>
+              <tr><td>3</td><td>Hold-to-toggle button dispatch, the in-process stopped state, and a <span class="font-mono text-xs bg-base-200 rounded px-1">visio-record start|stop</span> CLI for the M1 bench</td><td><span class="badge badge-ghost badge-sm">designed</span></td></tr>
               <tr><td>4</td><td>Default stopped: boot comes up stopped, <span class="font-mono text-xs bg-base-200 rounded px-1">/run</span> marker, app label</td><td><span class="badge badge-ghost badge-sm">designed</span></td></tr>
               <tr><td>5</td><td>Remote stop from the app - only if decision 1 is revisited</td><td><span class="badge badge-ghost badge-sm">not planned</span></td></tr>
             </tbody>
