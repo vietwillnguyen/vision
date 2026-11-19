@@ -4,12 +4,11 @@ import QRCode from 'react-native-qrcode-svg';
 
 import { colors, spacing } from '../theme';
 
-export type ReonboardStep = 'form' | 'ready' | 'error';
+export type ReonboardStep = 'form' | 'ready' | 'paired' | 'expired' | 'error';
 
-// The payload embeds two Supabase JWTs (~700-1000 chars each), pushing the
-// QR to a high version - the library's 100px default packs those modules
-// too small for a phone-held-to-camera scan, so size up and use the lowest
-// error-correction level to keep module density scannable.
+// The v2 payload (Wi-Fi credentials plus a 43-character pairing code) is
+// under 150 characters, so the library's default error correction is fine;
+// the size only has to suit a phone held up to the pendant's camera.
 const QR_SIZE = 260;
 
 interface ReonboardScreenProps {
@@ -24,6 +23,7 @@ interface ReonboardScreenProps {
   onSubmit: (ssid: string, password: string) => void;
   onDone: () => void;
   onRetry: () => void;
+  onNewCode: () => void;
 }
 
 export function ReonboardScreen({
@@ -38,24 +38,73 @@ export function ReonboardScreen({
   onSubmit,
   onDone,
   onRetry,
+  onNewCode,
 }: ReonboardScreenProps) {
   if (step === 'ready') {
     return (
       <View style={styles.container}>
         <View style={styles.qrWrap}>
-          <QRCode value={qrValue} size={QR_SIZE} ecl="L" />
+          <View style={styles.qrQuietZone}>
+            <QRCode value={qrValue} size={QR_SIZE} />
+          </View>
         </View>
+        <Text style={styles.waiting}>Waiting for your pendant to scan this code...</Text>
         <Text style={styles.hint}>
-          This code contains your WiFi password and an active login - only show it to your Visio
-          device&apos;s camera
+          This code contains your Wi-Fi password and a one-time pairing code. Only show it to your
+          Visio pendant&apos;s camera.
         </Text>
         <View style={styles.buttonWrap}>
           <Button
             testID="done-button"
             title="Done"
             color={colors.accent}
-            accessibilityLabel="Finish re-onboarding"
+            accessibilityLabel="Close the pairing code"
             onPress={onDone}
+          />
+        </View>
+      </View>
+    );
+  }
+
+  if (step === 'paired') {
+    return (
+      <View style={styles.container}>
+        <Text testID="paired-message" style={styles.title} accessibilityRole="header">
+          Pendant paired
+        </Text>
+        <Text style={styles.body}>
+          Your Visio pendant is signed in with its own login and will start uploading.
+        </Text>
+        <View style={styles.buttonWrap}>
+          <Button
+            testID="done-button"
+            title="Done"
+            color={colors.accent}
+            accessibilityLabel="Finish pairing"
+            onPress={onDone}
+          />
+        </View>
+      </View>
+    );
+  }
+
+  if (step === 'expired') {
+    return (
+      <View style={styles.container}>
+        <Text testID="expired-message" style={styles.title} accessibilityRole="header">
+          This code has expired
+        </Text>
+        <Text style={styles.body}>
+          Pairing codes work for 10 minutes. Make a new one to continue.
+        </Text>
+        <View style={styles.buttonWrap}>
+          <Button
+            testID="new-code-button"
+            title={isSubmitting ? 'Generating...' : 'Generate a new code'}
+            color={colors.accent}
+            accessibilityLabel="Generate a new pairing code"
+            disabled={isSubmitting}
+            onPress={onNewCode}
           />
         </View>
       </View>
@@ -130,7 +179,13 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.sm,
   },
-  qrWrap: { alignItems: 'center', marginTop: spacing.lg, marginBottom: spacing.lg },
+  qrWrap: { alignItems: 'center', marginTop: spacing.lg, marginBottom: spacing.md },
+  // A white margin around the modules: a dark QR edge against the dark
+  // background is harder for the pendant's camera to find.
+  qrQuietZone: { backgroundColor: '#ffffff', padding: spacing.md, borderRadius: 8 },
+  waiting: { color: colors.text, fontSize: 16, textAlign: 'center', marginBottom: spacing.sm },
+  title: { color: colors.text, fontSize: 22, fontWeight: '700', marginBottom: spacing.sm },
+  body: { color: colors.textMuted, fontSize: 16, marginBottom: spacing.md },
   hint: { color: colors.textMuted, fontSize: 14, textAlign: 'center', marginBottom: spacing.md },
   error: { color: colors.danger, fontSize: 16, marginBottom: spacing.md },
   buttonWrap: { marginTop: spacing.md },

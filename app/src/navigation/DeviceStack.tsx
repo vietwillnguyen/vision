@@ -24,7 +24,13 @@ export function DeviceStack({ client, deviceId }: DeviceStackProps) {
         {(props) => <DeviceContainer {...props} client={client} deviceId={deviceId} />}
       </Stack.Screen>
       <Stack.Screen name="Reonboard">
-        {(props) => <ReonboardContainer {...props} client={client} />}
+        {({ navigation }) => (
+          <ReonboardContainer
+            client={client}
+            deviceId={deviceId}
+            onDone={() => navigation.goBack()}
+          />
+        )}
       </Stack.Screen>
     </Stack.Navigator>
   );
