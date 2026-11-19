@@ -10,7 +10,7 @@ from visio_recorder.supabase_clients import (
     SupabaseStorage,
     build_supabase_clients,
 )
-from visio_recorder.uploader import ObjectTooLargeError
+from visio_recorder.uploader import ObjectAlreadyStoredError, ObjectTooLargeError
 
 
 class FakeUser:
@@ -67,6 +67,7 @@ class FakeStorageBucket:
         self._uploads = uploads
         self._objects = objects
         self.info_has_size = True
+        self.info_hides_existing = False
         self.max_size: int | None = None
 
     def upload(self, path: str, file, file_options=None) -> None:
@@ -97,8 +98,9 @@ class FakeStorageBucket:
         self._objects[key] = data
 
     def info(self, path: str) -> dict:
-        # Like the storage API: a missing object is a 404 not_found.
-        if (self._bucket, path) not in self._objects:
+        # Like the storage API: a missing object is a 404 not_found, and so
+        # is one this login's select policy does not let it see.
+        if (self._bucket, path) not in self._objects or self.info_hides_existing:
             raise StorageApiError("Object not found", "not_found", 404)
         info: dict = {"name": path}
         if self.info_has_size:
@@ -132,11 +134,13 @@ class FakeStorage:
         self._uploads = uploads
         self.objects: dict = {}
         self.info_has_size = True
+        self.info_hides_existing = False
         self.max_size: int | None = None
 
     def from_(self, bucket: str) -> FakeStorageBucket:
         api = FakeStorageBucket(bucket, self._uploads, self.objects)
         api.info_has_size = self.info_has_size
+        api.info_hides_existing = self.info_hides_existing
         api.max_size = self.max_size
         return api
 
@@ -386,6 +390,25 @@ def test_storage_adapter_refuses_a_different_file_under_an_existing_key(tmp_path
     assert fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] == (
         b"earlier segment"
     )
+
+
+def test_storage_adapter_reports_a_duplicate_it_cannot_see_distinctly(tmp_path):
+    # The pendant reads back only what its own login uploaded, so an object
+    # stored under an earlier pairing looks absent and the upload gets a 409.
+    fake = FakeSupabase()
+    clients = build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
+    fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] = b"old"
+    fake.storage.info_hides_existing = True
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"payload")
+
+    with pytest.raises(ObjectAlreadyStoredError, match="20260709_080000.mp4"):
+        clients.storage.upload("segments", "device-abc/20260709_080000.mp4", local)
 
 
 def test_storage_adapter_labels_segments_as_video_mp4(tmp_path):

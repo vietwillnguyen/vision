@@ -10,7 +10,7 @@ from storage3.exceptions import StorageApiError
 from supabase import create_client
 from supabase_auth.errors import AuthApiError
 
-from visio_recorder.uploader import ObjectTooLargeError
+from visio_recorder.uploader import ObjectAlreadyStoredError, ObjectTooLargeError
 from visio_recorder.wifi_onboard import write_session_credentials
 
 _logger = logging.getLogger(__name__)
@@ -60,6 +60,9 @@ class SupabaseStorage:
         A 413 from storage (object over the bucket's size limit) is raised as
         ``ObjectTooLargeError`` so the caller splits the file instead of
         retrying it unchanged forever; see ``visio_recorder.upload_limit``.
+        A 409 for a key the lookup could not see (stored under an earlier
+        pairing) is raised as ``ObjectAlreadyStoredError`` so the caller sets
+        the file aside instead of retrying it forever.
         """
         bucket_api = self._client.storage.from_(bucket)
         stored_size = _stored_size(bucket_api, object_path)
@@ -80,6 +83,11 @@ class SupabaseStorage:
                 raise ObjectTooLargeError(
                     f"{bucket}/{object_path} ({local_path.stat().st_size} bytes) "
                     f"is over the storage size limit: {err.message}"
+                ) from err
+            if str(err.status) == "409":
+                raise ObjectAlreadyStoredError(
+                    f"{bucket}/{object_path} is already stored but not readable "
+                    f"by this login: {err.message}"
                 ) from err
             raise
 

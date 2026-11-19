@@ -17,7 +17,9 @@ a fitting file too large after the fact. So before upload:
   fewer than two parts, a part is still too large, or parts would share a
   name) is moved to ``rejected/`` beside the queue, logged as an error and
   counted in ``device_status.segments_rejected``. It is kept for manual
-  recovery but never retried;
+  recovery but never retried. A file storage already holds under a key this
+  login cannot read (stored under an earlier pairing, answered 409) is set
+  aside the same way;
 - a split that fails for a passing reason (any ``OSError`` such as a full SD
   card, or ffmpeg failing while the queue's filesystem has less free space
   than twice the file being split, which covers the parts, their per-part
@@ -45,7 +47,12 @@ from typing import Protocol
 
 from visio_recorder.muxer import CommandRunner
 from visio_recorder.upload_queue import mark_uploaded
-from visio_recorder.uploader import ObjectTooLargeError, StorageClient, upload_segment
+from visio_recorder.uploader import (
+    ObjectAlreadyStoredError,
+    ObjectTooLargeError,
+    StorageClient,
+    upload_segment,
+)
 
 # Parts aim for this fraction of the limit: -c copy can only cut at keyframes,
 # so a part runs up to one GOP (2 s at the encoder's default intra period)
@@ -262,6 +269,10 @@ def upload_queued(
                     size // 2,
                 )
                 work.append((part, size // 2))
+                continue
+            except ObjectAlreadyStoredError as err:
+                _reject(part, err)
+                outcome.rejected += 1
                 continue
             except Exception:
                 _logger.exception("upload of %s failed; keeping it queued", part)
