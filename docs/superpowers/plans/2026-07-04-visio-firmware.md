@@ -1,5 +1,7 @@
 # Visio Pendant - Firmware Implementation Plan
 
+> **Superseded (2026-11-19):** the LED states and boot-to-Recording behaviour in this executed plan are superseded by the LED state machine in the pendant spec (PR #102); this plan is kept as history and not rewritten.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the `visio-recorder` Python systemd daemon: boot-time battery check, WiFi + auth onboarding, device registration, rolling segment capture and upload, manual flag button, LED state machine, and device status reporting.
