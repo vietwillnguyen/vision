@@ -24,7 +24,12 @@ from visio_recorder.device_identity import (
     store_paired_device_id,
 )
 from visio_recorder.private_files import write_private_text_atomic
-from visio_recorder.session_store import read_saved_session, session_persister
+from visio_recorder.session_store import (
+    LoginRefusedError,
+    read_saved_session,
+    restore_session,
+    session_persister,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -118,16 +123,11 @@ def _sign_in(client: Any, session_path: Path) -> None:
         session_path.unlink(missing_ok=True)
     else:
         try:
-            client.auth.set_session(saved["access_token"], saved["refresh_token"])
+            restore_session(client, saved["refresh_token"])
             return
-        except AuthApiError as err:
-            if not _is_definite_auth_rejection(err):
-                raise PairingUnavailableError(
-                    f"could not resume the pairing session: {err.message}"
-                ) from err
+        except LoginRefusedError as err:
             _logger.warning(
-                "the saved pairing session was refused (%s); signing in again",
-                err.status,
+                "the saved pairing session is gone (%s); signing in again", err
             )
             session_path.unlink(missing_ok=True)
         except (AuthError, httpx.HTTPError) as err:

@@ -1,6 +1,7 @@
 import json
 import logging
 import stat
+from typing import Any
 
 import httpx
 import pytest
@@ -190,6 +191,7 @@ class FakeAuth:
         self._subscribers: list = []
         self.sign_in_error: Exception | None = None
         self.set_session_error: Exception | None = None
+        self.refresh_error: Exception | None = None
         self.anonymous_session = FakeSession("anon-at", "anon-rt")
 
     def on_auth_state_change(self, callback) -> None:
@@ -211,6 +213,12 @@ class FakeAuth:
         if self.set_session_error is not None:
             raise self.set_session_error
         self._emit("SIGNED_IN", FakeSession(access_token, refresh_token))
+
+    def refresh_session(self, refresh_token: str | None = None):
+        self._events.append(("refresh_session", refresh_token))
+        if self.refresh_error is not None:
+            raise self.refresh_error
+        self._emit("TOKEN_REFRESHED", FakeSession("resumed-at", "resumed-rt"))
 
 
 class FakeResponse:
@@ -303,8 +311,11 @@ def test_pairing_resumes_with_the_saved_session_instead_of_signing_in_again(tmp_
 
     _pair(tmp_path, client)
 
-    assert ("set_session", "saved-at", "saved-rt") in client.events
+    assert ("refresh_session", "saved-rt") in client.events
     assert "sign_in_anonymously" not in client.events
+    assert json.loads((tmp_path / "session.json").read_text())["refresh_token"] == (
+        "resumed-rt"
+    )
 
 
 def test_a_rejected_saved_session_is_replaced_by_a_new_anonymous_sign_in(tmp_path):
@@ -313,7 +324,11 @@ def test_a_rejected_saved_session_is_replaced_by_a_new_anonymous_sign_in(tmp_pat
     _pending(tmp_path)
     write_session_credentials(tmp_path / "session.json", "saved-at", "saved-rt")
     client = FakePairingClient(tmp_path)
-    client.auth.set_session_error = AuthApiError("User not found", 403, None)
+    # GoTrue sends this code, but supabase_auth's ErrorCode literal omits it.
+    code: Any = "refresh_token_not_found"
+    client.auth.refresh_error = AuthApiError(
+        "Invalid Refresh Token: Refresh Token Not Found", 400, code
+    )
 
     assert _pair(tmp_path, client) == DEVICE_ID
 
@@ -321,6 +336,47 @@ def test_a_rejected_saved_session_is_replaced_by_a_new_anonymous_sign_in(tmp_pat
     assert json.loads((tmp_path / "session.json").read_text())["refresh_token"] == (
         "anon-rt"
     )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # A clock behind real time makes set_session trust an expired token.
+        AuthApiError("token is expired", 403, "bad_jwt"),
+        AuthApiError("Bad Request", 400, None),
+        AuthApiError("Request rate limit reached", 429, "over_request_rate_limit"),
+        AuthRetryableError("connection refused", 0),
+    ],
+    ids=["bad-jwt", "uncoded-4xx", "429", "network"],
+)
+def test_a_saved_session_not_definitely_refused_is_kept_for_a_retry(tmp_path, error):
+    # Signing in again would orphan a session that may already have claimed
+    # the code, and the code works for one device user only.
+    _pending(tmp_path)
+    write_session_credentials(tmp_path / "session.json", "saved-at", "saved-rt")
+    client = FakePairingClient(tmp_path)
+    client.auth.set_session_error = AuthApiError("token is expired", 403, "bad_jwt")
+    client.auth.refresh_error = error
+
+    with pytest.raises(PairingUnavailableError):
+        _pair(tmp_path, client)
+
+    assert "sign_in_anonymously" not in client.events
+    assert json.loads((tmp_path / "session.json").read_text())["refresh_token"] == (
+        "saved-rt"
+    )
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_a_saved_session_is_resumed_even_when_the_clock_is_behind(tmp_path):
+    _pending(tmp_path)
+    write_session_credentials(tmp_path / "session.json", "saved-at", "saved-rt")
+    client = FakePairingClient(tmp_path)
+    client.auth.set_session_error = AuthApiError("token is expired", 403, "bad_jwt")
+
+    assert _pair(tmp_path, client) == DEVICE_ID
+
+    assert "sign_in_anonymously" not in client.events
 
 
 def test_a_crash_between_saving_the_device_and_dropping_the_code_reclaims(tmp_path):

@@ -46,6 +46,18 @@ def live_supabase_env():
     return env
 
 
+@pytest.fixture(scope="session")
+def live_jwt_secret(live_supabase_env) -> str:
+    """The stack's legacy HS256 secret, for minting a token GoTrue will verify."""
+    secret = os.environ.get("SUPABASE_JWT_SECRET")
+    if not secret:
+        pytest.skip(
+            "SUPABASE_JWT_SECRET not set - export JWT_SECRET from "
+            "`supabase status -o env` (see integration/README.md)"
+        )
+    return secret
+
+
 @pytest.fixture
 def paired_device(live_supabase_env, tmp_path) -> Iterator[PairedDevice]:
     """An owner with a device row and a pendant paired to it, booted."""

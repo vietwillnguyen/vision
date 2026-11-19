@@ -6,9 +6,13 @@ from typing import Any
 
 from storage3.exceptions import StorageApiError
 from supabase import create_client
-from supabase_auth.errors import AuthApiError
 
-from visio_recorder.session_store import read_saved_session, session_persister
+from visio_recorder.session_store import (
+    LoginRefusedError,
+    read_saved_session,
+    restore_session,
+    session_persister,
+)
 from visio_recorder.uploader import ObjectAlreadyStoredError, ObjectTooLargeError
 
 _logger = logging.getLogger(__name__)
@@ -136,20 +140,13 @@ def build_supabase_clients(
     if session is None:
         raise SessionRevokedError("the pendant's session.json is missing or unreadable")
     client = client_factory(url, key)
-    # Registered before set_session, which refreshes an expired access token
-    # before it returns: that first rotation has to be saved too.
+    # Registered before the restore, whose refresh rotates the refresh token:
+    # that first rotation has to be saved too.
     client.auth.on_auth_state_change(session_persister(session_path))
     try:
-        client.auth.set_session(session["access_token"], session["refresh_token"])
-    except AuthApiError as err:
-        # A definite 4xx means the device user, its session or its refresh
-        # token is gone. A 429, a 5xx or a network error (AuthRetryableError)
-        # is not a verdict on the login and must never unpair the pendant.
-        if 400 <= err.status < 500 and err.status != 429:
-            raise SessionRevokedError(
-                f"the pendant's login was refused ({err.status}: {err.message})"
-            ) from err
-        raise
+        restore_session(client, session["refresh_token"])
+    except LoginRefusedError as err:
+        raise SessionRevokedError(f"the pendant's {err}") from err
     return SupabaseClients(
         storage=SupabaseStorage(client),
         status=SupabaseStatus(client),

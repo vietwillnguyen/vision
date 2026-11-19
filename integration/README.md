@@ -63,6 +63,10 @@ when the phone refreshes or logs out. It also pins what that login may and may
 not do, that "Remove device" and a re-pair revoke it, and that a used code or an
 unpaired anonymous user gets nothing. Code expiry cannot be aged through the
 public API, so the pgTAP suite covers it.
+A pendant booting before NTP sync is simulated cheaply: the test re-signs its
+access token with a past `exp` using the stack's legacy HS256 secret
+(`SUPABASE_JWT_SECRET`, from `JWT_SECRET` in `supabase status -o env`) and sets
+supabase-py's clock two hours back, then boots it.
 `tests/test_firmware_upload_live.py` and `tests/test_storage_ingestion_live.py`
 upload through the same `paired_device` fixture (`conftest.py`), because only
 the pendant's own login may write to storage. The local stack enables
@@ -153,6 +157,6 @@ and export its connection details:
 cd supabase && supabase start
 eval "$(supabase status -o env)"
 SUPABASE_URL="$API_URL" SUPABASE_ANON_KEY="$ANON_KEY" \
-  SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" \
+  SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" SUPABASE_JWT_SECRET="$JWT_SECRET" \
   uv run --project ../integration pytest ../integration
 ```

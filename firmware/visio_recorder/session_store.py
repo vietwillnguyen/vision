@@ -11,9 +11,56 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from supabase_auth.errors import AuthApiError
+
 from visio_recorder.wifi_onboard import write_session_credentials
 
 _logger = logging.getLogger(__name__)
+
+# GoTrue's error codes for a refresh-token grant that can never succeed: the
+# token, its session or its user is gone (Remove device and a re-pair delete
+# the device user; reproduced against the local stack), or the server ended
+# the session. Only these unpair a pendant. Anything else, including a 4xx
+# with no code or another code, a 429, a 5xx or a network error, says
+# nothing about the login and is retried. supabase_auth's ErrorCode literal
+# omits the refresh_token_* and session_expired codes, but its error parser
+# passes GoTrue's code string through unchanged.
+REFUSED_LOGIN_CODES = frozenset(
+    {
+        "refresh_token_not_found",
+        "refresh_token_already_used",
+        "session_not_found",
+        "session_expired",
+        "user_not_found",
+        "user_banned",
+    }
+)
+
+
+class LoginRefusedError(Exception):
+    """GoTrue definitely refused this login; it will never work again."""
+
+
+def restore_session(client: Any, refresh_token: str) -> None:
+    """Sign ``client`` back in with a saved refresh token.
+
+    This always runs the refresh-token grant instead of ``set_session``.
+    ``set_session`` decides whether the saved access token has expired by the
+    pendant's own clock, and a Pi has no RTC: booting before NTP syncs, it
+    trusts a token that really expired, GoTrue answers 403 bad_jwt "token is
+    expired", and that answer is about the token, not the login. The refresh
+    grant is judged by the server alone, and its answer is the verdict. It
+    rotates the refresh token, which the caller's persister saves; GoTrue
+    accepts the previous one again if a power cut loses that write.
+    """
+    try:
+        client.auth.refresh_session(refresh_token)
+    except AuthApiError as err:
+        if err.code in REFUSED_LOGIN_CODES:
+            raise LoginRefusedError(
+                f"the login was refused ({err.status} {err.code}: {err.message})"
+            ) from err
+        raise
 
 
 def read_saved_session(session_path: Path) -> dict[str, str] | None:

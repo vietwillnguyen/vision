@@ -32,14 +32,18 @@ class FakeSession:
 class FakeAuth:
     """supabase-py's auth client, as far as the daemon uses it.
 
-    ``refresh_on_set`` makes ``set_session`` behave as it does for an expired
-    access token: it refreshes and notifies TOKEN_REFRESHED before returning.
+    ``refresh_session`` rotates to ``refreshed`` and notifies TOKEN_REFRESHED,
+    as the real refresh-token grant does. ``set_session_error`` models what
+    ``set_session`` raises when it trusts the pendant's own clock; see
+    ``test_a_pendant_whose_clock_is_behind_keeps_its_login``.
     """
 
     def __init__(self, user_id: str) -> None:
         self._user_id = user_id
         self.session_set_with: tuple[str, str] | None = None
-        self.refresh_on_set: FakeSession | None = None
+        self.refreshed_with: list[str] = []
+        self.refreshed = FakeSession("at-boot", "rt-boot")
+        self.refresh_error: Exception | None = None
         self.set_session_error: Exception | None = None
         self._subscribers: list = []
 
@@ -54,8 +58,15 @@ class FakeAuth:
         self.session_set_with = (access_token, refresh_token)
         if self.set_session_error is not None:
             raise self.set_session_error
-        if self.refresh_on_set is not None:
-            self.emit("TOKEN_REFRESHED", self.refresh_on_set)
+        self.emit("SIGNED_IN", FakeSession(access_token, refresh_token))
+        return FakeAuthResponse(self._user_id)
+
+    def refresh_session(self, refresh_token: str | None = None) -> FakeAuthResponse:
+        assert refresh_token is not None
+        self.refreshed_with.append(refresh_token)
+        if self.refresh_error is not None:
+            raise self.refresh_error
+        self.emit("TOKEN_REFRESHED", self.refreshed)
         return FakeAuthResponse(self._user_id)
 
 
@@ -181,7 +192,7 @@ def _write_session(tmp_path: Path) -> Path:
     return session
 
 
-def test_build_sets_the_session_before_any_client_use(tmp_path):
+def test_build_restores_the_login_from_the_saved_refresh_token(tmp_path):
     fake = FakeSupabase()
     build_supabase_clients(
         "http://x",
@@ -189,7 +200,7 @@ def test_build_sets_the_session_before_any_client_use(tmp_path):
         _write_session(tmp_path),
         client_factory=lambda url, key: fake,
     )
-    assert fake.session_set_with == ("at", "rt")
+    assert fake.auth.refreshed_with == ["rt"]
 
 
 def _stored_session(path: Path) -> dict:
@@ -215,12 +226,35 @@ def test_a_token_refresh_during_the_run_is_written_back_to_session_json(tmp_path
     }
 
 
-def test_the_refresh_set_session_does_at_boot_is_written_back_too(tmp_path):
-    # An expired access token makes set_session refresh before it returns, so
-    # the listener has to be registered before the session is set.
+def test_the_refresh_at_boot_is_written_back_too(tmp_path):
+    # The boot refresh rotates the refresh token, so the listener has to be
+    # registered before it runs.
     fake = FakeSupabase()
-    fake.auth.refresh_on_set = FakeSession("at-boot", "rt-boot")
     session_path = _write_session(tmp_path)
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    assert _stored_session(session_path) == {
+        "access_token": "at-boot",
+        "refresh_token": "rt-boot",
+    }
+
+
+def test_a_pendant_whose_clock_is_behind_keeps_its_login(tmp_path):
+    # A Pi has no RTC, so before NTP syncs its clock can be hours behind. An
+    # access token that really expired then looks valid to set_session, which
+    # asks GoTrue for the user and gets 403 bad_jwt "token is expired". That
+    # says nothing about the login, so it must never unpair the pendant.
+    fake = FakeSupabase()
+    fake.auth.set_session_error = AuthApiError(
+        "invalid JWT: unable to parse or verify signature, token has invalid "
+        "claims: token is expired",
+        403,
+        "bad_jwt",
+    )
+    session_path = _write_session(tmp_path)
+
     build_supabase_clients(
         "http://x", "anon", session_path, client_factory=lambda url, key: fake
     )
@@ -233,10 +267,10 @@ def test_events_without_a_session_leave_session_json_alone(tmp_path):
     # a transient server-side revoke into a permanent loss of the login.
     fake = FakeSupabase()
     session_path = _write_session(tmp_path)
-    before = session_path.read_text()
     build_supabase_clients(
         "http://x", "anon", session_path, client_factory=lambda url, key: fake
     )
+    before = session_path.read_text()
 
     fake.auth.emit("SIGNED_OUT", None)
 
@@ -457,18 +491,21 @@ def test_status_adapter_upserts_device_status_row(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "error",
+    "code",
     [
-        AuthApiError("User from sub claim in JWT does not exist", 403, None),
-        AuthApiError("Invalid Refresh Token: Already Used", 400, None),
-        AuthApiError("Session not found", 401, None),
+        # What GoTrue answers for a deleted device user (Remove device, a
+        # re-pair) or a deleted session; reproduced against the local stack.
+        "refresh_token_not_found",
+        "refresh_token_already_used",
+        "session_not_found",
+        "session_expired",
+        "user_not_found",
+        "user_banned",
     ],
 )
-def test_a_definite_session_rejection_means_the_login_was_revoked(tmp_path, error):
-    # Remove device in the app deletes the pendant's user, and a re-pair
-    # replaces it; either way this login is gone for good.
+def test_a_definite_refusal_of_the_refresh_means_the_login_was_revoked(tmp_path, code):
     fake = FakeSupabase()
-    fake.auth.set_session_error = error
+    fake.auth.refresh_error = AuthApiError("refused", 400, code)
 
     with pytest.raises(SessionRevokedError):
         build_supabase_clients(
@@ -484,14 +521,18 @@ def test_a_definite_session_rejection_means_the_login_was_revoked(tmp_path, erro
     [
         AuthApiError("Request rate limit reached", 429, "over_request_rate_limit"),
         AuthApiError("Internal Server Error", 500, None),
+        AuthApiError("token is expired", 403, "bad_jwt"),
+        AuthApiError("Refresh token is not valid", 400, "validation_failed"),
+        AuthApiError("Bad Request", 400, None),
         AuthRetryableError("connection refused", 0),
         AuthRetryableError("Bad Gateway", 502),
     ],
 )
-def test_a_network_or_server_failure_is_not_a_revocation(tmp_path, error):
-    # Unpairing on a flaky network would throw away a good login.
+def test_anything_but_a_definite_refusal_is_not_a_revocation(tmp_path, error):
+    # Unpairing on a flaky network, a proxy's answer or a 4xx whose cause is
+    # not the login itself would throw away a good login for good.
     fake = FakeSupabase()
-    fake.auth.set_session_error = error
+    fake.auth.refresh_error = error
 
     with pytest.raises(type(error)) as exc_info:
         build_supabase_clients(

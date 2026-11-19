@@ -13,6 +13,10 @@ refreshes, a logout) reaches the pendant. The rest of the file pins what that
 login can and cannot do, and that Remove device and a re-pair revoke it.
 """
 
+import base64
+import hashlib
+import hmac
+import json
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -22,6 +26,8 @@ import pytest
 from postgrest.exceptions import APIError
 from storage3.exceptions import StorageApiError
 from supabase import Client, create_client
+from supabase_auth._sync import gotrue_client
+from supabase_auth.errors import AuthApiError
 
 from tests.pendant import (
     PairedDevice,
@@ -36,12 +42,16 @@ from visio_recorder.pairing import (
     CLAIM_ARG,
     CLAIM_RPC,
     PAIRING_FILE,
+    SESSION_FILE,
     complete_pairing,
     write_pending_pairing,
 )
 from visio_recorder.supabase_clients import SessionRevokedError, SupabaseStorage
 from visio_recorder.uploader import upload_segment
-from visio_recorder.wifi_onboard import parse_onboarding_qr_payload
+from visio_recorder.wifi_onboard import (
+    parse_onboarding_qr_payload,
+    write_session_credentials,
+)
 
 # supabase/config.toml refresh_token_reuse_interval, plus a margin.
 PAST_REUSE_INTERVAL_SEC = 12
@@ -294,3 +304,60 @@ def test_an_anonymous_user_that_never_paired_can_do_nothing(
         upload_segment(SupabaseStorage(stranger), device_id, _segment(tmp_path))
     with pytest.raises(APIError):
         stranger.rpc("create_pairing_code", {"p_device_id": None}).execute()
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _expired_copy(access_token: str, jwt_secret: str) -> str:
+    """The same login's access token, as it reads an hour after it was issued.
+
+    GoTrue still verifies the stack's legacy HS256 secret, so a token with the
+    real claims and a past ``exp`` is refused exactly as an aged one is.
+    """
+    payload_part = access_token.split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload_part + "=" * 4))
+    now = int(time.time())
+    claims.update(iat=now - 3660, exp=now - 60)
+    header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    signing_input = f"{header}.{_b64url(json.dumps(claims).encode())}"
+    signature = hmac.new(
+        jwt_secret.encode(), signing_input.encode(), hashlib.sha256
+    ).digest()
+    return f"{signing_input}.{_b64url(signature)}"
+
+
+class _ClockBehind:
+    """``time`` as a Pi without an RTC sees it before NTP syncs."""
+
+    def __init__(self, behind_sec: float) -> None:
+        self._behind_sec = behind_sec
+
+    def time(self) -> float:
+        return time.time() - self._behind_sec
+
+
+def test_a_pendant_booting_before_its_clock_syncs_keeps_its_login(
+    paired_device: PairedDevice, live_jwt_secret, monkeypatch, tmp_path
+):
+    session_path = paired_device.data_dir / SESSION_FILE
+    saved = json.loads(session_path.read_text())
+    expired = _expired_copy(saved["access_token"], live_jwt_secret)
+    # The scenario is real: GoTrue refuses this token as expired.
+    probe = create_client(paired_device.env["url"], paired_device.env["anon_key"])
+    with pytest.raises(AuthApiError) as refused:
+        probe.auth.get_user(expired)
+    assert refused.value.code == "bad_jwt"
+    assert "expired" in refused.value.message
+    write_session_credentials(session_path, expired, saved["refresh_token"])
+    # Two hours behind, so supabase-py's own expiry check calls it valid.
+    monkeypatch.setattr(gotrue_client, "time", _ClockBehind(7200))
+
+    rebooted = boot_pendant(paired_device.env, paired_device.data_dir)
+
+    device_id = paired_device.device_id
+    rebooted.clients.status.upsert_device_status(_status(device_id, 41))
+    upload_segment(rebooted.clients.storage, device_id, _segment(tmp_path))
+    rotated = json.loads(session_path.read_text())
+    assert rotated["refresh_token"] != saved["refresh_token"]
