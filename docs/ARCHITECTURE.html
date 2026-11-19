@@ -21,6 +21,7 @@
     height: auto;
   }
   .mermaid { display: flex; justify-content: center; }
+  .led-card td:first-child { white-space: nowrap; }
 </style>
 </head>
 <body class="bg-base-200 text-base-content">
@@ -28,11 +29,11 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 02deb8a63fe5bbacf7e91f0111dda31aa086d7a98c8948f0039ffe8aa47feaf9  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: d3e0e55ff2e1bd9b1c54ac07613b3c6a4dd0bb27df1d84c681acceb7d72aacc3  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- source-sha256: 094d493fc847aa8a8ddd523a2500b03cdb51da4f5516bffad3f104401ed75277  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
-<!-- regenerated-at: 2026-11-18 (interruptible capture, bounded shutdown, recording stop/start design) -->
+<!-- regenerated-at: 2026-11-19 (merged main's LED state machine into interruptible capture, bounded shutdown, recording stop/start design) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -53,7 +54,7 @@
     </ul>
   </div>
   <div class="navbar-end">
-    <span class="badge badge-ghost text-xs">regenerated 2026-11-18</span>
+    <span class="badge badge-ghost text-xs">regenerated 2026-11-19</span>
   </div>
 </div>
 
@@ -72,7 +73,7 @@
         and
         <a class="link link-primary" href="superpowers/specs/2026-11-18-visio-recording-control-design.md">recording stop/start control</a>
         specs (source of truth - edit those files, then regenerate this page).
-        A wearable pendant that records passively all day and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
+        A wearable pendant that records the moments the wearer chooses (sized for about 2 h a day) and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
       </p>
     </div>
     <div class="stats stats-vertical sm:stats-horizontal shadow bg-base-100 w-full">
@@ -84,12 +85,12 @@
       <div class="stat">
         <div class="stat-title">Recording window</div>
         <div class="stat-value text-primary text-2xl">~7.4 hrs</div>
-        <div class="stat-desc">3000mAh @ ~1.5W continuous draw</div>
+        <div class="stat-desc">continuous, 3000mAh @ ~1.5W; the stress case, not a typical day</div>
       </div>
       <div class="stat">
         <div class="stat-title">Pipeline cost</div>
-        <div class="stat-value text-primary text-2xl">&lt;$0.75/day</div>
-        <div class="stat-desc">Whisper + Claude Haiku vision, motion-gated</div>
+        <div class="stat-value text-primary text-2xl">&lt;$0.20/day</div>
+        <div class="stat-desc">2 h day of moments (~3.6 GB); Whisper + Claude Haiku vision, motion-gated</div>
       </div>
       <div class="stat">
         <div class="stat-title">Status</div>
@@ -109,7 +110,7 @@ flowchart TD
     direction TB
     HW1["RPi Zero 2W + Camera Module 3 Wide\nPiJuice pHAT + 3000mAh LiPo"]
     HW2["rolling 5-min H.264 segments to SD card"]
-    HW3["WS2812B LED on SPI0 MOSI (GPIO 10):\nrecording / uploading / low-battery / critical"]
+    HW3["WS2812B LED on SPI0 MOSI (GPIO 10):\nstatus LED resolved from concurrent regions:\ncapture: booting / scanning / setup-needed / stopped / recording / shutting-down / halted\nhealth while recording: critical / low-battery (uploads never shown)"]
   end
   subgraph CLOUD["Cloud Storage + AI Pipeline"]
     direction TB
@@ -251,13 +252,116 @@ flowchart TD
       <p class="text-sm text-base-content/80 mt-2"><span class="font-mono text-xs bg-base-200 rounded px-1">Ws2812LedDriver</span> writes one SPI transfer per colour to <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/spidev0.0</span> through py-spidev (<span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>: no root, no <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span>, nothing compiled on the device). Each WS2812B bit is one byte at a 6.4 MHz request - <span class="font-mono text-xs bg-base-200 rounded px-1">0xC0</span> for a 0, <span class="font-mono text-xs bg-base-200 rounded px-1">0xF0</span> for a 1 - sent green, red, blue, MSB first, between two 240-byte zero resets (300 us latch). Both Zero 2W core clocks divide to a real 6.25 MHz, giving 320/960 ns and 640/640 ns pulses, at least 40 ns inside the WS2812B-V5 datasheet windows (legacy pre-V5 parts fall 10-40 ns outside theirs, a bench check). Pulsing and flashing render solid on the single pixel. The device needs <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> (the kernel caches the core clock at probe, so a scaling core clock would skew the SPI rate) and the daemon user in the <span class="font-mono text-xs bg-base-200 rounded px-1">spi</span> group.</p>
     </div>
 
+    <div class="card bg-base-100 shadow p-4 led-card">
+      <h3 class="font-semibold mb-2">LED state machine <span class="badge badge-warning badge-sm align-middle">designed 2026-11-19, partly built</span></h3>
+      <p class="text-sm text-base-content/80 mb-2">The pendant runs concurrent regions - it can record and upload at the same moment - and one pure resolver projects them onto the single LED. The capture region (PR #103's recording control) always wins the look; health conditions only colour it while Recording; upload progress never shows on the LED (backup status is in the app, as with Limitless, Plaud, GoPro and Narrative Clip). Dark means no power or no daemon, never "recording quietly". This page and the pendant spec own the LED table for PRs #100, #101 and #103.</p>
+      <h4 class="font-semibold text-sm mt-3 mb-1">LED resolver (first matching rule wins)</h4>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>#</th><th>When</th><th>Look</th><th>Means for a person</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Capture is Halted (battery or camera)</td><td>Red, solid, full brightness</td><td>Not recording; needs you (see the table above)</td></tr>
+            <tr><td>2</td><td>Capture is Shutting down</td><td>White, pulsing</td><td>Powering down; not recording</td></tr>
+            <tr><td>3</td><td>Capture is Scanning</td><td>Cyan, pulsing</td><td>Looking for a QR code; not recording</td></tr>
+            <tr><td>4</td><td>Capture is Setup needed</td><td>Cyan, dim solid</td><td>Press to scan again; not recording</td></tr>
+            <tr><td>5</td><td>Capture is Booting or Stopped</td><td>White, dim solid</td><td>Powered and fine; not recording</td></tr>
+            <tr><td>6</td><td>Recording, and SD low or uploads failing</td><td>Red, flashing bright/dim (Critical)</td><td>Recording, but needs you</td></tr>
+            <tr><td>7</td><td>Recording, and battery low</td><td>Yellow, pulsing</td><td>Recording; charge soon</td></tr>
+            <tr><td>8</td><td>Recording</td><td>Green, solid</td><td>Recording</td></tr>
+            <tr><td>-</td><td>Overlay: a flag saved while Recording</td><td>Magenta, 150 ms</td><td>Your press was saved</td></tr>
+            <tr><td>-</td><td>Overlay: the button is held</td><td>Green or dim white at 2 s, white pulsing at 5 s, cyan at 10 s (from Stopped)</td><td>What releasing now will do</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h4 class="font-semibold text-sm mt-3 mb-1">Capture region</h4>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>State</th><th>Look</th><th>Capturing?</th><th>Enters when</th><th>Exits when (to)</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Off</td><td>Dark</td><td>No</td><td>Shutting down finished, or power was cut from any state (ungraceful; the next boot recovers the cut segment)</td><td>Power applied, the PiJuice power button, or systemd starting the daemon (Booting)</td><td>Partly built: no <span class="font-mono text-xs bg-base-200 rounded px-1">ExecStopPost=</span> yet, and the WS2812B latches its last frame, so a crash leaves the last colour lit</td></tr>
+            <tr><td>Booting</td><td>White, dim solid (same look as Stopped)</td><td>No</td><td>Daemon start</td><td>No <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span> (Scanning, first boot); session on disk (Stopped, or Recording if the <span class="font-mono text-xs bg-base-200 rounded px-1">/run</span> marker says a crash interrupted a recording); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
+            <tr><td>Scanning</td><td>Cyan, pulsing</td><td>No</td><td>First boot with no <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span>; a hold released at 10 s or more from Stopped; Setup needed and any press; <span class="font-mono text-xs bg-base-200 rounded px-1">visio-reonboard</span></td><td>QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; power-off hold or SIGTERM (Shutting down)</td><td>New (today onboarding shows Recording green, and giving up exits 1 into a restart loop)</td></tr>
+            <tr><td>Setup needed</td><td>Cyan, dim solid</td><td>No</td><td>First-boot scanning used its 60 attempts</td><td>A press or a hold released before 5 s (Scanning, a fresh 60 attempts); power cycle (Booting, then Scanning); power-off (Shutting down)</td><td>New</td></tr>
+            <tr><td>Stopped</td><td>White, dim solid</td><td>No</td><td>Every boot with a session; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (<span class="font-mono text-xs bg-base-200 rounded px-1">stop_reason = storage_full</span>); a re-onboard that timed out or was cancelled</td><td>A hold released between 2 and 5 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
+            <tr><td>Recording</td><td>Green, solid (red flashing or yellow pulsing while a health condition holds, see the resolver)</td><td>Yes</td><td>A hold released between 2 and 5 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b)</td><td>A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Built (today derived from intent, not evidence)</td></tr>
+            <tr><td>Flag saved (overlay)</td><td>Magenta, 150 ms</td><td>Yes</td><td>A short press released while Recording, once the marker is fsynced (PR #100)</td><td>After 150 ms, back to the underlying state</td><td>Designed (PR #100)</td></tr>
+            <tr><td>Shutting down</td><td>White, pulsing</td><td>No</td><td>From any running state: a hold released at 5-10 s, or at 10 s or more outside Stopped, SIGTERM or SIGINT (a reboot, <span class="font-mono text-xs bg-base-200 rounded px-1">systemctl stop</span>, a watchdog restart), or a battery halt's drain finishing (the LED stays Halted red, which outranks this)</td><td>The graceful steps above finish or <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span> passes (systemd then kills the process): Off, powered down for the hold and the battery halt, restarted for a reboot or watchdog</td><td>Designed (PR #103 covers SIGTERM; the hold and the power-off are new)</td></tr>
+            <tr><td>Halted, battery</td><td>Red, solid, full brightness</td><td>No</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">BatteryMonitor</span> confirms a halt: under 10% on 3 readings, under the 3300 mV floor on 2, or an unreadable gauge on 3, never while on external power (PR #101)</td><td>External power appears while it drains (back to the state it came from); a 5 s hold skips the drain; otherwise the in-flight upload finishes or 120 s pass (Shutting down, then Off, LED red throughout). With a PiJuice the HAT wakes the Pi at 25% charge (Booting, then Stopped); without one, the wearer charges and powers on</td><td>Designed (PR #101)</td></tr>
+            <tr><td>Halted, camera</td><td>Red, solid, full brightness</td><td>No</td><td>3 capture failures in a row (camera missing, ribbon loose, <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> crashing)</td><td>A hold released at 2-5 s retries one capture (Recording if it works, back here if not); power cycle (Booting); power-off hold or SIGTERM (Shutting down)</td><td>New (today a capture error ends the loop and leaves the last colour lit)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h4 class="font-semibold text-sm mt-3 mb-1">Upload region (worker thread)</h4>
+      <p class="text-xs text-base-content/70 mb-1">Reported to the app as <span class="font-mono text-xs bg-base-200 rounded px-1">device_status.upload_status</span> (planned). Retries are idempotent without overwriting: same key and size is skipped, a different size is refused because timestamp keys can repeat; planned: a colliding segment gets a suffixed key instead of retrying forever.</p>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>State</th><th>Means for a person</th><th>Enters when</th><th>Exits when (to)</th></tr></thead>
+          <tbody>
+            <tr><td>Backed up</td><td>Nothing is at risk: every recorded clip is in the cloud</td><td>The queue is empty</td><td>A segment finishes or a flag is written: with <span class="font-mono text-xs bg-base-200 rounded px-1">full</span> connectivity (Uploading), without it (Waiting, reason <span class="font-mono text-xs bg-base-200 rounded px-1">offline</span>)</td></tr>
+            <tr><td>Waiting</td><td>Clips are on the SD card only, and the reason says why</td><td>Files are queued and something blocks sending them; the reason is one of <span class="font-mono text-xs bg-base-200 rounded px-1">offline</span> (no <span class="font-mono text-xs bg-base-200 rounded px-1">full</span> NetworkManager connectivity), <span class="font-mono text-xs bg-base-200 rounded px-1">retry_backoff</span> (an upload just failed; next try at the deadline) or, from M3, <span class="font-mono text-xs bg-base-200 rounded px-1">policy</span> (the upload policy holds uploads, for example until the charger is connected)</td><td>The blocker clears: connectivity is <span class="font-mono text-xs bg-base-200 rounded px-1">full</span>, the backoff deadline passes (30 s doubling to 480 s, on its own counter), or the policy allows it; a new file arriving while online also starts a round (Uploading); the daemon stops (it ends; the queue stays on the SD card)</td></tr>
+            <tr><td>Uploading</td><td>Footage is being sent now</td><td>One file is in flight</td><td>Success and the queue is empty (Backed up); success with more queued (the next file, still Uploading); failure (Waiting, reason <span class="font-mono text-xs bg-base-200 rounded px-1">retry_backoff</span>); the halt or stop budget runs out (it ends; the file stays queued)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h4 class="font-semibold text-sm mt-3 mb-1">Health conditions (flags)</h4>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>Condition</th><th>Sets when</th><th>Clears when</th></tr></thead>
+          <tbody>
+            <tr><td>SD low</td><td>Under 1 GB free (about 30 min left at 4 Mbps)</td><td>Above 1.5 GB free</td></tr>
+            <tr><td>Uploads failing</td><td>The 3rd consecutive failure while NetworkManager reports <span class="font-mono text-xs bg-base-200 rounded px-1">full</span> connectivity (<span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span>)</td><td>The next upload success</td></tr>
+            <tr><td>Battery low</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">BatteryMonitor</span> latch under 20% (PR #101)</td><td>At 25%, or on external power</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="grid gap-4 mt-3">
+        <div><h4 class="font-semibold text-sm mb-1">Capture region</h4>
+      <pre class="mermaid" data-layout="elk">
+stateDiagram-v2
+    [*] --> Off
+    Off --> Running: power on
+    state Running {
+        [*] --> Booting
+        Booting --> Scanning: no session.json
+        Booting --> Stopped: session on disk
+        Booting --> HaltedBattery: battery halt
+        Scanning --> Booting: QR read, Wi-Fi up
+        Scanning --> SetupNeeded: 60 attempts, first boot
+        Scanning --> Stopped: re-onboard gave up
+        SetupNeeded --> Scanning: any press
+        Stopped --> Recording: release at 2-5 s
+        Stopped --> Scanning: release at 10 s+
+        Recording --> Stopped: hold 2 s or SD full
+        Recording --> HaltedCamera: camera fails 3x
+        HaltedCamera --> Recording: release at 2-5 s, retry ok
+        Recording --> HaltedBattery: battery halt (also from Stopped)
+        HaltedBattery --> Recording: charger
+    }
+    Running --> ShuttingDown: release at 5 s+, SIGTERM, or battery drain done
+    Running --> Off: power cut (ungraceful)
+    ShuttingDown --> Off: power off
+      </pre></div>
+        <div><h4 class="font-semibold text-sm mb-1">Upload region (at the same time, worker thread)</h4>
+      <pre class="mermaid" data-layout="elk" style="max-width:420px;margin:0 auto">
+stateDiagram-v2
+    [*] --> BackedUp
+    BackedUp --> Uploading: file queued, online
+    BackedUp --> Waiting: file queued, offline
+    Uploading --> BackedUp: queue empty
+    Uploading --> Waiting: upload failed (retry_backoff)
+    Waiting --> Uploading: blocker cleared
+      </pre></div>
+      </div>
+      <p class="text-xs text-base-content/70 mt-2">The upload queue is the <span class="font-mono text-xs bg-base-200 rounded px-1">queue/</span> directory on the SD card: finished segments and flag markers not yet uploaded. It survives reboots, every boot flushes it, and "draining" means letting the upload in flight finish, never the whole backlog. Gestures, one hold ladder in every state with LED previews: under 2 s flags (Recording) or rescans (Setup needed); 2-5 s starts recording, retries the camera, or stops (committed at 2 s while Recording); 5-10 s powers off safely from any state; 10 s or more re-onboards from Stopped. Running is a parent state, so its graceful power-off edge (hold, SIGTERM or a finished battery drain) and the ungraceful power-cut edge apply to every state inside it. Turning back on after a power-off is an open M2 hardware question (PiJuice button, or replug). Open M3 decision: upload whenever online (today), only while charging (GoPro, Narrative Clip), or while recording only above a charge threshold.</p>
+    </div>
+
     <div class="card bg-base-100 shadow p-4">
       <h3 class="font-semibold mb-2">Key as-built decisions</h3>
       <ul class="list-disc list-inside space-y-1 text-sm text-base-content/80">
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> invoked once per segment (not one long-running <span class="font-mono text-xs bg-base-200 rounded px-1">--segment</span> process) — filename/timing control at capture start, ~1-2s inter-segment gap accepted. Each run is passed <span class="font-mono text-xs bg-base-200 rounded px-1">-s</span> (<span class="font-mono text-xs bg-base-200 rounded px-1">--signal</span>), which costs nothing until a signal is sent and is what makes a capture interruptible.</li>
         <li>The capture is the one command that runs through an <em>interruptible</em> runner: <span class="font-mono text-xs bg-base-200 rounded px-1">SubprocessInterruptibleRunner</span> polls <span class="font-mono text-xs bg-base-200 rounded px-1">Popen.wait</span> every 200 ms, and when the loop's stop event is set it sends SIGUSR2 (rpicam-vid's documented quit, which finalises the file), escalating to SIGTERM and then SIGKILL after 5 s each. The mux, the oversize split and the ALSA probe keep the plain blocking <span class="font-mono text-xs bg-base-200 rounded px-1">CommandRunner</span>. A cut-short capture is not an error: it returns its path, is muxed, queued and uploaded like a full segment, and a non-zero exit after a cancel is reported rather than raised. Only a cancel landing before the first frame leaves nothing to mux - an empty file, or none at all - and that is discarded instead of queued. Measured end to end with a simulated camera: a stop that used to wait out the rest of the segment (6.2 s of an 8 s segment) now returns in 0.3 s and keeps the 2.1 s already recorded.</li>
         <li>Segment size is pinned, not defaulted: <span class="font-mono text-xs bg-base-200 rounded px-1">--width 1280 --height 720 --framerate 30 --bitrate 4000000</span> are passed explicitly, and the default segment length (60 s) is derived from the bitrate so a segment fits the hosted 50 MiB upload limit with a 1.66x margin. See the segment size contract below.</li>
-        <li>Upload retry is <em>in-process</em>, owned by the existing upload worker: while segments are queued it blocks on its work queue only until a retry deadline, armed when the queue becomes non-empty and again after each round, and retries everything still queued once that deadline passes. A segment arriving does not restart the deadline, so a steady stream of segments cannot postpone a round. Each deadline is set from the backoff when armed, doubling per consecutive failure from 30 s to a 480 s cap and indexed by the same <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter that drives the CRITICAL LED, so retry failures escalate and a retry success clears it. The decision is the pure <span class="font-mono text-xs bg-base-200 rounded px-1">next_worker_step</span>, unit-tested without threads. A stopping worker never starts a round, and a round that tries no file (the queue emptied, or it was cancelled before its first file) leaves the counter and the LED untouched. No second thread and no scheduler; a new segment or the shutdown sentinel still wakes the worker at once, and a round in flight stops early once the loop is shutting down so a backlog is never uploaded through a battery halt. The startup flush is now the backstop rather than the only retry - and remains the only retry for flag markers, which <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> owns while the daemon runs.</li>
+        <li>Upload retry is <em>in-process</em>, owned by the existing upload worker: while segments are queued it blocks on its work queue only until a retry deadline, armed when the queue becomes non-empty and again after each round, and retries everything still queued once that deadline passes. A segment arriving does not restart the deadline, so a steady stream of segments cannot postpone a round. Each deadline is set from the backoff when armed, doubling per consecutive failure from 30 s to a 480 s cap and indexed by the same <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter that drives the CRITICAL LED, so retry failures escalate and a retry success clears it. The decision is the pure <span class="font-mono text-xs bg-base-200 rounded px-1">next_worker_step</span>, unit-tested without threads. A stopping worker never starts a round, and a round that tries no file (the queue emptied, or it was cancelled before its first file) leaves the counter and the LED untouched. No second thread and no scheduler; a new segment or the shutdown sentinel still wakes the worker at once, and a round in flight stops early once the loop is shutting down so a backlog is never uploaded through a battery halt. The startup flush is now the backstop rather than the only retry - and remains the only retry for flag markers, which <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> owns while the daemon runs. Planned (LED state machine): the backoff gets its own attempt counter, advanced by rounds skipped for lack of NetworkManager connectivity <span class="font-mono text-xs bg-base-200 rounded px-1">full</span>, so the 30-480 s schedule still settles offline while <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counts only failures on a working connection.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>Shutdown is bounded by the unit, not by the segment length: <span class="font-mono text-xs bg-base-200 rounded px-1">KillMode=mixed</span> so systemd signals only the daemon (the default control-group mode would signal <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> too and lose the segment the daemon is finalising), and <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span> in place of systemd's 90 s default, which the old segment-long stop used to run into.</li>
@@ -337,7 +441,7 @@ flowchart TD
             <tr><td class="font-semibold">BOOTING</td><td>process start: battery check, onboarding, registration, orphan recovery, startup flush</td><td>STOPPED (dim white); a low battery goes to the app</td><td>the recording loop starts</td></tr>
             <tr><td class="font-semibold">STOPPED</td><td>loop start on every boot; a hold while RECORDING</td><td>STOPPED</td><td>a hold (to RECORDING); SIGTERM; battery halt</td></tr>
             <tr><td class="font-semibold">RECORDING</td><td>a hold while STOPPED</td><td>RECORDING, LOW_BATTERY or CRITICAL (uploads no longer show on the LED)</td><td>a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt</td></tr>
-            <tr><td class="font-semibold">SHUTTING_DOWN</td><td>SIGTERM or SIGINT in any state</td><td>SHUTTING_DOWN (white)</td><td>the process exits</td></tr>
+            <tr><td class="font-semibold">SHUTTING_DOWN</td><td>SIGTERM or SIGINT in any state</td><td>SHUTTING_DOWN (white, pulsing)</td><td>the process exits</td></tr>
             <tr><td class="font-semibold">HALTED</td><td>battery under the halt threshold, recording or idle</td><td>HALTED (red, solid; PR #101), applied last</td><td>the queue drains, then a clean power-off (PR #101)</td></tr>
           </tbody>
         </table>
@@ -459,6 +563,27 @@ score = base_score * 1.5  (if manually flagged)
     <div class="alert alert-success alert-soft text-sm" role="alert">
       <span><strong>Silent segments scored, not failed.</strong> A pendant without a working microphone records video only and <span class="font-mono text-xs bg-base-200 rounded px-1">ffmpeg</span> refuses to extract audio from a file with no audio stream, which failed every real device day in Stage 1. A segment with no audio stream now scores as silence without a Whisper call.</span>
     </div>
+    <div class="card bg-base-100 shadow p-4">
+      <h3 class="font-semibold mb-2">Retention and cleanup <span class="badge badge-warning badge-sm align-middle">designed 2026-11-19, not built</span></h3>
+      <p class="text-sm text-base-content/80 mb-2">Raw footage is kept 7 days by default (user-configurable 7-30; D6 revised from 30); everything the wearer chose to keep is kept forever. Today nothing in the cloud is deleted. Modelled on cloud cameras: continuous footage gets the shortest window (Nest keeps 24/7 footage about 10 days), marked clips are exempt (dashcam locked files), deletion is soft (Axon, Google Photos trash), and the window is a setting (Ring).</p>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead><tr><th>Category</th><th>Where</th><th>Kept</th><th>Removed by</th></tr></thead>
+          <tbody>
+            <tr><td>Raw segments</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> bucket</td><td>The raw window: 7 days by default, 7-30 by user setting</td><td>The nightly cleanup step, in two phases (below)</td></tr>
+            <tr><td>Flagged segments (<span class="font-mono text-xs bg-base-200 rounded px-1">manually_flagged</span>)</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> bucket</td><td>Forever</td><td>Only an explicit delete in the app</td></tr>
+            <tr><td>"Always include" segments (<span class="font-mono text-xs bg-base-200 rounded px-1">user_feedback = include</span>)</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> bucket</td><td>Forever</td><td>Only an explicit delete in the app</td></tr>
+            <tr><td>Reels</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">reels</span> bucket</td><td>Forever</td><td>Only an explicit delete in the app</td></tr>
+            <tr><td><span class="font-mono text-xs bg-base-200 rounded px-1">segments</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">reels</span> rows</td><td>Postgres</td><td>Forever, as metadata</td><td>Account or device deletion</td></tr>
+            <tr><td>A deleted account's or device's footage</td><td>Both buckets</td><td>Deleted with the account</td><td>The deletion path (below)</td></tr>
+            <tr><td>Uploaded segments and flag markers</td><td>SD card <span class="font-mono text-xs bg-base-200 rounded px-1">queue/</span></td><td>Until the upload succeeds</td><td>The upload worker (as built)</td></tr>
+            <tr><td>Rejected segments</td><td>SD card <span class="font-mono text-xs bg-base-200 rounded px-1">rejected/</span></td><td>30 days</td><td>The daemon at boot (planned)</td></tr>
+            <tr><td>Footage not yet backed up</td><td>SD card <span class="font-mono text-xs bg-base-200 rounded px-1">queue/</span></td><td>Until it uploads</td><td>Never deleted automatically: a full card stops recording instead</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-base-content/70 mt-2">A nightly-workflow step after the reel: <strong>mark</strong> raw segments past the window (not flagged or kept, and only once the day has a reel or has sat in <span class="font-mono text-xs bg-base-200 rounded px-1">pipeline_dlq</span> 30 days) with <span class="font-mono text-xs bg-base-200 rounded px-1">raw_expires_at</span> 7 days out; the app <strong>warns</strong> 3 days before and one tap keeps a clip; then <strong>delete</strong> through the Storage API in batches of up to 1,000 (SQL on <span class="font-mono text-xs bg-base-200 rounded px-1">storage.objects</span> leaves files behind), keeping the row with <span class="font-mono text-xs bg-base-200 rounded px-1">raw_deleted_at</span>. Re-runs are safe, a per-run cap and <span class="font-mono text-xs bg-base-200 rounded px-1">--dry-run</span> guard it, and shortening the window never touches already-marked clips. Account and device deletion also remove storage objects, which the Postgres cascade does not. The pendant never deletes footage that has not been backed up; only <span class="font-mono text-xs bg-base-200 rounded px-1">rejected/</span> is pruned after 30 days.</p>
+    </div>
   </section>
 
   <section id="app" class="space-y-4">
@@ -501,6 +626,8 @@ score = base_score * 1.5  (if manually flagged)
 
 <script type="module">
   import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+  import elkLayouts from "https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.2.0/dist/mermaid-layout-elk.esm.min.mjs";
+  mermaid.registerLayoutLoaders(elkLayouts);
 
   const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -540,7 +667,14 @@ score = base_score * 1.5  (if manually flagged)
     return darkQuery.matches;
   }
 
-  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.textContent }));
+  // The source stays plain Mermaid so other tools can read it; a diagram that
+  // asks for another layout engine via data-layout gets it only at render time.
+  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({
+    el,
+    src: el.dataset.layout
+      ? `---\nconfig:\n  layout: ${el.dataset.layout}\n---\n${el.textContent}`
+      : el.textContent,
+  }));
   let applied;
   let rendering = false;
   let queued = false;
