@@ -31,7 +31,7 @@
 <!-- source-sha256: 02deb8a63fe5bbacf7e91f0111dda31aa086d7a98c8948f0039ffe8aa47feaf9  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- source-sha256: d5bf2faeed43618672fdedd8515c53fc3218f6746c4e1e07a3077749e3b5767f  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
+<!-- source-sha256: 26ae2d1ed1561e9d4417fb18fb17836d951d3fe64ee78adafc94a020e6affd99  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
 <!-- regenerated-at: 2026-11-18 (interruptible capture, bounded shutdown, recording stop/start design) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
@@ -336,7 +336,7 @@ flowchart TD
           <tbody>
             <tr><td class="font-semibold">BOOTING</td><td>process start: battery check, onboarding, registration, orphan recovery, startup flush</td><td>STOPPED (dim white); a low battery goes to the app</td><td>the recording loop starts</td></tr>
             <tr><td class="font-semibold">STOPPED</td><td>loop start on every boot; a hold while RECORDING</td><td>STOPPED</td><td>a hold (to RECORDING); SIGTERM; battery halt</td></tr>
-            <tr><td class="font-semibold">RECORDING</td><td>a hold while STOPPED</td><td>RECORDING, UPLOADING, LOW_BATTERY or CRITICAL as today</td><td>a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt</td></tr>
+            <tr><td class="font-semibold">RECORDING</td><td>a hold while STOPPED</td><td>RECORDING, LOW_BATTERY or CRITICAL (uploads no longer show on the LED)</td><td>a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt</td></tr>
             <tr><td class="font-semibold">SHUTTING_DOWN</td><td>SIGTERM or SIGINT in any state</td><td>SHUTTING_DOWN (white)</td><td>the process exits</td></tr>
             <tr><td class="font-semibold">HALTED</td><td>battery under the halt threshold, recording or idle</td><td>HALTED (red, solid; PR #101), applied last</td><td>the queue drains, then a clean power-off (PR #101)</td></tr>
           </tbody>
@@ -370,7 +370,7 @@ flowchart TD
         <li><strong>Completing first-boot onboarding:</strong> the device stays stopped and waits for a hold - the first thing a new wearer learns is that the button is what starts it.</li>
         <li><strong>Short press while stopped:</strong> ignored. A hold toggles in both directions, so the gesture is symmetric and blind-operable, and a tap in a bag never starts a camera.</li>
       </ul>
-      <p class="text-xs text-base-content/70 mt-2">Aligned with the pendant spec's LED state machine (PR #102): precedence is HALTED &gt; SHUTTING_DOWN &gt; STOPPED (when not recording) &gt; CRITICAL &gt; LOW_BATTERY &gt; UPLOADING &gt; RECORDING, so no health colour ever shows over STOPPED. A hold from RECORDING stops at 2 s; a hold from STOPPED commits on release (2-10 s starts recording, 10 s or more re-onboards), with green and cyan previews read from gpiozero's <span class="font-mono text-xs bg-base-200 rounded px-1">held_time</span>.</p>
+      <p class="text-xs text-base-content/70 mt-2">Aligned with the pendant spec's LED state machine (PR #102): precedence is HALTED &gt; SHUTTING_DOWN &gt; STOPPED (when not recording) &gt; CRITICAL &gt; LOW_BATTERY &gt; RECORDING, so no health colour ever shows over STOPPED, and uploads, which run concurrently, never show on the LED. A hold from RECORDING stops at 2 s; a hold from STOPPED commits on release (2-10 s starts recording, 10 s or more re-onboards), with green and cyan previews read from gpiozero's <span class="font-mono text-xs bg-base-200 rounded px-1">held_time</span>.</p>
     </div>
 
     <div class="alert alert-warning alert-soft" role="alert">

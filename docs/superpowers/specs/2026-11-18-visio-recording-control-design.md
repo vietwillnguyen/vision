@@ -108,7 +108,7 @@ States, with the LED each one shows:
 |---|---|---|---|
 | BOOTING | process start; battery check, onboarding, registration, orphan recovery, startup flush | STOPPED (dim white); a low battery goes to the app, since health states only show while recording | the recording loop starts |
 | STOPPED | loop start on every boot; a hold while RECORDING | STOPPED | a hold (to RECORDING); SIGTERM (to SHUTTING_DOWN); battery halt (to HALTED) |
-| RECORDING | a hold while STOPPED | RECORDING, UPLOADING, LOW_BATTERY or CRITICAL as today | a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt |
+| RECORDING | a hold while STOPPED | RECORDING, LOW_BATTERY or CRITICAL (uploads no longer show on the LED) | a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt |
 | SHUTTING_DOWN | SIGTERM or SIGINT in any state | SHUTTING_DOWN (white) | the process exits |
 | HALTED | battery under the halt threshold, observed while recording or while idle | HALTED (red, solid; PR #101), applied last | the queue drains, then a clean power-off (PR #101) |
 
@@ -136,8 +136,8 @@ Never "LED off": a dark pendant is indistinguishable from a dead one, and a wear
 The SPI driver renders pulsing as solid, so on today's hardware the two states differ by brightness alone; that is acceptable because they never need to be told apart at the same moment (one is a resting state, the other lasts seconds and ends with the power).
 
 The pendant spec's LED state machine (PR #102) owns the full table, and this section follows it.
-It splits the LED into two regions: a capture region (STOPPED, RECORDING, SHUTTING_DOWN, HALTED) that always decides the look, and a health region (CRITICAL, LOW_BATTERY, UPLOADING) that only colours the LED while capturing.
-`next_led_state` therefore gains a `recording` input and a `shutting_down` input, with precedence HALTED > SHUTTING_DOWN > (STOPPED, if not recording) > CRITICAL > LOW_BATTERY > UPLOADING > RECORDING.
+It splits the LED into two regions: a capture region (STOPPED, RECORDING, SHUTTING_DOWN, HALTED) that always decides the look, and health conditions (CRITICAL, LOW_BATTERY) that only colour the LED while capturing; upload progress runs concurrently on the worker thread and never shows on the LED.
+`next_led_state` therefore gains a `recording` input and a `shutting_down` input, with precedence HALTED > SHUTTING_DOWN > (STOPPED, if not recording) > CRITICAL > LOW_BATTERY > RECORDING; UPLOADING is removed.
 While STOPPED no health condition shows: a segment uploading after a stop press, a latched upload Critical or a low battery all leave the LED dim white, so a stopped pendant never shows a recording-family colour to anyone nearby, and those conditions reach the phone through `device_status` instead.
 The battery-halt path applies HALTED (red, solid; PR #101) last, after the worker join, so it remains the final LED state.
 
