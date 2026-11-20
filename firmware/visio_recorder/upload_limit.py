@@ -48,6 +48,7 @@ from typing import Protocol
 from visio_recorder.muxer import CommandRunner
 from visio_recorder.upload_queue import mark_uploaded
 from visio_recorder.uploader import (
+    LoginUnavailableError,
     ObjectAlreadyStoredError,
     ObjectTooLargeError,
     StorageClient,
@@ -107,6 +108,9 @@ class UploadOutcome:
     uploaded: int = 0
     failed: int = 0
     rejected: int = 0
+    # Files left queued because the login could not sign the request (offline
+    # when it fell due, or revoked): not a failure of the upload itself.
+    deferred: int = 0
     # Queue entries an upload was actually tried for, which a drain cancelled
     # before its first file, or given nothing to drain, leaves at zero.
     attempted: int = 0
@@ -234,7 +238,9 @@ def upload_queued(
 
     Every uploaded file is removed from the queue; a file that failed for any
     other reason (network, auth) stays queued for the next in-process retry
-    round, with the next boot's flush as the backstop. That holds for a flag
+    round, with the next boot's flush as the backstop. A file the login
+    could not sign (``LoginUnavailableError``) stays queued too, counted as
+    ``deferred`` rather than ``failed``. That holds for a flag
     marker too, except that its rounds belong to ``FlagUploadWorker``; this
     path only ever sees one from the startup flush, which runs before that
     worker exists.
@@ -275,6 +281,10 @@ def upload_queued(
             except ObjectAlreadyStoredError as err:
                 _reject(part, err)
                 outcome.rejected += 1
+                continue
+            except LoginUnavailableError as err:
+                _logger.warning("%s stays queued: %s", part.name, err)
+                outcome.deferred += 1
                 continue
             except Exception:
                 _logger.exception("upload of %s failed; keeping it queued", part)

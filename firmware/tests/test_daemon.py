@@ -2944,6 +2944,8 @@ class MainRig:
     flag_workers: list = field(default_factory=list)
     loop_deps: list = field(default_factory=list)
     events: list = field(default_factory=list)
+    # What the fake recording loop does with its deps and stop event.
+    during_run: Callable[[LoopDeps, threading.Event], None] | None = None
 
     def run(self) -> int:
         import visio_recorder.daemon as daemon
@@ -3020,6 +3022,8 @@ class MainRig:
         def loop(deps, stop):
             self.events.append("recording loop")
             self.loop_deps.append(deps)
+            if self.during_run is not None:
+                self.during_run(deps, stop)
             return LoopOutcome.STOPPED
 
         mp.setattr(daemon, "run_recording_loop", loop)
@@ -3134,3 +3138,42 @@ def test_main_a_revoked_login_at_boot_goes_back_to_scanning_and_stops_threads(
     assert rig.flag_workers == []
     assert rig.loop_deps == []
     assert not rig.led._thread.is_alive()
+
+
+def test_main_a_login_revoked_during_the_run_stops_and_goes_back_to_scanning(
+    tmp_path, monkeypatch
+):
+    # Remove device while the pendant records: the next on-demand refresh is
+    # refused, which must end the run and unpair.
+    from supabase_auth.errors import AuthApiError
+
+    from visio_recorder.session_store import SessionRevokedError
+
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    segment = tmp_path / "elsewhere" / "20261120_090000.mp4"
+    segment.parent.mkdir()
+    segment.write_bytes(b"segment")
+    seen: list = []
+
+    def revoke(deps, stop) -> None:
+        session = deps.storage_client._session
+        session.mark_stale()
+
+        def refuse(refresh_token=None):
+            raise AuthApiError("refused", 404, "session_not_found")
+
+        session.client.auth.refresh_session = refuse
+        with pytest.raises(SessionRevokedError):
+            deps.storage_client.upload("segments", "d/x.mp4", segment)
+        seen.append(stop.is_set())
+
+    rig = MainRig(tmp_path, monkeypatch, during_run=revoke)
+
+    assert rig.run() == 1
+
+    assert seen == [True]
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+    assert not (tmp_path / "session.json").exists()
+    assert rig.led.writes[-1] == CRITICAL_LED
+    assert not rig.flag_workers[0]._thread.is_alive()

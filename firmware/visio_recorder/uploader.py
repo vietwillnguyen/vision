@@ -23,3 +23,13 @@ class ObjectAlreadyStoredError(Exception):
     re-pair an object stored by the previous login looks absent to the
     idempotency check and the upload is answered as a duplicate.
     """
+
+
+class LoginUnavailableError(Exception):
+    """The pendant cannot sign a request right now, so none was sent.
+
+    Raised before a request when the login could not be refreshed (offline)
+    or was revoked. Nothing about the file is wrong, so it stays queued and
+    the attempt is not an upload failure: it never counts towards the
+    Critical LED. See ``visio_recorder.session_store.SessionKeeper``.
+    """

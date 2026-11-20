@@ -16,7 +16,6 @@ from typing import Any
 
 import httpx
 from postgrest.exceptions import APIError
-from supabase import create_client
 from supabase_auth.errors import AuthApiError, AuthError
 
 from visio_recorder.device_identity import (
@@ -27,9 +26,9 @@ from visio_recorder.device_identity import (
 from visio_recorder.private_files import write_private_text_atomic
 from visio_recorder.session_store import (
     LoginRefusedError,
+    SessionKeeper,
+    create_pendant_client,
     read_saved_session,
-    restore_session,
-    session_persister,
 )
 
 _logger = logging.getLogger(__name__)
@@ -156,17 +155,17 @@ _REJECTION_SQLSTATES = frozenset({"P0001", "42501"})
 
 @dataclass(frozen=True)
 class Pairing:
-    """A boot's paired device, and the client that paired it on this boot.
+    """A boot's paired device, and the login that paired it on this boot.
 
-    ``client`` is the signed-in supabase-py client when this boot ran the
-    pairing, and None on a normal paired boot, which restores the login from
-    ``session.json`` instead. A pairing boot must keep using its own client:
-    a second one would run a second auto-refresh timer against one
-    ``session.json`` and rotate the refresh token out from under the first.
+    ``session`` keeps the signed-in supabase-py client when this boot ran the
+    pairing, and is None on a normal paired boot, which restores the login
+    from ``session.json`` instead. A pairing boot must keep using its own
+    client: a second one would be a second refresher of one ``session.json``
+    and rotate the refresh token out from under the first.
     """
 
     device_id: str
-    client: Any | None = None
+    session: SessionKeeper | None = None
 
 
 class PairingRejectedError(Exception):
@@ -181,13 +180,14 @@ def _is_definite_auth_rejection(err: AuthApiError) -> bool:
     return 400 <= err.status < 500 and err.status != 429
 
 
-def _sign_in(client: Any, session_path: Path) -> None:
+def _sign_in(session: SessionKeeper, session_path: Path) -> None:
+    client = session.client
     saved = read_saved_session(session_path)
     if saved is None:
         session_path.unlink(missing_ok=True)
     else:
         try:
-            restore_session(client, saved["refresh_token"])
+            session.restore(saved["refresh_token"])
             return
         except LoginRefusedError as err:
             _logger.warning(
@@ -245,15 +245,15 @@ def complete_pairing(
     url: str,
     key: str,
     data_dir: Path,
-    client_factory: Callable[[str, str], Any] = create_client,
+    client_factory: Callable[[str, str], Any] = create_pendant_client,
 ) -> Pairing:
     """Sign in as this pendant's own user and claim the saved pairing code.
 
     Returns the device id the owner's code named, with the signed-in client
-    for the rest of the boot. The order makes every
-    crash point resumable: the session persister is registered before the
-    sign-in so the new session reaches ``session.json`` through the same
-    atomic write as every later rotation; ``device.json`` is written before
+    for the rest of the boot. The order makes every crash point resumable:
+    the session keeper, which persists every new session, is registered
+    before the sign-in so the new session reaches ``session.json`` through
+    the same atomic write as every later rotation; ``device.json`` is written before
     ``pairing.json`` is deleted, and a repeated claim by the same device user
     returns the same device id.
     """
@@ -263,11 +263,10 @@ def complete_pairing(
     if code is None:
         clear_local_pairing(data_dir)
         raise PairingRejectedError("no pending pairing code to claim")
-    client = client_factory(url, key)
-    client.auth.on_auth_state_change(session_persister(session_path))
-    _sign_in(client, session_path)
-    device_id = _claim(client, code, data_dir)
+    session = SessionKeeper(client_factory(url, key), session_path)
+    _sign_in(session, session_path)
+    device_id = _claim(session.client, code, data_dir)
     store_paired_device_id(data_dir / DEVICE_FILE, device_id)
     pending_path.unlink(missing_ok=True)
     _logger.info("paired with device %s", device_id)
-    return Pairing(device_id=device_id, client=client)
+    return Pairing(device_id=device_id, session=session)

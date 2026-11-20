@@ -410,6 +410,7 @@ def drain_pending(
         total.uploaded += outcome.uploaded
         total.failed += outcome.failed
         total.rejected += outcome.rejected
+        total.deferred += outcome.deferred
     return total
 
 
@@ -478,6 +479,8 @@ def _upload_showing_led(
     before it tries a file. One that tries none reports ``attempted == 0`` and
     leaves both the LED and ``upload_health`` untouched: "nothing failed"
     would otherwise clear Critical without anything having reached storage.
+    One whose every file was deferred restores the LED but leaves
+    ``upload_health`` alone, for the same reason.
     """
     outcome = upload(
         lambda: _show_upload_led(
@@ -489,7 +492,11 @@ def _upload_showing_led(
     )
     if outcome.attempted == 0:
         return outcome
-    upload_health.record(upload_ok=_upload_succeeded(outcome))
+    # An attempt whose every file was deferred (the login could not be
+    # refreshed, offline) decided nothing about uploading: it neither counts
+    # towards Critical nor clears it.
+    if outcome.uploaded or outcome.failed or outcome.rejected:
+        upload_health.record(upload_ok=_upload_succeeded(outcome))
     _show_upload_led(
         led_driver,
         battery_is_low=battery_is_low,

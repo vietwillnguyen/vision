@@ -29,11 +29,11 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 3c24c5b4dca56d1c66701efdc7f7a2bf0a6bb4804057531ca78992a8e2f31a39  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 8506ff1c57a8bc5ead54fa2b188b3c3426384df804f34c684bd428175489c12e  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: d1457ce232a7e8251217875decdb0d313cd0a74b0de6cb37fc63978e8cad2178  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- source-sha256: d2c1f734973b211cb6f6399730b968c5fb373a894613b3a7e3a63c0d5b867f35  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
-<!-- source-sha256: 90e4cf8f5714c6c3db3a998936f899ef4db1d6c45e98455c12c92d594407d155  docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md -->
+<!-- source-sha256: 748d893acc236e2ba7cb1d0646bdf0b958ce08ced7c2bfaab3955b72ddc655d2  docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md -->
 <!-- regenerated-at: 2026-11-20 (merged main into device pairing: the battery boot check runs before the pairing gate, every LED write goes through the one LedController, and the flag worker, uploader and status reporter share the pairing gate's one client) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
@@ -709,7 +709,7 @@ sequenceDiagram
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Lifecycle</h3>
-        <p class="text-xs text-base-content/70 mt-1">Policies resolve the link at query time, so Remove device revokes at once even while the pendant's access token is still valid. Re-pairing deletes the previous device user. App logout touches only the phone's session. The login never expires by time. A boot restores it with the refresh-token grant and unpairs only on GoTrue's codes for a gone token, session or user, so a pendant booting before NTP sync is never unpaired. A daily <span class="font-mono text-xs bg-base-200 rounded px-1">pg_cron</span> job deletes anonymous users no device points at.</p>
+        <p class="text-xs text-base-content/70 mt-1">Policies resolve the link at query time, so Remove device revokes at once even while the pendant's access token is still valid. Re-pairing deletes the previous device user. App logout touches only the phone's session. The login never expires by time. A boot restores it with the refresh-token grant and unpairs only on GoTrue's codes for a gone token, session or user, so a pendant booting before NTP sync is never unpaired. During the run the firmware refreshes the login itself, on demand before each upload and status write, so a pendant that was offline when its hourly refresh fell due recovers once back on Wi-Fi. A daily <span class="font-mono text-xs bg-base-200 rounded px-1">pg_cron</span> job deletes anonymous users no device points at.</p>
       </div>
     </div>
     <div class="alert alert-warning alert-soft text-sm" role="alert">

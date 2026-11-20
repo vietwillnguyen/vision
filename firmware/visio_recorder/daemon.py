@@ -12,8 +12,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
-from supabase import create_client
-
 from visio_recorder.battery import (
     BATTERY_BOOT_SAMPLE_INTERVAL_SEC,
     BATTERY_BOOT_SAMPLES,
@@ -102,6 +100,7 @@ from visio_recorder.segment_size import (
     default_segment_duration_ms,
     predicted_segment_bytes,
 )
+from visio_recorder.session_store import create_pendant_client
 from visio_recorder.supabase_clients import (
     SessionRevokedError,
     SupabaseClients,
@@ -941,7 +940,7 @@ def pair_and_connect(
     url: str,
     key: str,
     *,
-    client_factory: Callable[[str, str], Any] = create_client,
+    client_factory: Callable[[str, str], Any] = create_pendant_client,
     nm_keyfile_path: Path = _NM_KEYFILE_PATH,
     max_attempts: int = _ONBOARDING_MAX_ATTEMPTS,
 ) -> tuple[str, SupabaseClients] | None:
@@ -957,19 +956,20 @@ def pair_and_connect(
     )
     if paired is None:
         return None
-    client = paired.client
-    if client is None:
+    session = paired.session
+    if session is None:
         try:
-            client = restore_supabase_client(
+            session = restore_supabase_client(
                 url, key, data_dir / SESSION_FILE, client_factory=client_factory
             )
         except SessionRevokedError:
             _logger.exception("this pendant's login was revoked; scanning next boot")
             handle_revoked_login(data_dir, led_driver)
             return None
-    # Exactly one client, and so one auto-refresh timer and one session.json
-    # persister, per process: a pairing boot keeps the client that paired.
-    return paired.device_id, supabase_clients_for(client)
+    # Exactly one client, and so one refresher (its SessionKeeper) and one
+    # session.json persister, per process: a pairing boot keeps the client
+    # that paired.
+    return paired.device_id, supabase_clients_for(session)
 
 
 def handle_revoked_login(data_dir: Path, led_driver: LedDriver) -> None:
@@ -1069,13 +1069,15 @@ def _boot_and_record(
         config.segment_duration_ms,
         config.max_upload_bytes,
     )
+    stop = threading.Event()
+    # A refresh that finds the login revoked (Remove device, a re-pair), from
+    # the startup flush on, ends the run like a stop, then unpairs below.
+    clients.session.on_revoked(stop.set)
     flush_pending(queue_dir, clients.storage, device_id, upload_limit)
     if recover_orphaned_segments(
         config.data_dir, queue_dir, command_runner, config.video.framerate
     ):
         flush_pending(queue_dir, clients.storage, device_id, upload_limit)
-
-    stop = threading.Event()
 
     def _handle_signal(signum: int, frame: object) -> None:
         # ``stop`` is also the capture's cancel event, so this ends the
@@ -1125,6 +1127,10 @@ def _boot_and_record(
             _logger.warning("battery recovered; restarting the recording loop")
     finally:
         flag_upload_worker.stop()
+    if clients.session.revoked:
+        _logger.error("this pendant's login was revoked; scanning next boot")
+        handle_revoked_login(config.data_dir, led_driver)
+        return 1
     return 0
 
 

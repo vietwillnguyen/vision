@@ -24,9 +24,12 @@ class FakeAuthResponse:
 
 
 class FakeSession:
-    def __init__(self, access_token: str, refresh_token: str) -> None:
+    def __init__(
+        self, access_token: str, refresh_token: str, expires_in: int = 3600
+    ) -> None:
         self.access_token = access_token
         self.refresh_token = refresh_token
+        self.expires_in = expires_in
 
 
 class FakeAuth:
