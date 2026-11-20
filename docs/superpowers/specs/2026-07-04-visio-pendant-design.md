@@ -158,7 +158,7 @@ A single Python systemd service manages the full device lifecycle.
    A saved code whose Wi-Fi activation fails on `MAX_FAILED_PENDING_ACTIVATIONS` (3) boots in a row is dropped, so the next boot scans again instead of retrying a mistyped Wi-Fi password forever.
    A refused code clears the attempt, flashes Critical and exits 1, so the next boot scans again; a network or server failure exits 1 and keeps the code for the next boot.
    `PAIRED` boots run the same reload/up as a best-effort retry whenever the keyfile exists; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
-4. Sign in as the pendant: a pairing boot keeps the client that just claimed the code, and a `PAIRED` boot restores the saved `session.json` with the refresh-token grant (`restore_supabase_client`), so exactly one supabase client and one auto-refresh timer run per boot, and every rotated token is saved atomically.
+4. Sign in as the pendant: a pairing boot keeps the client that just claimed the code, and a `PAIRED` boot restores the saved `session.json` with the refresh-token grant (`restore_supabase_client`), so exactly one supabase client and one refresher of its login (`session_store.SessionKeeper`) run per boot, and every rotated token is saved atomically.
    An unreadable `session.json` counts as unpaired.
    A definite rejection (the login was removed in the app or replaced by a re-pair) clears the local pairing, flashes Critical and exits 1, so the next boot scans for a QR; network failures never unpair.
    The pendant no longer writes `devices`: the device id comes from the claim.

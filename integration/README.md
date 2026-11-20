@@ -67,6 +67,11 @@ A pendant booting before NTP sync is simulated cheaply: the test re-signs its
 access token with a past `exp` using the stack's legacy HS256 secret
 (`SUPABASE_JWT_SECRET`, from `JWT_SECRET` in `supabase status -o env`) and sets
 supabase-py's clock two hours back, then boots it.
+`tests/test_offline_refresh_live.py` puts the pendant behind a TCP link it can
+cut (`tests/network.py`) and simulates an hour off Wi-Fi the same way: an
+expired copy of the access token, firmware's clock moved forward, and
+supabase_auth's refresh timer made to fall due during the outage. It proves
+the next upload and status write succeed once the link is back (issue #134).
 `tests/test_firmware_upload_live.py` and `tests/test_storage_ingestion_live.py`
 upload through the same `paired_device` fixture (`conftest.py`), because only
 the pendant's own login may write to storage. The local stack enables

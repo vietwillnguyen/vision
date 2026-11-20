@@ -152,7 +152,8 @@ jobs:
         # version pinned above, so this maps its `-o env` NAME values to the
         # SUPABASE_* vars conftest.py's live_supabase_env fixture reads.
         # JWT_SECRET is the stack's legacy HS256 secret; the clock-skew test
-        # in test_device_session_live.py mints an expired token with it.
+        # in test_device_session_live.py and test_offline_refresh_live.py
+        # mint an expired token with it.
         run: |
           eval "$(supabase status -o env)"
           {

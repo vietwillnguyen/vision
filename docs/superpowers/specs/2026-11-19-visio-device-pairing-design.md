@@ -746,11 +746,19 @@ Where the implementation differs from, or adds to, the text above:
   Remove device and a re-pair both answer `refresh_token_not_found` (reproduced against the local stack).
 - **An unreadable `session.json`** (empty, not JSON, not an object, a missing, empty or non-string token) counts as no login: the boot gate treats it as `UNPAIRED` and scans, instead of crash-looping on a parse error.
 - **One client per boot.**
-  `complete_pairing` returns its signed-in client and the boot builds the storage and status adapters from it, so a pairing boot runs one auto-refresh timer and one `session.json` persister.
+  `complete_pairing` returns its signed-in client and the boot builds the storage and status adapters from it, so a pairing boot runs one refresher (its `SessionKeeper`) and one `session.json` persister.
   Atomic writes (`private_files.write_private_text_atomic`) use a unique `O_EXCL` temp name per write and are serialised per path across the process.
 - **A pending pairing gives up on Wi-Fi.**
   `pairing.json` also carries `failed_activations`; after `MAX_FAILED_PENDING_ACTIVATIONS` (3) boots in a row whose Wi-Fi activation failed, it is deleted and the next boot scans, so a mistyped Wi-Fi password cannot strand the pendant.
   A boot that connects resets the count.
+- **The firmware owns token refresh, on demand (issue #134).**
+  supabase_auth 2.34.1's auto-refresh timer retried a failed refresh for only about 100 s in all and was then never rescheduled, and supabase-py does not refresh before a request, so a pendant off Wi-Fi when the hourly refresh fell due sent an expired token until the daemon restarted (reproduced against the local stack in `integration/tests/test_offline_refresh_live.py`).
+  The pendant's client is now made with `auto_refresh_token=False` (`session_store.create_pendant_client`), and `session_store.SessionKeeper`, the client's one auth listener, is the only refresher.
+  Before every storage upload and `device_status` upsert it runs the refresh-token grant when the access token is within 60 s of expiry, judged by the lifetime GoTrue gave it counted on the monotonic clock from its arrival, never by the wall clock.
+  A request refused for an expired token anyway marks the login stale and is sent once more after a refresh.
+  One re-entrant lock serialises refreshes, so concurrent callers refresh once, and every rotated token is persisted through the same `session.json` writer.
+  A refresh that fails for any other reason than a definite refusal (network, 429, 5xx) sends nothing, leaves the file queued as `deferred`, which neither counts towards nor clears the Critical LED, and is not retried before `RetryBackoff` (30 s doubling to 8 minutes).
+  A refusal with one of `REFUSED_LOGIN_CODES` ends the run, unpairs and exits 1 so the next boot scans, as a revoked login at boot does.
 - **Boot order with the battery and LED work (merged from main, 2026-11).**
   `main()` runs the debounced battery boot check first, and a confirmed halt powers the pendant off before the pairing state is read, so a flat unpaired or pending pendant never scans or signs in.
   Only then does `pair_and_connect` run the pairing gate, with every LED write (the Critical flash for a failed Wi-Fi activation, a refused code or a revoked login) going through the process's one `LedController`.

@@ -19,6 +19,7 @@ from visio_recorder.pairing import (
     complete_pairing,
     write_pending_pairing,
 )
+from visio_recorder.session_store import create_pendant_client
 from visio_recorder.supabase_clients import SupabaseClients, build_supabase_clients
 from visio_recorder.wifi_onboard import parse_onboarding_qr_payload
 
@@ -102,7 +103,7 @@ def boot_pendant(env: dict[str, str], data_dir: Path) -> BootedPendant:
     holder: dict[str, Client] = {}
 
     def factory(url: str, key: str) -> Client:
-        holder["client"] = create_client(url, key)
+        holder["client"] = create_pendant_client(url, key)
         return holder["client"]
 
     clients = build_supabase_clients(

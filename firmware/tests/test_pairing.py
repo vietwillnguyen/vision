@@ -314,7 +314,8 @@ def test_pairing_hands_back_the_client_that_signed_in(tmp_path):
         "http://x", "anon", tmp_path, client_factory=lambda url, key: client
     )
 
-    assert paired.client is client
+    assert paired.session is not None
+    assert paired.session.client is client
 
 
 def test_pairing_resumes_with_the_saved_session_instead_of_signing_in_again(tmp_path):
