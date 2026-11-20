@@ -4,7 +4,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +29,7 @@ from tests.fakes import (
 from tests.ws2812_waveform import decode_frame
 from visio_recorder.capture import AudioSettings, CaptureExit, VideoSettings
 from visio_recorder.daemon import (
+    STOP_MARKER_FLUSH_TIMEOUT_SEC,
     LoopDeps,
     load_config,
     resolve_audio,
@@ -36,7 +37,13 @@ from visio_recorder.daemon import (
     run_startup_sequence,
 )
 from visio_recorder.drivers import Ws2812LedDriver
-from visio_recorder.led import LedPattern
+from visio_recorder.flag_button import (
+    FLAG_UPLOAD_THREAD_NAME,
+    FlagUploadWorker,
+    make_flag_press_handler,
+    write_flag_marker,
+)
+from visio_recorder.led import LedController, LedPattern, LedState, apply_led_state
 from visio_recorder.recording_loop import DiskStats, RetryBackoff
 from visio_recorder.upload_queue import list_pending
 
@@ -147,6 +154,8 @@ def _make_deps(
     audio=None,
     retry_backoff=None,
     monotonic=None,
+    flush_markers=None,
+    sleep=None,
 ) -> LoopDeps:
     return LoopDeps(
         command_runner=command_runner or FakeCommandRunner(),
@@ -163,6 +172,8 @@ def _make_deps(
         video=VideoSettings(),
         upload_limit=unlimited_upload_limit(),
         audio=audio,
+        flush_markers=flush_markers,
+        sleep=sleep or (lambda seconds: None),
         **({} if retry_backoff is None else {"retry_backoff": retry_backoff}),
         **({} if monotonic is None else {"monotonic": monotonic}),
     )
@@ -1475,3 +1486,387 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
 
     assert "device-abc/20260703_235900.mp4" in storage.uploaded
     assert list_pending(queue_dir) == []
+
+
+MAGENTA = (255, 0, 255)
+
+
+class _HeldBlink:
+    """Holds a blink open until the test releases it."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, seconds: float) -> None:
+        self.started.set()
+        assert self.release.wait(timeout=5), "the blink was never released"
+
+
+def _colours(spi: SimulatedSpiDevice) -> list[tuple[int, int, int]]:
+    return [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+
+
+def test_a_press_blinks_magenta_on_the_wire_and_puts_the_state_back(tmp_path):
+    # The real led.py, the real SPI driver and the real press handler, with
+    # only /dev/spidev0.0 simulated: the colours a WS2812B would latch,
+    # decoded from the wire bytes by the datasheet-timing receiver. Storage
+    # is never reached, which is the point - the acknowledgement is what the
+    # wearer gets while WiFi is down.
+    spi = SimulatedSpiDevice()
+    blink = _HeldBlink()
+    led = LedController(Ws2812LedDriver(spi=spi), sleep=blink)
+    battery = FakeBatteryReader(85)
+    assert run_startup_sequence(battery, led).proceed
+
+    press = make_flag_press_handler(
+        queue_dir=tmp_path / "queue",
+        submit=lambda path: None,
+        ack=led.ack_flag,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 3, 45)),
+    )
+    press()
+
+    assert blink.started.wait(timeout=5)
+    assert _colours(spi) == [(0, 255, 0), MAGENTA]
+    blink.release.set()
+    led.close()
+
+    assert _colours(spi) == [(0, 255, 0), MAGENTA, (0, 255, 0)]
+    assert spi.overlapping_writes == 0
+
+
+def test_a_press_blinks_over_a_latched_critical_and_restores_the_red(tmp_path):
+    # WiFi has been down for hours, so the LED is red: exactly the case the
+    # local-first acknowledgement exists for. The latch has to come back.
+    spi = SimulatedSpiDevice()
+    blink = _HeldBlink()
+    led = LedController(Ws2812LedDriver(spi=spi), sleep=blink)
+    apply_led_state(led, LedState.CRITICAL)
+
+    press = make_flag_press_handler(
+        queue_dir=tmp_path / "queue",
+        submit=lambda path: None,
+        ack=led.ack_flag,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 3, 45)),
+    )
+    press()
+
+    assert blink.started.wait(timeout=5)
+    blink.release.set()
+    led.close()
+
+    red = (255, 0, 0)
+    assert _colours(spi) == [red, MAGENTA, red]
+    assert spi.overlapping_writes == 0
+
+
+def test_a_queued_marker_reaches_storage_before_the_next_segment(tmp_path):
+    # The outage case end to end: a press whose upload failed is still on the
+    # card when WiFi returns, and the segment it flags must not overtake it -
+    # the nightly run scores a segment against the markers in storage when it
+    # runs, and anything later falls to the DLQ's late-marker retry.
+    queue_dir = tmp_path / "queue"
+    storage = FakeStorageClient()
+    write_flag_marker(queue_dir, datetime(2026, 7, 4, 11, 59, 30))
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    stop = threading.Event()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(on_record=lambda n: stop.set()),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        flush_markers=flag_worker.flush_markers,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.stop()
+
+    assert storage.uploaded == [
+        "device-abc/FLAG_20260704_115930.marker",
+        "device-abc/20260704_120000.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+
+
+def test_a_press_late_in_the_restart_gap_reaches_storage_before_its_segment(
+    tmp_path,
+):
+    # Segment N's capture returns at T, the worker has it muxed by T+1 - where
+    # the flush used to run - and the wearer presses at T+2.5, inside the 3 s
+    # gap the pipeline attaches to segment N. One fake clock drives all of it.
+    # Recording carries on (the stop lands only on the next capture, once
+    # segment N is up), since the gap is waited out only while recording.
+    queue_dir = tmp_path / "queue"
+    capture_returned_at = 100.0
+    press_at = capture_returned_at + 2.5
+    lock = threading.Lock()
+    now = [0.0]
+    slept: list[float] = []
+    first_segment_uploaded = threading.Event()
+
+    class TimedStorage(FakeStorageClient):
+        markers_stored_when_segment_started: list[str] | None = None
+
+        def upload(self, bucket, object_path, local_path):
+            first = (
+                local_path.suffix == ".mp4"
+                and self.markers_stored_when_segment_started is None
+            )
+            if first:
+                self.markers_stored_when_segment_started = [
+                    key for key in self.uploaded if key.endswith(".marker")
+                ]
+                advance(2.0)
+            super().upload(bucket, object_path, local_path)
+            if first:
+                first_segment_uploaded.set()
+
+    storage = TimedStorage()
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    press = make_flag_press_handler(
+        queue_dir=queue_dir,
+        submit=flag_worker.submit,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 0, 3), step_seconds=0),
+    )
+
+    def advance(seconds: float) -> None:
+        with lock:
+            before = now[0]
+            now[0] += seconds
+            after = now[0]
+        if before < press_at <= after:
+            press()
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        advance(seconds)
+
+    class MuxTakesASecond(FakeCommandRunner):
+        def run(self, args):
+            if "ffmpeg" in args:
+                advance(1.0)
+            super().run(args)
+
+    stop = threading.Event()
+
+    def capture_returns(count: int) -> None:
+        if count == 1:
+            with lock:
+                now[0] = capture_returned_at
+            return
+        assert first_segment_uploaded.wait(timeout=10), "segment N never uploaded"
+        stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(on_record=capture_returns),
+        command_runner=MuxTakesASecond(),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        monotonic=lambda: now[0],
+        flush_markers=flag_worker.flush_markers,
+        sleep=sleep,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.stop()
+
+    assert storage.markers_stored_when_segment_started == [
+        "device-abc/FLAG_20260704_120003.marker"
+    ]
+    # Only segment N waited; the cut-short segment N+1 the stop left did not.
+    assert slept == [2.0]
+    assert storage.uploaded == [
+        "device-abc/FLAG_20260704_120003.marker",
+        "device-abc/20260704_120000.mp4",
+        "device-abc/20260704_120001.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+
+
+def test_markers_only_ever_leave_on_the_flag_workers_own_thread(tmp_path):
+    # The invariant that lets both workers run without a lock on the queue:
+    # the upload worker asks for a flush instead of uploading a marker, so
+    # the two can never see the same marker and both send it.
+    queue_dir = tmp_path / "queue"
+
+    class ThreadRecordingStorage(FakeStorageClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.marker_threads: set[str] = set()
+
+        def upload(self, bucket, object_path, local_path):
+            if local_path.suffix == ".marker":
+                self.marker_threads.add(threading.current_thread().name)
+            super().upload(bucket, object_path, local_path)
+
+    storage = ThreadRecordingStorage()
+    for second in (10, 40):
+        write_flag_marker(queue_dir, datetime(2026, 7, 4, 11, 59, second))
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    stop = threading.Event()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(
+            on_record=lambda n: stop.set() if n >= 2 else None
+        ),
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        flush_markers=flag_worker.flush_markers,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.submit(write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 30)))
+    flag_worker.stop()
+
+    assert storage.marker_threads == {FLAG_UPLOAD_THREAD_NAME}
+    assert list_pending(queue_dir) == []
+
+
+def test_a_stop_mid_capture_flushes_markers_before_the_cut_segment_without_the_gap(
+    tmp_path,
+):
+    # The stop path queues the cut-short last segment on the main thread and
+    # hands the worker an already-muxed segment. A flag pressed during that
+    # capture must still reach storage first, but the stop does not wait out
+    # the restart gap for it: the clock here never moves, so a gap wait would
+    # sleep the full 3 s, and the flush gets the short stop timeout instead of
+    # the flag worker's 30 s, which alone would spend TimeoutStopSec=30.
+    queue_dir = tmp_path / "queue"
+    storage = FakeStorageClient()
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    stop = threading.Event()
+    flush_timeouts: list[float | None] = []
+    slept: list[float] = []
+
+    def flush(timeout: float | None = None) -> bool:
+        flush_timeouts.append(timeout)
+        return flag_worker.flush_markers(timeout=timeout)
+
+    def press_then_stop() -> None:
+        write_flag_marker(queue_dir, datetime(2026, 11, 18, 9, 0, 1))
+        stop.set()
+
+    runner = FakeCaptureRunner(
+        duration_sec=STOP_SEGMENT_SEC, on_capture_start=press_then_stop
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        monotonic=lambda: 50.0,
+        flush_markers=flush,
+        sleep=slept.append,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+    flag_worker.stop()
+
+    assert runner.cancelled_captures == 1
+    assert storage.uploaded == [
+        "device-abc/FLAG_20261118_090001.marker",
+        "device-abc/20261118_090000.mp4",
+    ]
+    assert slept == []
+    assert flush_timeouts == [STOP_MARKER_FLUSH_TIMEOUT_SEC]
+    assert list_pending(queue_dir) == []
+
+
+def test_a_stuck_marker_flush_on_stop_does_not_hold_the_cut_segment_back(tmp_path):
+    # The flush on the stop path is bounded: markers the network will not
+    # take stay on the card, and the cut-short segment still goes up inside
+    # the shutdown budget rather than after the flag worker's own timeout.
+    queue_dir = tmp_path / "queue"
+    release = threading.Event()
+
+    class MarkersHang(FakeStorageClient):
+        def upload(self, bucket, object_path, local_path):
+            if local_path.suffix == ".marker":
+                release.wait(timeout=10)
+                raise OSError("network unreachable")
+            super().upload(bucket, object_path, local_path)
+
+    storage = MarkersHang()
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    write_flag_marker(queue_dir, datetime(2026, 11, 18, 8, 59, 59))
+    stop = threading.Event()
+    deps = replace(
+        _make_deps(
+            tmp_path,
+            capture_runner=FakeCaptureRunner(
+                duration_sec=STOP_SEGMENT_SEC, on_capture_start=stop.set
+            ),
+            battery_reader=FakeBatteryReader(85),
+            led_driver=FakeLedDriver(),
+            storage_client=storage,
+            flush_markers=flag_worker.flush_markers,
+        ),
+        stop_marker_flush_timeout_sec=0.2,
+    )
+
+    started = time.monotonic()
+    try:
+        run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        flag_worker.stop()
+
+    assert storage.uploaded == ["device-abc/20261118_090000.mp4"]
+    assert elapsed < 2.0
+    # The marker is still on the card for the next try.
+    assert [p.name for p in list_pending(queue_dir)] == ["FLAG_20261118_085959.marker"]
+
+
+def test_a_capture_with_no_footage_is_discarded_without_a_marker_flush(tmp_path):
+    # An empty capture never reaches the worker: nothing is uploaded for it
+    # and no flush is spent on it, and since a segment's restart-gap clock
+    # travels with the segment itself, it cannot move the time the next
+    # flush waits on either. The segments either side keep their flushes,
+    # the cut-short last one included.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    flushes: list[float | None] = []
+
+    def flush(timeout: float | None = None) -> bool:
+        flushes.append(timeout)
+        return True
+
+    class SecondCaptureIsEmpty(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            capture_exit = super().run(args, cancel)
+            if self.record_count == 2:
+                Path(args[args.index("-o") + 1]).write_bytes(b"")
+            return capture_exit
+
+    starts = [0]
+
+    def stop_on_the_third_capture() -> None:
+        starts[0] += 1
+        if starts[0] == 3:
+            stop.set()
+
+    runner = SecondCaptureIsEmpty(on_capture_start=stop_on_the_third_capture)
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery_reader=FakeBatteryReader(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        flush_markers=flush,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert runner.record_count == 3
+    assert storage.uploaded == [
+        "device-abc/20261118_090000.mp4",
+        "device-abc/20261118_090002.mp4",
+    ]
+    assert len(flushes) == 2
+    assert list(deps.data_dir.iterdir()) == []

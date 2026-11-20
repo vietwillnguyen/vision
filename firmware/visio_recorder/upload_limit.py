@@ -226,9 +226,11 @@ def upload_queued(
     """Upload one queued file, splitting it first if it is over the limit.
 
     Every uploaded file is removed from the queue; a file that failed for any
-    other reason (network, auth) stays queued for the upload worker's next
-    in-process retry round, with the next boot's flush as the backstop; flag
-    markers are the exception and wait for the next boot's flush.
+    other reason (network, auth) stays queued for the next in-process retry
+    round, with the next boot's flush as the backstop. That holds for a flag
+    marker too, except that its rounds belong to ``FlagUploadWorker``; this
+    path only ever sees one from the startup flush, which runs before that
+    worker exists.
     """
     outcome = UploadOutcome()
     if not path.exists():
