@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
-from visio_recorder.battery import BatteryReader, read_battery_status
+from visio_recorder.battery import BatteryState
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, mux_segment
 from visio_recorder.upload_limit import (
@@ -16,7 +16,7 @@ from visio_recorder.upload_limit import (
     rejected_dir,
     upload_queued,
 )
-from visio_recorder.upload_queue import enqueue, list_pending
+from visio_recorder.upload_queue import enqueue, list_pending, markers_before_segments
 from visio_recorder.uploader import StorageClient
 
 _BYTES_PER_GB = 1024**3
@@ -25,6 +25,17 @@ UPLOAD_FAILURES_TO_CRITICAL = 3
 
 RETRY_BASE_SEC = 30.0
 RETRY_MAX_SEC = 480.0
+
+# How long a battery halt waits for the upload queue to drain before powering
+# off. Two minutes at the 1.5 W power budget is about 0.05 Wh out of an 11.1 Wh
+# pack, so the cost is not the energy: it is that a bound has to exist at all,
+# because a dying battery is exactly when an upload is most likely to hang on a
+# weak signal and an unbounded wait ends in a brownout rather than a power-off.
+UPLOAD_DRAIN_TIMEOUT_SEC = 120.0
+# The pipeline's RESTART_GAP_TOLERANCE_SEC: a press this long after a segment
+# ends still flags that segment, so it is how long the segment must wait for
+# its flags before it is sent.
+RESTART_GAP_SEC = 3.0
 
 _logger = logging.getLogger(__name__)
 
@@ -136,14 +147,34 @@ class UploadHealth:
 
 
 def next_led_state(
-    battery_is_low: bool, is_uploading: bool, upload_critical: bool = False
+    battery_is_low: bool,
+    is_uploading: bool,
+    upload_critical: bool = False,
+    battery_halted: bool = False,
 ) -> LedState:
     """The one LED state a given set of conditions calls for.
 
-    ``upload_critical`` outranks everything: a device losing footage is worth
-    more than reporting a low battery or an upload in flight, and it is also
-    what the battery-halt path already does by applying Critical last.
+    The conditions are not mutually exclusive - a pendant can be low on
+    battery, uploading and halting at once - so this is a priority ladder, and
+    it is the single place that ladder is written down. The pendant spec's LED
+    state machine section owns the target design; its pure resolver replaces
+    this function as the capture region, health conditions and the states the
+    recording stop/start control design adds land.
+
+    ``battery_halted`` is first. A halt is terminal, and the solid red is the
+    pendant's only chance to tell the wearer *why* it is about to go dark;
+    "charge me" is the one actionable message at that moment. It is Halted,
+    not Critical: Critical's flash means "still recording, needs you", while a
+    halt has stopped recording. The halt path applies it last, after the
+    upload worker is joined, so no drained segment's LED restore can paint
+    over it - the invariant this function exists to hold.
+
+    ``upload_critical`` outranks the running states below it for the same
+    reason the halt outranks it: a device losing footage is worth more than
+    reporting a low battery or an upload in flight.
     """
+    if battery_halted:
+        return LedState.HALTED
     if upload_critical:
         return LedState.CRITICAL
     if battery_is_low:
@@ -151,6 +182,42 @@ def next_led_state(
     if is_uploading:
         return LedState.UPLOADING
     return LedState.RECORDING
+
+
+class LoopOutcome(Enum):
+    """Why the recording loop returned, and so what the daemon does next.
+
+    ``RECOVERED`` is the one that is not an ending: external power appeared
+    while a battery halt was draining its queue, so the power-off was
+    cancelled and the loop should be re-entered rather than the process
+    exiting. Without it a pendant plugged in at the wrong moment would power
+    off anyway and wait for the charge wake, which is the "stays down until
+    someone intervenes" behaviour this replaces.
+    """
+
+    STOPPED = "stopped"
+    HALTED = "halted"
+    RECOVERED = "recovered"
+
+
+def wait_out_restart_gap(
+    ended_at: float,
+    *,
+    gap_sec: float,
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> None:
+    """Sleep until ``gap_sec`` after ``ended_at``, and never longer than that.
+
+    ``ended_at`` is when the segment's capture returned, on ``monotonic``. A
+    press up to ``gap_sec`` later belongs to that segment, so flushing markers
+    any earlier would let the segment reach storage ahead of its own flag.
+    The wait is capped at ``gap_sec`` whatever the clock says, so neither a
+    stop, a halt, nor a clock step can hold an upload for longer.
+    """
+    remaining = min(ended_at + gap_sec - monotonic(), gap_sec)
+    if remaining > 0:
+        sleep(remaining)
 
 
 class WorkerAction(Enum):
@@ -167,7 +234,7 @@ class WorkerStep:
 
 def next_worker_step(
     *,
-    segments_pending: bool,
+    work_pending: bool,
     stopping: bool,
     retry_at: float | None,
     now: float,
@@ -178,6 +245,10 @@ def next_worker_step(
 
     Pulled out of the worker thread for the same reason as ``next_led_state``:
     the decision is the part worth pinning, and here it needs no threads.
+    Both upload workers use it - the segment one over ``pending_segments``,
+    ``FlagUploadWorker`` over ``pending_markers`` - each with its own
+    consecutive-failure counter, so ``work_pending`` is whatever that caller
+    still has to send.
 
     With nothing queued, or the loop stopping, there is no deadline and the
     worker waits for its next segment or the shutdown sentinel; a stopping
@@ -188,7 +259,7 @@ def next_worker_step(
     rather than restarting it, so segments arriving more often than the
     backoff cannot postpone the retry. Once it has passed, retry now.
     """
-    if stopping or not segments_pending:
+    if stopping or not work_pending:
         return WorkerStep(WorkerAction.WAIT_FOR_SEGMENT, retry_at=None)
     if retry_at is None:
         retry_at = now + retry_backoff.delay_sec(consecutive_failures)
@@ -287,12 +358,13 @@ def pending_segments(queue_dir: Path) -> list[Path]:
     """The queued segments the upload worker may retry while recording.
 
     Flag markers are left out. ``FlagUploadWorker`` uploads and unlinks those
-    on its own thread for as long as the daemon runs, so draining them from
-    here too would race it: both threads would see the object missing, both
-    would upload, and the loser would be told the object already exists - a
-    failure that is not a failure, feeding the Critical LED escalation. A
-    marker keeps its documented contract instead, the next boot's
-    ``flush_pending``, which runs before that worker exists.
+    on its own thread for as long as the daemon runs - including its own
+    in-process retry - so draining them from here too would race it: both
+    threads would see the object missing, both would upload, and the loser
+    would be told the object already exists, a failure that is not a failure,
+    feeding the Critical LED escalation. The ordering this worker does need,
+    markers before its segments, it gets by asking that worker for a flush
+    (``flush_markers`` below) rather than by uploading one itself.
     """
     return [path for path in list_pending(queue_dir) if path.suffix == ".mp4"]
 
@@ -350,10 +422,17 @@ def flush_pending(
     """Upload everything queued at startup; returns how many reached storage.
 
     Flag markers included, unlike ``pending_segments``: this runs before the
-    flag-upload worker exists, so there is nothing to race.
+    flag-upload worker exists, so there is nothing to race - and they go
+    first. A boot that cannot finish the backlog (the battery goes, WiFi goes
+    again, the daemon is stopped) would otherwise send a day's segments and
+    leave their flags on the card, and the nightly run scores a segment
+    against the markers that are in storage when it runs.
     """
     return drain_pending(
-        list_pending(queue_dir), storage_client, device_id, upload_limit
+        markers_before_segments(list_pending(queue_dir)),
+        storage_client,
+        device_id,
+        upload_limit,
     ).uploaded
 
 
@@ -425,11 +504,12 @@ def retry_pending_segments(
     queue_dir: Path,
     storage_client: StorageClient,
     led_driver: LedDriver,
-    battery_reader: BatteryReader,
+    battery: BatteryState,
     device_id: str,
     upload_limit: UploadLimit,
     upload_health: UploadHealth,
     cancel: Callable[[], bool] | None = None,
+    flush_markers: Callable[[], bool] | None = None,
 ) -> UploadOutcome:
     """One in-process retry round over the segments still queued.
 
@@ -453,14 +533,26 @@ def retry_pending_segments(
     ``segments_uploaded_today`` then, which keeps this round off the status
     client's failure path and out of the question of what ``audio_active``
     would mean with no capture involved.
+
+    ``flush_markers`` is ``FlagUploadWorker.flush_markers``, called once just
+    before the round's first segment and not at all by a round that uploads
+    nothing, so flags reach storage ahead of the footage they belong to
+    without spending a request per round on a network no segment is about to
+    use either. Its result is deliberately ignored: a marker that could not
+    be sent is not lost footage, so the segments go up regardless and the
+    pipeline's late-marker handling is the backstop.
     """
     paths = pending_segments(queue_dir)
-    battery_status = read_battery_status(battery_reader)
+    # Read, never sampled: the main loop owns the debounce, and folding a
+    # worker-thread reading into it would corrupt the moving average.
+    battery_verdict = battery.current()
 
     def drain(show_uploading: Callable[[], None]) -> UploadOutcome:
         def before_first_attempt() -> None:
             _logger.info("retrying %d queued segment(s) in process", len(paths))
             show_uploading()
+            if flush_markers is not None:
+                flush_markers()
 
         return drain_pending(
             paths, storage_client, device_id, upload_limit, cancel, before_first_attempt
@@ -469,9 +561,23 @@ def retry_pending_segments(
     return _upload_showing_led(
         upload=drain,
         led_driver=led_driver,
-        battery_is_low=battery_status.is_low,
+        battery_is_low=battery_verdict.is_low,
         upload_health=upload_health,
     )
+
+
+def queue_segment(
+    command_runner: CommandRunner, h264_path: Path, queue_dir: Path, framerate: int
+) -> Path:
+    """Mux one finished capture into the upload queue and return its queued path.
+
+    The raw capture is removed once the MP4 exists, so from here on the queue
+    is the segment's only copy and the next boot's ``flush_pending`` recovers
+    it if this run never uploads it.
+    """
+    mp4_path = mux_segment(command_runner, h264_path, framerate)
+    h264_path.unlink()
+    return enqueue(queue_dir, mp4_path)
 
 
 def on_segment_complete(
@@ -481,7 +587,7 @@ def on_segment_complete(
     storage_client: StorageClient,
     status_client: StatusClient,
     led_driver: LedDriver,
-    battery_reader: BatteryReader,
+    battery: BatteryState,
     device_id: str,
     segments_uploaded_today: int,
     framerate: int,
@@ -489,8 +595,46 @@ def on_segment_complete(
     data_dir: Path,
     upload_limit: UploadLimit,
     upload_health: UploadHealth | None = None,
+    flush_markers: Callable[[], bool] | None = None,
 ) -> SegmentResult:
-    """Mux, queue and upload one finished capture, driving the LED and status.
+    """Mux, queue and upload one finished capture: ``queue_segment`` then
+    ``upload_segment``."""
+    return upload_segment(
+        queued_path=queue_segment(command_runner, h264_path, queue_dir, framerate),
+        # Per segment: a .ts capture carries the microphone track.
+        audio_active=h264_path.suffix == ".ts",
+        queue_dir=queue_dir,
+        storage_client=storage_client,
+        status_client=status_client,
+        led_driver=led_driver,
+        battery=battery,
+        device_id=device_id,
+        segments_uploaded_today=segments_uploaded_today,
+        disk_stats_reader=disk_stats_reader,
+        data_dir=data_dir,
+        upload_limit=upload_limit,
+        upload_health=upload_health,
+        flush_markers=flush_markers,
+    )
+
+
+def upload_segment(
+    queued_path: Path,
+    audio_active: bool,
+    queue_dir: Path,
+    storage_client: StorageClient,
+    status_client: StatusClient,
+    led_driver: LedDriver,
+    battery: BatteryState,
+    device_id: str,
+    segments_uploaded_today: int,
+    disk_stats_reader: DiskStatsReader,
+    data_dir: Path,
+    upload_limit: UploadLimit,
+    upload_health: UploadHealth | None = None,
+    flush_markers: Callable[[], bool] | None = None,
+) -> SegmentResult:
+    """Upload one queued segment, driving the LED and reporting the status.
 
     ``upload_health`` is the worker's run-long consecutive-failure counter.
     Both LED states are derived from it, so a run already escalated to
@@ -499,16 +643,22 @@ def on_segment_complete(
     outcome before the second LED call, so a success clears the red here
     rather than one segment later. Omitting it uploads the segment with no
     escalation history, which is what a single-segment caller wants.
+
+    ``flush_markers`` is ``FlagUploadWorker.flush_markers``. It runs inside
+    the Uploading LED, before this segment is sent, so a flag pressed during
+    the segment reaches storage with the footage it belongs to rather than
+    after it. Its result is ignored on purpose: footage outranks marker
+    ordering, and a marker that could not be sent must not count towards the
+    Critical escalation that means lost video.
     """
     upload_health = UploadHealth() if upload_health is None else upload_health
-    mp4_path = mux_segment(command_runner, h264_path, framerate)
-    h264_path.unlink()
-    queued_path = enqueue(queue_dir, mp4_path)
-
-    battery_status = read_battery_status(battery_reader)
+    # Read, never sampled: the main loop owns the debounce.
+    battery_verdict = battery.current()
 
     def upload(show_uploading: Callable[[], None]) -> UploadOutcome:
         show_uploading()
+        if flush_markers is not None:
+            flush_markers()
         return replace(
             upload_queued(queued_path, storage_client, device_id, upload_limit),
             attempted=1,
@@ -517,7 +667,7 @@ def on_segment_complete(
     outcome = _upload_showing_led(
         upload=upload,
         led_driver=led_driver,
-        battery_is_low=battery_status.is_low,
+        battery_is_low=battery_verdict.is_low,
         upload_health=upload_health,
     )
     segments_uploaded_today += outcome.uploaded
@@ -525,14 +675,13 @@ def on_segment_complete(
 
     status = build_device_status(
         device_id=device_id,
-        battery_pct=battery_status.pct,
+        battery_pct=battery_verdict.pct,
         disk_stats_reader=disk_stats_reader,
         data_dir=data_dir,
         queue_dir=queue_dir,
         segments_uploaded_today=segments_uploaded_today,
         recording_active=True,
-        # Per segment: a .ts capture carries the microphone track.
-        audio_active=h264_path.suffix == ".ts",
+        audio_active=audio_active,
     )
     status_client.upsert_device_status(asdict(status))
 

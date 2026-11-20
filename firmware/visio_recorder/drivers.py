@@ -5,29 +5,111 @@ These wrap third-party device libraries (``pijuice``, ``spidev``,
 only installed on the Raspberry Pi target via apt/system packages, not
 declared in this project's pyproject.toml. Each import is deferred into
 ``__init__`` so this module stays importable on machines without the
-hardware present (including CI). The battery and button drivers are
-deliberately not unit tested: that is the real-driver convention used
-throughout ``daemon.py`` - behavior is validated on the assembled device in
-Epic 5, not emulated here. The LED is the exception: its wire format is
-pure bytes, so ``Ws2812LedDriver`` accepts an injected SPI device and the
-tests assert the exact frames it sends (see ``ws2812_spi``).
+hardware present (including CI). The button driver is deliberately not unit
+tested: that is the real-driver convention used throughout ``daemon.py`` -
+behavior is validated on the assembled device in Epic 5, not emulated here.
+
+Two drivers are exceptions, for the same reason in both cases: they do real
+work of their own rather than just forwarding a call, so that work is worth
+pinning. ``Ws2812LedDriver`` accepts an injected SPI device and the tests
+assert the exact frames it sends (see ``ws2812_spi``).
+``PiJuiceBatteryReader`` accepts an injected PiJuice and the tests pin how it
+reads the status word - which of the HAT's four power-input states count as
+externally powered is a decision, not a forward, and getting it wrong would
+either halt a charging pendant or fail to halt a dying one.
 """
 
+import logging
 from collections.abc import Callable
+from typing import Any
 
 from visio_recorder.ws2812_spi import SpiDevice, SpiWs2812Led
 
+_logger = logging.getLogger(__name__)
 
-class PiJuiceBatteryReader:
-    """Reads battery charge percentage from a PiJuice HAT over I2C."""
 
-    def __init__(self) -> None:
+def open_pijuice() -> Any | None:
+    """The PiJuice HAT on I2C bus 1, or None when there is none to open.
+
+    One object for the whole daemon: the battery reader and the power
+    controller both need it, and opening the bus twice would be two I2C
+    handles to the same device. Returns None rather than raising when the
+    library or the bus is absent, so the power controller can fall back to
+    ``systemctl poweroff``. ``PiJuiceBatteryReader`` still refuses None, so a
+    device with no HAT does not start until it has a battery source that does
+    not read one.
+    """
+    try:
         from pijuice import PiJuice
 
-        self._pijuice = PiJuice(1, 0x14)
+        return PiJuice(1, 0x14)
+    except Exception:
+        _logger.warning(
+            "no PiJuice on I2C bus 1; battery telemetry and the HAT's own "
+            "power-off and charge wake are unavailable on this device",
+            exc_info=True,
+        )
+        return None
+
+
+# The PiJuice reports its power inputs as one of four states. Only PRESENT is
+# a supply the pendant can run on: BAD and WEAK are exactly the marginal cable
+# or charger that would otherwise persuade a dying pendant it is safe, and
+# PiJuice's own pijuice_sys.py treats both as no power for the same reason.
+_EXTERNAL_POWER_PRESENT = "PRESENT"
+_BATTERY_ABSENT = "NOT_PRESENT"
+
+
+def _data(name: str, result: dict) -> Any:
+    """The ``data`` of a PiJuice status call, or a RuntimeError naming why not.
+
+    The vendor library reports a failed I2C transfer as a dict carrying an
+    ``error`` and no ``data`` rather than raising, so indexing it blindly turns
+    a bus fault into a KeyError that says nothing about the bus.
+    """
+    error = result.get("error")
+    if error not in (None, "NO_ERROR") or "data" not in result:
+        raise RuntimeError(f"pijuice {name} failed: {error}")
+    return result["data"]
+
+
+class PiJuiceBatteryReader:
+    """Charge, terminal voltage and external-power state from a PiJuice HAT.
+
+    Implements ``BatteryTelemetryReader``: voltage is what catches a cell
+    whose gauge still reads half full under camera and WiFi load, and the
+    external-power state is what stops a pendant on a charger shutting itself
+    down.
+    """
+
+    def __init__(self, pijuice: Any | None) -> None:
+        if pijuice is None:
+            raise RuntimeError(
+                "no PiJuice on I2C bus 1; a pendant without one needs a "
+                "battery source that does not read the HAT"
+            )
+        self._pijuice: Any = pijuice
 
     def get_charge_pct(self) -> int:
-        return self._pijuice.status.GetChargeLevel()["data"]
+        return _data("GetChargeLevel", self._pijuice.status.GetChargeLevel())
+
+    def get_battery_voltage_mv(self) -> int:
+        return _data("GetBatteryVoltage", self._pijuice.status.GetBatteryVoltage())
+
+    def is_externally_powered(self) -> bool:
+        """True when the pendant is running on something other than the cell.
+
+        A battery reading NOT_PRESENT counts too: with no cell fitted there is
+        nothing to protect and nothing that can go flat, so halting would only
+        turn a working mains-powered device off.
+        """
+        status = _data("GetStatus", self._pijuice.status.GetStatus())
+        if status.get("battery") == _BATTERY_ABSENT:
+            return True
+        return _EXTERNAL_POWER_PRESENT in (
+            status.get("powerInput"),
+            status.get("powerInput5vIo"),
+        )
 
 
 class Ws2812LedDriver(SpiWs2812Led):

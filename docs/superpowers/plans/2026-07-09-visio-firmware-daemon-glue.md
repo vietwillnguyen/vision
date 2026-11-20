@@ -1,5 +1,7 @@
 # Visio Firmware Epic 5 Daemon Glue Implementation Plan
 
+> **Superseded (2026-11-19):** the LED states and boot-to-Recording behaviour in this executed plan are superseded by the LED state machine in the pendant spec (PR #102); this plan is kept as history and not rewritten.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Wire the already-tested firmware units into a running `visio-recorder` daemon so the systemd unit records, uploads, and reports for real (closes issue #7).

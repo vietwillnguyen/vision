@@ -1,0 +1,200 @@
+
+==============================================================================
+Part 1: the same traces through the old policy and the new monitor
+==============================================================================
+
+Thresholds: halt under 10% (smoothed, confirmed), floor under 3300 mV (raw, confirmed),
+warn under 20% and clear at 25%. One sample per recording-loop pass.
+
+--- noisy-gauge-healthy-pack
+    A half-full pack under a camera encode and WiFi bursts.
+    The gauge spikes down and recovers; nothing here is a dying battery.
+    Ground truth: this trace must NOT halt.
+
+     #   pct     mV  ext |  avg   low new              old   verdict
+     1    45   3850   no |   45 False -                -     
+     2     8   3840   no |   26 False -                HALT  the old policy would stop a pendant that must keep going
+     3    44   3845   no |   32 False -                -     
+     4     6   3830   no |   26 False -                HALT  the old policy would stop a pendant that must keep going
+     5    43   3840   no |   29 False -                -     
+     6     9   3820   no |   22 False -                HALT  the old policy would stop a pendant that must keep going
+     7    42   3835   no |   29 False -                -     
+    => new: never halts (correct)   old: halts at sample 2 (WRONG)
+
+--- genuine-depletion
+    The real thing: a pack that keeps falling and does not come back.
+    Ground truth: this trace MUST halt.
+
+     #   pct     mV  ext |  avg   low new              old   verdict
+     1    20   3700   no |   20 False -                -     
+     2    18   3680   no |   19  True -                -     
+     3    16   3660   no |   18  True -                -     
+     4    14   3640   no |   17  True -                -     
+     5    12   3610   no |   16  True -                -     
+     6    10   3590   no |   14  True -                -     
+     7     8   3560   no |   12  True -                HALT  the two disagree
+     8     6   3530   no |   10  True -                HALT  the two disagree
+     9     5   3500   no |    8  True -                HALT  the two disagree
+    10     4   3470   no |    7  True -                HALT  the two disagree
+    11     3   3440   no |    5  True HALT (charge)    HALT  
+    12     2   3410   no |    4  True HALT (charge)    HALT  
+    => new: halts at sample 11 (correct)   old: halts at sample 7 (correct)
+
+--- sagging-voltage-under-load
+    The case the percentage alone cannot catch.
+    The gauge still reads half full - it is resistance-compensated and lags - while the cell's terminal voltage has already collapsed under load.
+    Ground truth: this trace MUST halt.
+
+     #   pct     mV  ext |  avg   low new              old   verdict
+     1    55   3700   no |   55 False -                -     
+     2    54   3500   no |   54 False -                -     
+     3    54   3280   no |   54 False -                -     
+     4    53   3260   no |   54 False HALT (voltage)   -     the new policy catches what the old one cannot see
+     5    53   3240   no |   54 False HALT (voltage)   -     the new policy catches what the old one cannot see
+    => new: halts at sample 4 (correct)   old: never halts (WRONG)
+
+--- transmit-burst-sag
+    The same shape, but a single sag during one WiFi transmit burst.
+    The rail comes straight back; halting on it would be wrong.
+    Ground truth: this trace must NOT halt.
+
+     #   pct     mV  ext |  avg   low new              old   verdict
+     1    55   3700   no |   55 False -                -     
+     2    54   3240   no |   54 False -                -     
+     3    54   3690   no |   54 False -                -     
+     4    53   3700   no |   54 False -                -     
+     5    53   3250   no |   54 False -                -     
+     6    53   3680   no |   53 False -                -     
+    => new: never halts (correct)   old: never halts (correct)
+
+--- flat-but-charging
+    A pendant plugged in at 4 %.
+    It is low, and it is recovering; nothing about it should stop recording.
+    Ground truth: this trace must NOT halt.
+
+     #   pct     mV  ext |  avg   low new              old   verdict
+     1     4   3450  yes |    4  True -                HALT  the old policy would stop a pendant that must keep going
+     2     5   3600  yes |    4  True -                HALT  the old policy would stop a pendant that must keep going
+     3     8   3700  yes |    6  True -                HALT  the old policy would stop a pendant that must keep going
+     4    14   3760  yes |    8  True -                -     
+     5    22   3800  yes |   11  True -                -     
+     6    27   3840  yes |   15  True -                -     
+    => new: never halts (correct)   old: halts at sample 1 (WRONG)
+
+--- hovering-at-the-warn-line
+    Charge drifting across the 20 % warning threshold all afternoon.
+    What the 20-25 % hysteresis band exists to stop flickering.
+    Ground truth: this trace must NOT halt.
+
+     #   pct     mV  ext |  avg   low new              old   verdict
+     1    22   3720   no |   22 False -                -     
+     2    19   3700   no |   20 False -                -     
+     3    21   3710   no |   21 False -                -     
+     4    18   3690   no |   20 False -                -     
+     5    22   3700   no |   20 False -                -     
+     6    24   3710   no |   21 False -                -     
+     7    26   3730   no |   22 False -                -     
+    => new: never halts (correct)   old: never halts (correct)
+
+--- halt-then-charger-arrives
+    The rail collapses and the halt is confirmed, then somebody plugs the pendant in while its queue is still draining.
+    Ground truth: this trace MUST halt.
+
+     #   pct     mV  ext |  avg   low new              old   verdict
+     1    55   3700   no |   55 False -                -     
+     2    54   3250   no |   54 False -                -     
+     3    53   3240   no |   54 False HALT (voltage)   -     the new policy catches what the old one cannot see
+     4    52   3800  yes |   54 False -                -     
+     5    54   3850  yes |   54 False -                -     
+    => new: halts at sample 3 (correct)   old: never halts (WRONG)
+
+--- depleting-then-plugged-in
+    Falling towards the halt threshold, then a charger arrives.
+    Ground truth: this trace must NOT halt.
+
+     #   pct     mV  ext |  avg   low new              old   verdict
+     1    14   3620   no |   14  True -                -     
+     2    11   3580   no |   12  True -                -     
+     3     8   3540   no |   11  True -                HALT  the old policy would stop a pendant that must keep going
+     4     7   3520  yes |   10  True -                HALT  the old policy would stop a pendant that must keep going
+     5    12   3700  yes |   10  True -                -     
+     6    20   3780  yes |   12  True -                -     
+    => new: never halts (correct)   old: halts at sample 3 (WRONG)
+
+==============================================================================
+Summary
+==============================================================================
+
+    trace                          new policy             old policy             
+    noisy-gauge-healthy-pack       never halts            halts at sample 2     
+    genuine-depletion              halts at sample 11     halts at sample 7     
+    sagging-voltage-under-load     halts at sample 4      never halts           
+    transmit-burst-sag             never halts            never halts           
+    flat-but-charging              never halts            halts at sample 1     
+    hovering-at-the-warn-line      never halts            never halts           
+    halt-then-charger-arrives      halts at sample 3      never halts           
+    depleting-then-plugged-in      never halts            halts at sample 3     
+
+    traces the new policy gets wrong: 0
+    traces the old policy gets wrong: 5
+
+==============================================================================
+Part 2: five traces through the real run_recording_loop
+==============================================================================
+
+--- noisy-gauge-healthy-pack
+    A half-full pack under a camera encode and WiFi bursts. The gauge spikes down and recovers; nothing here is a dying battery.
+
+    outcome          stopped
+    segments recorded 7
+    segments uploaded 7
+    LED sequence     blue green blue green blue green blue green blue green blue green blue green
+    final status     battery_pct=42 recording_active=False segments_pending=0
+    POWERED OFF      no - the device stayed up
+    log: battery charge 5% (smoothed) confirmed below 10% over 3 readings; halting
+    log: battery charge 4% (smoothed) confirmed below 10% over 4 readings; halting
+
+--- genuine-depletion
+    The real thing: a pack that keeps falling and does not come back.
+
+    outcome          halted
+    segments recorded 9
+    segments uploaded 9
+    LED sequence     yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow HALTED
+    final status     battery_pct=3 recording_active=False segments_pending=0
+    POWERED OFF      wake-on-charge armed at 25%
+    log: battery voltage 3260 mV confirmed below the 3300 mV floor over 2 readings; halting
+    log: battery voltage 3240 mV confirmed below the 3300 mV floor over 3 readings; halting
+
+--- sagging-voltage-under-load
+    The case the percentage alone cannot catch. The gauge still reads half full - it is resistance-compensated and lags - while the cell's terminal voltage has already collapsed under load.
+
+    outcome          halted
+    segments recorded 2
+    segments uploaded 2
+    LED sequence     blue green blue green HALTED
+    final status     battery_pct=53 recording_active=False segments_pending=0
+    POWERED OFF      wake-on-charge armed at 25%
+    log: battery voltage 3240 mV confirmed below the 3300 mV floor over 2 readings; halting
+    log: external power returned during the battery halt drain at 52%; cancelling the power-off and resuming
+
+--- halt-then-charger-arrives
+    The rail collapses and the halt is confirmed, then somebody plugs the pendant in while its queue is still draining.
+
+    outcome          recovered
+    segments recorded 1
+    segments uploaded 1
+    LED sequence     blue green HALTED green
+    final status     battery_pct=53 recording_active=False segments_pending=0
+    POWERED OFF      no - the device stayed up
+
+--- depleting-then-plugged-in
+    Falling towards the halt threshold, then a charger arrives.
+
+    outcome          stopped
+    segments recorded 6
+    segments uploaded 6
+    LED sequence     yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow
+    final status     battery_pct=20 recording_active=False segments_pending=0
+    POWERED OFF      no - the device stayed up
+

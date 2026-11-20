@@ -14,7 +14,7 @@ supabase/            -- Epic 0: Postgres migrations, pgTAP tests, local stack co
 firmware/            -- Epic 1: visio-recorder Python systemd daemon
   visio_recorder/    -- battery, LED, muxer, upload queue, uploader, wifi/device onboarding, recording loop
   tests/             -- pytest suite (fakes for every hardware/network Protocol)
-  systemd/           -- installable systemd unit
+  systemd/           -- installable systemd unit and the polkit rule that lets it power off
 pipeline/            -- Epic 2: nightly cloud AI pipeline (Python package)
   pipeline/          -- ingestion, scoring, selection, assembly, delivery stages,
                         nightly orchestrator + `python -m pipeline` entrypoint
@@ -143,7 +143,9 @@ Flip `[studio]` back on locally if you want the table editor.
 **Plan:** [`docs/superpowers/plans/2026-07-04-visio-firmware.md`](docs/superpowers/plans/2026-07-04-visio-firmware.md)
 
 The `visio-recorder` Python systemd daemon: boot-time battery check, WiFi onboarding and pairing via QR code (the pendant gets its own anonymous login by claiming a one-time code), rolling H.264-to-MP4 segment capture (one minute by default, sized to fit the 50 MiB upload limit) and upload, an LED state machine, and per-segment `device_status` reporting.
-The manual flag marker (`FLAG_YYYYMMDD_HHMMSS.marker`, `flag_button.py`) is wired to a GPIO 17 button press in `main()`: a debounced press hands the marker to a dedicated flag-upload worker thread, which uploads it immediately or, on failure, leaves it queued for the next boot's flush (markers get no in-process retry, unlike segments).
+The manual flag marker (`FLAG_YYYYMMDD_HHMMSS.marker`, `flag_button.py`) is wired to a GPIO 17 button press in `main()`, and is local-first: a debounced press writes the marker, fsyncs it and the queue directory, asks `LedController` for a 150 ms magenta acknowledgement blink, and only then hands the path to a dedicated flag-upload worker thread.
+That worker uploads it immediately and, on failure, retries it in process on the same backoff segments use, with the next boot's flush as the backstop.
+It is the only thing that ever uploads a marker: the segment upload worker asks it for a flush before any segment reaches storage, so a day's footage never arrives ahead of its flags.
 Every hardware or network boundary (PiJuice, GPIO, WS2812B LEDs, `ffmpeg`/`rpicam-vid`, Supabase) is a small `Protocol` with a fake used in tests; `daemon.py` is the only module that wires real implementations together.
 On boot it runs the battery/LED startup sequence, then the pairing gate: an unpaired pendant scans a QR code (writing a NetworkManager keyfile and saving the pairing code), activates the NetworkManager connection (`nmcli connection reload` + `up`, retried best-effort on restart boots), signs in anonymously and claims the code; a paired one sets its saved session, and returns to scanning if that login was revoked in the app. It then flushes any queued uploads left over from a previous run, recovers captures an unclean stop left behind, then starts the per-segment `rpicam-vid` capture loop with the flag-button listener and a background upload worker with real disk-usage stats.
 That worker also retries whatever is still queued while the daemon runs, so a segment whose upload failed does not wait for the next boot: while segments are queued it blocks on its work queue only until a retry deadline, which a new segment does not restart, and retries the queue whenever that deadline passes.

@@ -8,19 +8,21 @@ import pytest
 from tests.fakes import (
     FailingSplitRunner,
     FailingStorageClient,
-    FakeBatteryReader,
+    FakeCaptureRunner,
     FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
     FakeDurationProbe,
     FakeLedDriver,
+    FakePowerController,
     FakeStatusClient,
     FakeStorageClient,
     FakeStorageClientFailingOn,
     SizeCheckedStorageClient,
+    battery_state,
     unlimited_upload_limit,
 )
-from visio_recorder.capture import VideoSettings
+from visio_recorder.capture import CaptureExit, VideoSettings
 from visio_recorder.daemon import LoopDeps, run_recording_loop
 from visio_recorder.led import LedPattern, LedState
 from visio_recorder.recording_loop import (
@@ -40,6 +42,8 @@ from visio_recorder.recording_loop import (
     pending_segments,
     recover_orphaned_segments,
     retry_pending_segments,
+    upload_segment,
+    wait_out_restart_gap,
 )
 from visio_recorder.upload_limit import UploadLimit, rejected_dir
 from visio_recorder.upload_queue import list_pending
@@ -62,6 +66,25 @@ def test_next_led_state_shows_recording_when_idle_and_healthy():
     assert (
         next_led_state(battery_is_low=False, is_uploading=False) == LedState.RECORDING
     )
+
+
+def test_a_battery_halt_shows_halted_solid_red_over_every_other_condition():
+    # Halted is its own state, not Critical: Critical (red, flashing) means
+    # "still recording, needs you", while a halt has stopped recording and is
+    # about to power off. The pendant spec's LED state machine (PR #102) keeps
+    # the two looks apart so a wearer can tell them apart.
+    for battery_is_low in (False, True):
+        for is_uploading in (False, True):
+            for upload_critical in (False, True):
+                assert (
+                    next_led_state(
+                        battery_is_low,
+                        is_uploading=is_uploading,
+                        upload_critical=upload_critical,
+                        battery_halted=True,
+                    )
+                    == LedState.HALTED
+                )
 
 
 def test_next_led_state_lets_upload_critical_outrank_every_other_condition():
@@ -117,7 +140,7 @@ def test_on_segment_complete_holds_critical_red_across_a_failing_segment(tmp_pat
         storage_client=FailingStorageClient(),
         status_client=FakeStatusClient(),
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -149,7 +172,7 @@ def test_on_segment_complete_clears_critical_red_on_the_success_itself(tmp_path)
         storage_client=FakeStorageClient(),
         status_client=FakeStatusClient(),
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -183,7 +206,7 @@ def test_on_segment_complete_happy_path(tmp_path):
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=41,
         framerate=30,
@@ -232,7 +255,7 @@ def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
         storage_client=FakeStorageClient(),
         status_client=FakeStatusClient(),
         led_driver=led,
-        battery_reader=FakeBatteryReader(15),
+        battery=battery_state(15),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -264,7 +287,7 @@ def test_on_segment_complete_reports_real_disk_stats(tmp_path, monkeypatch):
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=41,
         framerate=30,
@@ -313,7 +336,7 @@ def test_failed_upload_restores_led_keeps_queued_file_and_reports_failure(tmp_pa
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -360,7 +383,7 @@ def test_successful_upload_returns_ok_result(tmp_path):
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -541,21 +564,23 @@ def test_capture_killed_mid_segment_is_uploaded_on_the_next_boot(tmp_path):
     data_dir = tmp_path / "data"
     queue_dir = data_dir / "queue"
 
-    class KilledOnSecondCapture(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and self.record_count == 1:
+    class KilledOnSecondCapture(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if self.record_count == 1:
                 output = Path(args[args.index("-o") + 1])
                 output.write_bytes(b"partial frames")
                 raise subprocess.CalledProcessError(-15, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     storage = FakeStorageClient()
     deps = LoopDeps(
-        command_runner=KilledOnSecondCapture(),
+        command_runner=FakeCommandRunner(),
+        capture_runner=KilledOnSecondCapture(),
         storage_client=storage,
         status_client=FakeStatusClient(),
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
+        power_controller=FakePowerController(),
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=1.0, free_gb=9.0)),
         data_dir=data_dir,
         queue_dir=queue_dir,
@@ -632,7 +657,7 @@ def test_on_segment_complete_splits_an_oversized_segment_and_uploads_both_parts(
         storage_client=storage,
         status_client=status_client,
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -665,7 +690,7 @@ def test_an_unsplittable_oversized_segment_is_reported_and_not_retried(tmp_path)
         storage_client=storage,
         status_client=status_client,
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -723,7 +748,7 @@ def test_on_segment_complete_muxes_an_audio_capture_and_reports_audio_active(
         storage_client=storage,
         status_client=status_client,
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -793,7 +818,7 @@ def test_pending_segments_excludes_flag_markers(tmp_path):
 
 def _step(*, pending=True, stopping=False, retry_at=None, now=100.0, failures=0):
     return next_worker_step(
-        segments_pending=pending,
+        work_pending=pending,
         stopping=stopping,
         retry_at=retry_at,
         now=now,
@@ -842,16 +867,25 @@ def _queued(queue_dir: Path, *names: str) -> None:
         (queue_dir / name).write_bytes(b"segment")
 
 
-def _retry(queue_dir: Path, storage, health, led=None, limit=None, cancel=None):
+def _retry(
+    queue_dir: Path,
+    storage,
+    health,
+    led=None,
+    limit=None,
+    cancel=None,
+    flush_markers=None,
+):
     return retry_pending_segments(
         queue_dir=queue_dir,
         storage_client=storage,
         led_driver=led or FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         upload_limit=limit or unlimited_upload_limit(),
         upload_health=health,
         cancel=cancel,
+        flush_markers=flush_markers,
     )
 
 
@@ -1021,3 +1055,188 @@ def test_a_cancelled_retry_round_leaves_the_rest_of_the_backlog_queued(tmp_path)
 
     assert outcome.uploaded == 2
     assert len(pending_segments(queue_dir)) == 2
+
+
+class OrderedStorageClient(FakeStorageClient):
+    """Records what reached storage, including what a marker flush sent."""
+
+    def flush_markers(self) -> bool:
+        self.uploaded.append("<marker flush>")
+        return True
+
+
+def test_flush_pending_sends_every_flag_marker_before_any_segment(tmp_path):
+    # The reboot-mid-backlog case. Name order puts the segments first, which
+    # is exactly backwards: a flush that cannot finish would upload a day's
+    # footage and leave its flags on the card for the next boot, and the
+    # nightly run would score those segments unflagged.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4", "20260704_120100.mp4")
+    (queue_dir / "FLAG_20260704_120030.marker").write_bytes(b"")
+    (queue_dir / "FLAG_20260704_120101.marker").write_bytes(b"")
+    storage = FakeStorageClient()
+
+    uploaded = flush_pending(queue_dir, storage, "device-abc", unlimited_upload_limit())
+
+    assert uploaded == 4
+
+    assert storage.uploaded == [
+        "device-abc/FLAG_20260704_120030.marker",
+        "device-abc/FLAG_20260704_120101.marker",
+        "device-abc/20260704_120000.mp4",
+        "device-abc/20260704_120100.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+
+
+def test_a_retry_round_flushes_the_markers_before_its_first_segment(tmp_path):
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4", "20260704_120100.mp4")
+    storage = OrderedStorageClient()
+
+    _retry(queue_dir, storage, UploadHealth(), flush_markers=storage.flush_markers)
+
+    assert storage.uploaded == [
+        "<marker flush>",
+        "device-abc/20260704_120000.mp4",
+        "device-abc/20260704_120100.mp4",
+    ]
+
+
+def test_a_retry_round_with_nothing_queued_does_not_flush_markers(tmp_path):
+    # No segment is about to reach storage, so there is nothing to order
+    # against and no reason to spend a request on a possibly dead network.
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    storage = OrderedStorageClient()
+
+    _retry(queue_dir, storage, UploadHealth(), flush_markers=storage.flush_markers)
+
+    assert storage.uploaded == []
+
+
+def test_a_cancelled_retry_round_does_not_flush_markers(tmp_path):
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    storage = OrderedStorageClient()
+
+    _retry(
+        queue_dir,
+        storage,
+        UploadHealth(),
+        cancel=lambda: True,
+        flush_markers=storage.flush_markers,
+    )
+
+    assert storage.uploaded == []
+
+
+def test_on_segment_complete_flushes_the_markers_before_its_own_upload(tmp_path):
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    storage = OrderedStorageClient()
+
+    on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=FakeCommandRunner(),
+        storage_client=storage,
+        status_client=FakeStatusClient(),
+        led_driver=FakeLedDriver(),
+        battery=battery_state(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        flush_markers=storage.flush_markers,
+    )
+
+    assert storage.uploaded == ["<marker flush>", "device-abc/20260704_120000.mp4"]
+
+
+def test_upload_segment_flushes_the_markers_before_an_already_queued_segment(
+    tmp_path,
+):
+    # The stop path: the main thread muxes and queues the cut-short last
+    # segment itself, so the worker uploads it through upload_segment rather
+    # than on_segment_complete. Its flags must still go up first.
+    queue_dir = tmp_path / "queue"
+    _queued(queue_dir, "20260704_120000.mp4")
+    storage = OrderedStorageClient()
+
+    upload_segment(
+        queued_path=queue_dir / "20260704_120000.mp4",
+        audio_active=False,
+        queue_dir=queue_dir,
+        storage_client=storage,
+        status_client=FakeStatusClient(),
+        led_driver=FakeLedDriver(),
+        battery=battery_state(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        flush_markers=storage.flush_markers,
+    )
+
+    assert storage.uploaded == ["<marker flush>", "device-abc/20260704_120000.mp4"]
+
+
+def test_a_marker_flush_that_could_not_finish_still_uploads_the_segment(tmp_path):
+    # Footage outranks marker ordering, and the pipeline's late-marker
+    # handling is the backstop.
+    h264_path = tmp_path / "raw" / "20260704_120000.h264"
+    h264_path.parent.mkdir()
+    h264_path.write_bytes(b"")
+    storage = FakeStorageClient()
+    health = UploadHealth()
+
+    result = on_segment_complete(
+        h264_path=h264_path,
+        queue_dir=tmp_path / "queue",
+        command_runner=FakeCommandRunner(),
+        storage_client=storage,
+        status_client=FakeStatusClient(),
+        led_driver=FakeLedDriver(),
+        battery=battery_state(85),
+        device_id="device-abc",
+        segments_uploaded_today=0,
+        framerate=30,
+        disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
+        data_dir=tmp_path,
+        upload_limit=unlimited_upload_limit(),
+        upload_health=health,
+        flush_markers=lambda: False,
+    )
+
+    assert storage.uploaded == ["device-abc/20260704_120000.mp4"]
+    assert result.upload_ok is True
+    # A marker that could not be sent is not a lost segment, so it must not
+    # count towards the Critical escalation.
+    assert health.consecutive_failures == 0
+
+
+@pytest.mark.parametrize(
+    ("ended_at", "now", "expected"),
+    [
+        (100.0, 101.0, [2.0]),
+        (100.0, 103.0, []),
+        (100.0, 500.0, []),
+        # A clock that has gone backwards still never waits beyond the gap.
+        (100.0, 50.0, [3.0]),
+    ],
+)
+def test_the_restart_gap_wait_ends_at_the_gap_and_never_lasts_longer(
+    ended_at, now, expected
+):
+    slept: list[float] = []
+
+    wait_out_restart_gap(
+        ended_at, gap_sec=3.0, monotonic=lambda: now, sleep=slept.append
+    )
+
+    assert slept == expected

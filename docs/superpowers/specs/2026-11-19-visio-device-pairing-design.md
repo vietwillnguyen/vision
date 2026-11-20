@@ -711,7 +711,7 @@ Firmware and app roll back together with it, since v1 and v2 payloads are mutual
 2. **Re-onboarding a paired pendant whose Wi-Fi is gone.**
    A paired pendant scans for a QR only after Supabase tells it its login is dead.
    If the Wi-Fi it knows no longer exists (new router, new home, or a sale to another account), it can never hear that, so it never scans; today's firmware has the same limitation.
-   Recommendation: a follow-up that enters scanning on a long press of the flag button (about 5 s), which deletes `session.json` locally.
+   Recommendation: a follow-up that enters scanning from a button gesture, which deletes `session.json` locally; the pendant spec's planned hold ladder now gives this to a hold of 10 s or more from Stopped (a 5-10 s hold is the graceful power-off).
    Until then the path is `sudo rm /var/lib/visio-recorder/session.json` over SSH and a restart.
 3. **Storage-api and `owner_id` in the insert check.**
    Resolved: kept.
@@ -751,6 +751,11 @@ Where the implementation differs from, or adds to, the text above:
 - **A pending pairing gives up on Wi-Fi.**
   `pairing.json` also carries `failed_activations`; after `MAX_FAILED_PENDING_ACTIVATIONS` (3) boots in a row whose Wi-Fi activation failed, it is deleted and the next boot scans, so a mistyped Wi-Fi password cannot strand the pendant.
   A boot that connects resets the count.
+- **Boot order with the battery and LED work (merged from main, 2026-11).**
+  `main()` runs the debounced battery boot check first, and a confirmed halt powers the pendant off before the pairing state is read, so a flat unpaired or pending pendant never scans or signs in.
+  Only then does `pair_and_connect` run the pairing gate, with every LED write (the Critical flash for a failed Wi-Fi activation, a refused code or a revoked login) going through the process's one `LedController`.
+  The flag button and its `FlagUploadWorker` start after the gate and take the storage adapter built on the gate's one client, as do the segment uploader and the status reporter.
+  Every early exit (battery power-off, back to scanning, Wi-Fi failure) closes the `LedController`, and none of them has started the flag worker yet.
 - **QR expiry is timed by the server's lifetime.**
   `create_pairing_code` also returns `expires_in` (seconds), and the app times the QR from the moment the code arrived instead of comparing `expires_at` with the phone's clock.
 - **The app forgets the code and the Wi-Fi password** as soon as the QR is no longer shown (paired, expired, error or closed).

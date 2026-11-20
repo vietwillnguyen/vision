@@ -1,0 +1,125 @@
+visio flag-marker offline-first simulation, 2026-11-19 20:16
+firmware: /home/viet/git/vietwillnguyen/vision/.claude/worktrees/flag-merge/firmware
+
+==============================================================================
+1. WiFi down for hours, then restored
+==============================================================================
+Production retry schedule, straight out of RetryBackoff():
+  consecutive failures 1..6 -> 30s, 60s, 120s, 240s, 480s, 480s
+  simulated here at 1/1500: 20ms, 40ms, 80ms, 160ms, 320ms, 320ms
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmpiz5_zhir/data/queue/20260704_120000.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmpiz5_zhir/data/queue/20260704_120100.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmpiz5_zhir/data/queue/20260704_120000.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmpiz5_zhir/data/queue/20260704_120100.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmpiz5_zhir/data/queue/20260704_120200.mp4 failed; keeping it queued
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: upload of /tmp/tmpiz5_zhir/data/queue/20260704_120300.mp4 failed; keeping it queued
+
+Holding the outage for 19 retry rounds = 2.1 device-hours (6.1s real at worst)
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+    firmware: flag marker upload failed; /tmp/tmpiz5_zhir/data/queue/FLAG_20260704_120030.marker stays queued for the next retry
+  [PASS] the marker is retried in process while the network is down: 19 attempts over 2.1 device-hours
+  [PASS] every one of those attempts was the flag worker's: {'flag-upload-worker'}
+  [PASS] nothing reached storage while the network was down
+  [PASS] the marker is still on the card
+  [PASS] the acknowledgement blink reached the wire with no network at all: 1 magenta frame(s)
+  [PASS] the upload failures still latched Critical red
+  [PASS] no two LED frames interleaved
+
+WiFi comes back.
+  storage, in the order it received things:
+    device-sim/FLAG_20260704_120030.marker
+    device-sim/20260704_120000.mp4
+    device-sim/20260704_120100.mp4
+    device-sim/20260704_120200.mp4
+    device-sim/20260704_120300.mp4
+    device-sim/20260704_120400.mp4
+  [PASS] the flag reached storage before any of its day's footage: every marker preceded every segment
+  [PASS] the queue drained completely
+
+==============================================================================
+2. Flaky WiFi (every other attempt fails)
+==============================================================================
+    firmware: upload of /tmp/tmp22xj8iy7/data/queue/20260704_120000.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp22xj8iy7/data/queue/20260704_120000.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp22xj8iy7/data/queue/20260704_120200.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp22xj8iy7/data/queue/20260704_120200.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp22xj8iy7/data/queue/20260704_120200.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp22xj8iy7/data/queue/20260704_120400.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmp22xj8iy7/data/queue/20260704_120400.mp4 failed; keeping it queued
+  [PASS] all three presses reached storage: ['device-sim/FLAG_20260704_120030.marker', 'device-sim/FLAG_20260704_120215.marker', 'device-sim/FLAG_20260704_120401.marker']
+  [PASS] the queue drained completely
+  [PASS] each press was acknowledged on the wire: 3 magenta frames
+  [PASS] no two LED frames interleaved
+
+==============================================================================
+3. Reboot in the middle of a backlog
+==============================================================================
+  on the card at boot (name order, which is what the queue lists):
+    20260704120000.mp4
+    20260704120100.mp4
+    20260704120200.mp4
+    20260704120300.mp4
+    FLAG_20260704_120030.marker
+    FLAG_20260704_120401.marker
+    firmware: upload of /tmp/tmpjmgprp5z/data/queue/20260704120100.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmpjmgprp5z/data/queue/20260704120200.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmpjmgprp5z/data/queue/20260704120300.mp4 failed; keeping it queued
+  reached storage before the power went:
+    device-sim/FLAG_20260704_120030.marker
+    device-sim/FLAG_20260704_120401.marker
+    device-sim/20260704120000.mp4
+  [PASS] the partial flush sent the flags, not three segments and no flags: 2 of 2 markers, 1 segment(s)
+  [PASS] no flag is left behind a segment that already reached storage
+  still on the card for the next boot:
+    20260704120100.mp4
+    20260704120200.mp4
+    20260704120300.mp4
+  [PASS] the next boot clears the rest: 3 more uploaded
+
+==============================================================================
+4. A press while a segment upload is in flight
+==============================================================================
+  [PASS] the press handler returned while the segment upload was still blocked: 5.5 ms
+  [PASS] the marker was on the card before the uploader was told about it
+  [PASS] the wearer was acknowledged before the upload even finished
+  LED timeline on the wire:
+    green (recording)
+    blue (uploading)
+    MAGENTA (flag acknowledged)
+    green (recording)
+  [PASS] the blink did not leave magenta on: green (recording) - the upload finished mid-blink, so that state change won and the restore stood down
+  [PASS] only the flag worker ever uploaded a marker
+  [PASS] no two LED frames interleaved
+
+==============================================================================
+5. A press in the restart gap, after the segment has been muxed
+==============================================================================
+  storage, in the order it received things:
+    device-sim/FLAG_20260704_120102.marker
+    device-sim/20260704_120000.mp4
+    device-sim/20260704_120100.mp4
+  [PASS] the segment waited for its gap, and never longer than the gap: waited 2.93 s of the unscaled 3 s gap
+  [PASS] the gap press reached storage before the segment it flags: ['device-sim/FLAG_20260704_120102.marker', 'device-sim/20260704_120000.mp4', 'device-sim/20260704_120100.mp4']
+  [PASS] the queue drained completely
+
+==============================================================================
+Result
+==============================================================================
+  every check passed

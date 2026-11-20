@@ -1,0 +1,29 @@
+// Let the visio-recorder service user power the pendant off.
+//
+// A confirmed low-battery halt ends in `systemctl poweroff` so an idle Pi
+// never sits discharging until the rail collapses mid-write. That call goes
+// through logind, which asks polkit, and the daemon does not run as root - so
+// without this rule the halt is refused with "Interactive authentication
+// required", the daemon logs an error, and the device stays powered. Where a
+// PiJuice is fitted its own 60-second timer still cuts the rail, but that is
+// a cut without a completed halt, which is the brownout this path exists to
+// avoid.
+//
+// Install as /etc/polkit-1/rules.d/10-visio-recorder-poweroff.rules.
+//
+// Deliberately no subject.local / subject.active check. Those are what a
+// desktop rule uses to mean "the person at the keyboard", and a systemd
+// system service has neither a seat nor a session, so polkit evaluates both
+// as false for this daemon and such a rule would simply never match. The user
+// is the whole subject here.
+//
+// The user below must stay the same as `User=` in visio-recorder.service;
+// change the two together or the halt silently loses its power-off.
+polkit.addRule(function (action, subject) {
+  if (
+    action.id == "org.freedesktop.login1.power-off" &&
+    subject.user == "pi"
+  ) {
+    return polkit.Result.YES;
+  }
+});

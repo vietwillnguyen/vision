@@ -1,5 +1,7 @@
 # Visio Device Provisioning & Preflight Implementation Plan
 
+> **Superseded (2026-11-19):** the LED states and boot-to-Recording behaviour in this executed plan are superseded by the LED state machine in the pendant spec (PR #102); this plan is kept as history and not rewritten.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An idempotent device-provisioning script and a firmware-level preflight check for the Visio pendant's Raspberry Pi Zero 2W, both aware that the PiJuice battery HAT is currently unavailable and must not block on its absence.
@@ -1078,6 +1080,82 @@ Expected: no re-onboarding (session already persisted), no re-registration (devi
 
 **[human]** Physically disconnect the USB power bank mid-recording (not a clean `systemctl stop`), then reconnect. Confirm the Pi boots cleanly and the daemon starts without a corrupted `session.json` or NM keyfile blocking the next boot.
 
-- [ ] **Step 11: Record the outcome**
+#### Battery hardening checks (need real battery hardware)
+
+Steps 11-15 verify the battery-hardening behaviour specified in the pendant spec's "Battery and Power Management" section.
+Every one of them is here because it cannot be simulated: the firmware's logic is covered by unit tests against fake and triggerable readers, but nothing off the bench can prove a real fuel gauge, a real sagging cell, or a real rail actually behaving as the datasheet says.
+They are blocked until a PiJuice pHAT or a replacement I2C fuel gauge is sourced (see this plan's battery-hardware deferral) and do not gate the rest of Task 9 on a USB power bank, where `VISIO_BATTERY_SOURCE=none` reports a fixed 100 % and none of these paths is reachable.
+
+- [ ] **Step 11: Confirm the gauge and the telemetry the firmware reads**
+
+With the HAT fitted and `VISIO_BATTERY_SOURCE=pijuice`:
+
+```bash
+cd /opt/visio-recorder/firmware
+sudo /opt/visio-recorder/.venv/bin/python3 - <<'PY'
+from pijuice import PiJuice
+pj = PiJuice(1, 0x14)
+print("charge:", pj.status.GetChargeLevel())
+print("voltage_mv:", pj.status.GetBatteryVoltage())
+print("status:", pj.status.GetStatus())
+PY
+```
+
+Expected: `GetChargeLevel` returns a plausible percentage, `GetBatteryVoltage` returns millivolts in the 3300-4200 range for a 1S LiPo, and `GetStatus`'s `data` carries `battery`, `powerInput` and `powerInput5vIo` keys.
+A missing key or an `error` other than `NO_ERROR` means the firmware's `PiJuiceBatteryReader` telemetry methods need adjusting for this HAT's firmware version - the one thing the unit tests cannot catch, because they assert against the shapes read out of the vendor library's source rather than out of the device.
+
+- [ ] **Step 12: [human] Measure the voltage sag the floor has to tolerate**
+
+Record the terminal voltage while the pendant is idle, then while it is recording and uploading, at a mid-range state of charge:
+
+```bash
+while true; do
+  sudo /opt/visio-recorder/.venv/bin/python3 -c "from pijuice import PiJuice; print(PiJuice(1,0x14).status.GetBatteryVoltage()['data'])"
+  sleep 2
+done
+```
+
+Expected: the sag between idle and recording-plus-uploading is well under the headroom between a mid-charge resting voltage and the 3300 mV floor.
+If the sag is large enough that a healthy cell transiently reads under 3300 mV, `BATTERY_FLOOR_MV` is too high for this pack and this is the measurement that says so - the only way to know is to measure this battery under this load.
+
+- [ ] **Step 13: Confirm the halt drains, powers off, and wakes on charge**
+
+Run the pendant on its pack, charger disconnected, until the cell is genuinely discharged to the halt threshold, and follow the journal the whole way down:
+
+```bash
+sudo journalctl -u visio-recorder -f
+```
+
+Expected, in order: the LED turns low-battery yellow once the smoothed charge falls under 20 %; a `confirmed below 10%` line (or `confirmed below the 3300 mV floor`, if the voltage gets there first) naming the halt reason; recording stops and the upload queue drains, or `did not drain within 120 s` is logged; the LED goes Halted solid red; `battery halt: powering off`; and the Pi halts.
+No `pijuice SetWakeUpOnCharge`, `SetSystemPowerSwitch` or `SetPowerOff` error line appears - those calls log only when the HAT refuses them.
+Then confirm the wake: leave the pack where it halted, connect the charger, and confirm the Pi powers up on its own at about 25 % with no button press and no manual reboot, and boots with no yellow low-battery LED: with today's firmware it goes straight to recording (green), and once the default-stopped boot from the LED state machine lands it comes up Stopped (dim white) instead.
+This is the step the whole feature exists for, and the wake is the half that cannot be faked at all - `SetWakeUpOnCharge` writes a register the HAT acts on after the Pi is already off.
+
+- [ ] **Step 14: Confirm `systemctl poweroff` succeeds as the service user**
+
+```bash
+sudo -u <service-user> systemctl poweroff --dry-run; echo "exit: $?"
+systemctl --no-pager show visio-recorder -p User
+ls -l /etc/polkit-1/rules.d/ | grep -i visio
+```
+
+Expected: the polkit rule shipped beside the systemd unit is installed, and the call is authorized rather than refused.
+A refusal here is silent in production - the halt logs a failure and the PiJuice's 60 s timer becomes the only thing that stops the device, which is a brownout rather than a clean shutdown.
+On a unit still running as root this passes trivially; it is the non-root unit it exists to check.
+
+- [ ] **Step 15: Confirm a charging pendant never halts**
+
+With a pack discharged under 10 % (the end state of Step 13 works), connect the charger and let the pendant boot and record for at least five minutes while the gauge still reads under the halt threshold.
+Read what the HAT reports alongside the journal:
+
+```bash
+sudo /opt/visio-recorder/.venv/bin/python3 -c "from pijuice import PiJuice; s=PiJuice(1,0x14).status; print(s.GetStatus()['data'], s.GetChargeLevel()['data'])"
+sudo journalctl -u visio-recorder --since "5 minutes ago" | grep -i "halt\|powering off"
+```
+
+Expected: `GetStatus` reports `powerInput` (or `powerInput5vIo`) as `PRESENT` and `battery` as a `CHARGING_FROM_*` state while the charge reads under 10 %; the LED stays low-battery yellow, never Halted red; new segments keep arriving in the app; and the journal grep is empty - no halt and no power-off.
+Then, still under 10 %, disconnect the charger and confirm the halt proceeds after the confirmation count, ending in the same sequence as Step 13, which is the same check from the other side.
+
+- [ ] **Step 16: Record the outcome**
 
 If every step above passes, this plan is fully verified end to end. If anything fails, file it as a GitHub issue against the `vision` repo referencing this plan and the specific step, rather than patching ad hoc - the fix should go through its own TDD cycle like everything else in this codebase.

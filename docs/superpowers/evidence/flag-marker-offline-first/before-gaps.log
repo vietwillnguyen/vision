@@ -1,0 +1,29 @@
+visio flag marker, BEFORE - firmware at /tmp/before
+
+1. A failed marker waits for the next boot
+----------------------------------------------------------------------
+    firmware: flag marker upload failed; /tmp/tmpetohwvuw/queue/FLAG_20260704_120030.marker stays queued for next-boot flush
+  upload attempts in 2 s of outage: 1
+  still queued: ['FLAG_20260704_120030.marker']
+  -> one attempt, ever. The flag is stuck on the card until a reboot,
+     and the nightly run scores that segment unflagged.
+
+2. The startup flush sends segments before their flags
+----------------------------------------------------------------------
+    firmware: upload of /tmp/tmpo93jnmml/queue/20260704120300.mp4 failed; keeping it queued
+    firmware: upload of /tmp/tmpo93jnmml/queue/FLAG_20260704_120030.marker failed; keeping it queued
+    firmware: upload of /tmp/tmpo93jnmml/queue/FLAG_20260704_120401.marker failed; keeping it queued
+  reached storage before the power went:
+    device-sim/20260704120000.mp4
+    device-sim/20260704120100.mp4
+    device-sim/20260704120200.mp4
+  still on the card: ['20260704120300.mp4', 'FLAG_20260704_120030.marker', 'FLAG_20260704_120401.marker']
+  -> three segments up, neither flag. Name order puts digits before
+     'FLAG_', so the footage always overtakes the flags.
+
+3. A press has no local feedback at all
+----------------------------------------------------------------------
+  make_flag_press_handler parameters: ['queue_dir', 'submit', 'clock', 'cooldown']
+  write_flag_marker syncs anything: False
+  -> nothing to acknowledge with, and the marker is only as durable
+     as the page cache: touch() and return.

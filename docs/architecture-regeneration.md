@@ -6,6 +6,7 @@
 - `2026-07-04-visio-pendant-design.md` - the pendant design spec.
 - `2026-07-20-wifi-reonboard-qr-screen-design.md` - the WiFi + auth re-onboarding QR screen.
 - `2026-07-21-visio-device-provisioning-design.md` - device provisioning and runtime preflight.
+- `2026-11-18-visio-recording-control-design.md` - recording stop/start control and the default stopped state.
 - `2026-11-19-visio-device-pairing-design.md` - the pendant's own login through a one-time pairing code.
 
 Edit the specs, not the HTML directly - then regenerate the HTML from them.
