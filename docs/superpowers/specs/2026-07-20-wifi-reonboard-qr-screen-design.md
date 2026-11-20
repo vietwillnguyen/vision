@@ -1,7 +1,14 @@
 # WiFi + Auth Re-onboarding QR Screen
 
 **Date:** 2026-07-20
-**Status:** Approved, ready for implementation planning.
+**Status:** Built. The QR payload described here (v1, carrying the user's session tokens) has been replaced by payload v2.
+
+> **Payload superseded (2026-11-19).**
+> Handing the pendant the phone's own session made the pendant lose its login whenever the phone refreshed twice or the user logged out.
+> [`2026-11-19-visio-device-pairing-design.md`](2026-11-19-visio-device-pairing-design.md) replaces the payload with v2, `{v, ssid, password, pairing_code}`, and gives the pendant its own login.
+> The screen, navigation and component structure below still stand; the payload fields, the `getSession()` call and the "any change to the onboarding contract" non-goal do not.
+> That work has landed: the app emits v2, firmware refuses v1, and the screen gained "Pendant paired" and "This code has expired" steps, a title, and a Cancel button.
+> The container now takes `deviceId` and `onDone` props instead of navigation props, so the same screen also runs the first pairing for an account with no device.
 
 ## Background
 

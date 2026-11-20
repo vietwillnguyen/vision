@@ -1,76 +1,60 @@
 import json
-import uuid
 
 import pytest
 
 from visio_recorder.device_identity import (
-    DeviceRegistrationClient,
-    load_or_create_device_id,
-    register_device,
+    load_paired_device_id,
+    store_paired_device_id,
 )
 
-
-def test_load_or_create_device_id_generates_a_valid_uuid_when_missing(tmp_path):
-    state_path = tmp_path / "device_id.json"
-
-    device_id = load_or_create_device_id(state_path)
-
-    assert uuid.UUID(device_id)
-    assert state_path.exists()
+DEVICE_ID = "11111111-1111-1111-1111-111111111111"
 
 
-def test_load_or_create_device_id_returns_the_same_id_on_subsequent_calls(tmp_path):
-    state_path = tmp_path / "device_id.json"
+def test_store_then_load_round_trips(tmp_path):
+    state_path = tmp_path / "device.json"
 
-    first = load_or_create_device_id(state_path)
-    second = load_or_create_device_id(state_path)
+    store_paired_device_id(state_path, DEVICE_ID)
 
-    assert first == second
-
-
-def test_load_or_create_device_id_reads_a_pre_existing_file(tmp_path):
-    state_path = tmp_path / "device_id.json"
-    state_path.write_text(
-        json.dumps({"device_id": "11111111-1111-1111-1111-111111111111"})
-    )
-
-    assert (
-        load_or_create_device_id(state_path) == "11111111-1111-1111-1111-111111111111"
-    )
+    assert load_paired_device_id(state_path) == DEVICE_ID
+    assert json.loads(state_path.read_text()) == {"device_id": DEVICE_ID, "pairing": 2}
 
 
-@pytest.mark.parametrize("corrupt_content", ["", '{"device_id', '{"other": 1}'])
-def test_load_or_create_device_id_recovers_from_a_corrupt_file(
-    tmp_path, corrupt_content
-):
-    state_path = tmp_path / "device_id.json"
-    state_path.write_text(corrupt_content)
+def test_store_replaces_an_existing_file_and_leaves_no_temp_files(tmp_path):
+    state_path = tmp_path / "device.json"
+    state_path.write_text(json.dumps({"device_id": "legacy"}))
 
-    device_id = load_or_create_device_id(state_path)
+    store_paired_device_id(state_path, DEVICE_ID)
 
-    assert uuid.UUID(device_id)
-    assert json.loads(state_path.read_text()) == {"device_id": device_id}
+    assert load_paired_device_id(state_path) == DEVICE_ID
+    assert [p.name for p in tmp_path.iterdir()] == ["device.json"]
 
 
-def test_load_or_create_device_id_leaves_no_temp_files(tmp_path):
-    state_path = tmp_path / "device_id.json"
-
-    load_or_create_device_id(state_path)
-
-    assert [p.name for p in tmp_path.iterdir()] == ["device_id.json"]
+def test_load_of_a_missing_file_is_none(tmp_path):
+    assert load_paired_device_id(tmp_path / "device.json") is None
 
 
-class FakeDeviceRegistrationClient(DeviceRegistrationClient):
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+def test_load_of_a_legacy_file_without_the_marker_is_none(tmp_path):
+    # Written by firmware that borrowed the owner's session: not a pairing.
+    state_path = tmp_path / "device.json"
+    state_path.write_text(json.dumps({"device_id": DEVICE_ID}))
 
-    def upsert_device(self, device_id: str, name: str) -> None:
-        self.calls.append((device_id, name))
+    assert load_paired_device_id(state_path) is None
 
 
-def test_register_device_calls_client_with_id_and_name():
-    client = FakeDeviceRegistrationClient()
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        '{"device_id',
+        "[]",
+        '{"pairing": 2}',
+        json.dumps({"device_id": 7, "pairing": 2}),
+        json.dumps({"device_id": DEVICE_ID, "pairing": 1}),
+        json.dumps({"device_id": DEVICE_ID, "pairing": "2"}),
+    ],
+)
+def test_load_of_a_corrupt_or_foreign_file_is_none(tmp_path, content):
+    state_path = tmp_path / "device.json"
+    state_path.write_text(content)
 
-    register_device(client, "11111111-1111-1111-1111-111111111111", "visio-pendant")
-
-    assert client.calls == [("11111111-1111-1111-1111-111111111111", "visio-pendant")]
+    assert load_paired_device_id(state_path) is None

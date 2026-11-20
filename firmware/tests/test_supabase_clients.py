@@ -3,9 +3,14 @@ from pathlib import Path
 
 import pytest
 from storage3.exceptions import StorageApiError
+from supabase_auth.errors import AuthApiError, AuthRetryableError
 
-from visio_recorder.supabase_clients import SupabaseStorage, build_supabase_clients
-from visio_recorder.uploader import ObjectTooLargeError
+from visio_recorder.supabase_clients import (
+    SessionRevokedError,
+    SupabaseStorage,
+    build_supabase_clients,
+)
+from visio_recorder.uploader import ObjectAlreadyStoredError, ObjectTooLargeError
 
 
 class FakeUser:
@@ -18,13 +23,50 @@ class FakeAuthResponse:
         self.user = FakeUser(user_id)
 
 
+class FakeSession:
+    def __init__(self, access_token: str, refresh_token: str) -> None:
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+
+
 class FakeAuth:
+    """supabase-py's auth client, as far as the daemon uses it.
+
+    ``refresh_session`` rotates to ``refreshed`` and notifies TOKEN_REFRESHED,
+    as the real refresh-token grant does. ``set_session_error`` models what
+    ``set_session`` raises when it trusts the pendant's own clock; see
+    ``test_a_pendant_whose_clock_is_behind_keeps_its_login``.
+    """
+
     def __init__(self, user_id: str) -> None:
         self._user_id = user_id
         self.session_set_with: tuple[str, str] | None = None
+        self.refreshed_with: list[str] = []
+        self.refreshed = FakeSession("at-boot", "rt-boot")
+        self.refresh_error: Exception | None = None
+        self.set_session_error: Exception | None = None
+        self._subscribers: list = []
+
+    def on_auth_state_change(self, callback) -> None:
+        self._subscribers.append(callback)
+
+    def emit(self, event: str, session: FakeSession | None) -> None:
+        for callback in self._subscribers:
+            callback(event, session)
 
     def set_session(self, access_token: str, refresh_token: str) -> FakeAuthResponse:
         self.session_set_with = (access_token, refresh_token)
+        if self.set_session_error is not None:
+            raise self.set_session_error
+        self.emit("SIGNED_IN", FakeSession(access_token, refresh_token))
+        return FakeAuthResponse(self._user_id)
+
+    def refresh_session(self, refresh_token: str | None = None) -> FakeAuthResponse:
+        assert refresh_token is not None
+        self.refreshed_with.append(refresh_token)
+        if self.refresh_error is not None:
+            raise self.refresh_error
+        self.emit("TOKEN_REFRESHED", self.refreshed)
         return FakeAuthResponse(self._user_id)
 
 
@@ -36,6 +78,7 @@ class FakeStorageBucket:
         self._uploads = uploads
         self._objects = objects
         self.info_has_size = True
+        self.info_hides_existing = False
         self.max_size: int | None = None
 
     def upload(self, path: str, file, file_options=None) -> None:
@@ -66,8 +109,9 @@ class FakeStorageBucket:
         self._objects[key] = data
 
     def info(self, path: str) -> dict:
-        # Like the storage API: a missing object is a 404 not_found.
-        if (self._bucket, path) not in self._objects:
+        # Like the storage API: a missing object is a 404 not_found, and so
+        # is one this login's select policy does not let it see.
+        if (self._bucket, path) not in self._objects or self.info_hides_existing:
             raise StorageApiError("Object not found", "not_found", 404)
         info: dict = {"name": path}
         if self.info_has_size:
@@ -101,11 +145,13 @@ class FakeStorage:
         self._uploads = uploads
         self.objects: dict = {}
         self.info_has_size = True
+        self.info_hides_existing = False
         self.max_size: int | None = None
 
     def from_(self, bucket: str) -> FakeStorageBucket:
         api = FakeStorageBucket(bucket, self._uploads, self.objects)
         api.info_has_size = self.info_has_size
+        api.info_hides_existing = self.info_hides_existing
         api.max_size = self.max_size
         return api
 
@@ -146,7 +192,7 @@ def _write_session(tmp_path: Path) -> Path:
     return session
 
 
-def test_build_sets_the_session_before_any_client_use(tmp_path):
+def test_build_restores_the_login_from_the_saved_refresh_token(tmp_path):
     fake = FakeSupabase()
     build_supabase_clients(
         "http://x",
@@ -154,7 +200,94 @@ def test_build_sets_the_session_before_any_client_use(tmp_path):
         _write_session(tmp_path),
         client_factory=lambda url, key: fake,
     )
-    assert fake.session_set_with == ("at", "rt")
+    assert fake.auth.refreshed_with == ["rt"]
+
+
+def _stored_session(path: Path) -> dict:
+    return json.loads(path.read_text())
+
+
+def test_a_token_refresh_during_the_run_is_written_back_to_session_json(tmp_path):
+    # Refresh tokens rotate and each one works once, so a pendant that only
+    # ever keeps the token it was onboarded with cannot log in after a reboot
+    # once it has refreshed twice in a run (reproduced against the local
+    # stack: "Invalid Refresh Token: Already Used").
+    fake = FakeSupabase()
+    session_path = _write_session(tmp_path)
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    fake.auth.emit("TOKEN_REFRESHED", FakeSession("at-2", "rt-2"))
+
+    assert _stored_session(session_path) == {
+        "access_token": "at-2",
+        "refresh_token": "rt-2",
+    }
+
+
+def test_the_refresh_at_boot_is_written_back_too(tmp_path):
+    # The boot refresh rotates the refresh token, so the listener has to be
+    # registered before it runs.
+    fake = FakeSupabase()
+    session_path = _write_session(tmp_path)
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    assert _stored_session(session_path) == {
+        "access_token": "at-boot",
+        "refresh_token": "rt-boot",
+    }
+
+
+def test_a_pendant_whose_clock_is_behind_keeps_its_login(tmp_path):
+    # A Pi has no RTC, so before NTP syncs its clock can be hours behind. An
+    # access token that really expired then looks valid to set_session, which
+    # asks GoTrue for the user and gets 403 bad_jwt "token is expired". That
+    # says nothing about the login, so it must never unpair the pendant.
+    fake = FakeSupabase()
+    fake.auth.set_session_error = AuthApiError(
+        "invalid JWT: unable to parse or verify signature, token has invalid "
+        "claims: token is expired",
+        403,
+        "bad_jwt",
+    )
+    session_path = _write_session(tmp_path)
+
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    assert _stored_session(session_path)["refresh_token"] == "rt-boot"
+
+
+def test_events_without_a_session_leave_session_json_alone(tmp_path):
+    # A sign-out notification carries no session; erasing the file would turn
+    # a transient server-side revoke into a permanent loss of the login.
+    fake = FakeSupabase()
+    session_path = _write_session(tmp_path)
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+    before = session_path.read_text()
+
+    fake.auth.emit("SIGNED_OUT", None)
+
+    assert session_path.read_text() == before
+
+
+def test_a_written_back_session_stays_private_and_leaves_no_temp_file(tmp_path):
+    fake = FakeSupabase()
+    session_path = _write_session(tmp_path)
+    build_supabase_clients(
+        "http://x", "anon", session_path, client_factory=lambda url, key: fake
+    )
+
+    fake.auth.emit("TOKEN_REFRESHED", FakeSession("at-2", "rt-2"))
+
+    assert session_path.stat().st_mode & 0o777 == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["session.json"]
 
 
 def test_storage_adapter_uploads_to_bucket_and_path(tmp_path):
@@ -293,6 +426,25 @@ def test_storage_adapter_refuses_a_different_file_under_an_existing_key(tmp_path
     )
 
 
+def test_storage_adapter_reports_a_duplicate_it_cannot_see_distinctly(tmp_path):
+    # The pendant reads back only what its own login uploaded, so an object
+    # stored under an earlier pairing looks absent and the upload gets a 409.
+    fake = FakeSupabase()
+    clients = build_supabase_clients(
+        "http://x",
+        "anon",
+        _write_session(tmp_path),
+        client_factory=lambda url, key: fake,
+    )
+    fake.storage.objects[("segments", "device-abc/20260709_080000.mp4")] = b"old"
+    fake.storage.info_hides_existing = True
+    local = tmp_path / "20260709_080000.mp4"
+    local.write_bytes(b"payload")
+
+    with pytest.raises(ObjectAlreadyStoredError, match="20260709_080000.mp4"):
+        clients.storage.upload("segments", "device-abc/20260709_080000.mp4", local)
+
+
 def test_storage_adapter_labels_segments_as_video_mp4(tmp_path):
     # storage3's default content-type is text/plain;charset=UTF-8.
     upload = _upload_one(tmp_path, "20260709_080000.mp4")
@@ -338,17 +490,70 @@ def test_status_adapter_upserts_device_status_row(tmp_path):
     assert fake.upserts["device_status"] == [status]
 
 
-def test_registration_adapter_upserts_device_row(tmp_path):
-    fake = FakeSupabase(user_id="user-xyz")
-    clients = build_supabase_clients(
-        "http://x",
-        "anon",
-        _write_session(tmp_path),
-        client_factory=lambda url, key: fake,
-    )
+@pytest.mark.parametrize(
+    "code",
+    [
+        # What GoTrue answers for a deleted device user (Remove device, a
+        # re-pair) or a deleted session; reproduced against the local stack.
+        "refresh_token_not_found",
+        "refresh_token_already_used",
+        "session_not_found",
+        "session_expired",
+        "user_not_found",
+        "user_banned",
+    ],
+)
+def test_a_definite_refusal_of_the_refresh_means_the_login_was_revoked(tmp_path, code):
+    fake = FakeSupabase()
+    fake.auth.refresh_error = AuthApiError("refused", 400, code)
 
-    clients.registration.upsert_device("device-abc", "Visio Pendant")
+    with pytest.raises(SessionRevokedError):
+        build_supabase_clients(
+            "http://x",
+            "anon",
+            _write_session(tmp_path),
+            client_factory=lambda url, key: fake,
+        )
 
-    assert fake.upserts["devices"] == [
-        {"device_id": "device-abc", "user_id": "user-xyz", "name": "Visio Pendant"}
-    ]
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AuthApiError("Request rate limit reached", 429, "over_request_rate_limit"),
+        AuthApiError("Internal Server Error", 500, None),
+        AuthApiError("token is expired", 403, "bad_jwt"),
+        AuthApiError("Refresh token is not valid", 400, "validation_failed"),
+        AuthApiError("Bad Request", 400, None),
+        AuthRetryableError("connection refused", 0),
+        AuthRetryableError("Bad Gateway", 502),
+    ],
+)
+def test_anything_but_a_definite_refusal_is_not_a_revocation(tmp_path, error):
+    # Unpairing on a flaky network, a proxy's answer or a 4xx whose cause is
+    # not the login itself would throw away a good login for good.
+    fake = FakeSupabase()
+    fake.auth.refresh_error = error
+
+    with pytest.raises(type(error)) as exc_info:
+        build_supabase_clients(
+            "http://x",
+            "anon",
+            _write_session(tmp_path),
+            client_factory=lambda url, key: fake,
+        )
+
+    assert exc_info.value is error
+
+
+@pytest.mark.parametrize("content", ["", "[]", "{}", '{"access_token": "at"}'])
+def test_an_unreadable_session_is_a_lost_login_not_a_crash(tmp_path, content):
+    # The boot gate already treats this as unpaired; this is the last line
+    # if the file changes between the gate and the restore.
+    session_path = tmp_path / "session.json"
+    session_path.write_text(content)
+    fake = FakeSupabase()
+
+    with pytest.raises(SessionRevokedError):
+        build_supabase_clients(
+            "http://x", "anon", session_path, client_factory=lambda url, key: fake
+        )

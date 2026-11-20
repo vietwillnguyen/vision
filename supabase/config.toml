@@ -192,7 +192,10 @@ refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
 enable_signup = true
 # Allow/disallow anonymous sign-ins to your project.
-enable_anonymous_sign_ins = false
+# On: the pendant signs in anonymously to get a login of its own, then claims a
+# one-time pairing code (docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md).
+# The hosted project needs the same switch turned on by hand in the dashboard.
+enable_anonymous_sign_ins = true
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
@@ -217,7 +220,10 @@ email_sent = 2
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
 sms_sent = 30
 # Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
-anonymous_users = 30
+# Local and CI only: every pairing in the integration suite is an anonymous
+# sign-in from one IP, so the default 30 would fail a second run within the hour.
+# The hosted project keeps the default 30.
+anonymous_users = 10000
 # Number of sessions that can be refreshed in a 5 minute interval per IP address.
 token_refresh = 150
 # Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).

@@ -29,12 +29,12 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 7da9edc66369b6c05324e81f8682ce1e87f124754fac6d88d90dd991c04ae8cb  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
-<!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
+<!-- source-sha256: 3c24c5b4dca56d1c66701efdc7f7a2bf0a6bb4804057531ca78992a8e2f31a39  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: d1457ce232a7e8251217875decdb0d313cd0a74b0de6cb37fc63978e8cad2178  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
-<!-- source-sha256: 094d493fc847aa8a8ddd523a2500b03cdb51da4f5516bffad3f104401ed75277  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
-<!-- regenerated-at: 2026-11-20 (merged local-first flag markers and interruptible capture into the battery halt: the halt drains
-     markers-first on the stop bound, a pending stop caps the drain at 15 s, and no flag blink paints over Halted) -->
+<!-- source-sha256: d2c1f734973b211cb6f6399730b968c5fb373a894613b3a7e3a63c0d5b867f35  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
+<!-- source-sha256: 90e4cf8f5714c6c3db3a998936f899ef4db1d6c45e98455c12c92d594407d155  docs/superpowers/specs/2026-11-19-visio-device-pairing-design.md -->
+<!-- regenerated-at: 2026-11-20 (merged main into device pairing: the battery boot check runs before the pairing gate, every LED write goes through the one LedController, and the flag worker, uploader and status reporter share the pairing gate's one client) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -52,10 +52,11 @@
       <li><a href="#data">Data model</a></li>
       <li><a href="#pipeline">Pipeline</a></li>
       <li><a href="#app">App</a></li>
+      <li><a href="#pairing">Pairing</a></li>
     </ul>
   </div>
   <div class="navbar-end">
-    <span class="badge badge-ghost text-xs">regenerated 2026-11-19</span>
+    <span class="badge badge-ghost text-xs">regenerated 2026-11-20</span>
   </div>
 </div>
 
@@ -68,11 +69,11 @@
         A living rendering of every spec under <span class="font-mono">docs/superpowers/specs/</span> - the
         <a class="link link-primary" href="superpowers/specs/2026-07-04-visio-pendant-design.md">pendant design spec</a>
         plus the
-        <a class="link link-primary" href="superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md">WiFi re-onboarding QR</a>
-        and
-        <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">device provisioning &amp; preflight</a>
-        and
+        <a class="link link-primary" href="superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md">WiFi re-onboarding QR</a>,
+        <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">device provisioning &amp; preflight</a>,
         <a class="link link-primary" href="superpowers/specs/2026-11-18-visio-recording-control-design.md">recording stop/start control</a>
+        and
+        <a class="link link-primary" href="superpowers/specs/2026-11-19-visio-device-pairing-design.md">device pairing</a>
         specs (source of truth - edit those files, then regenerate this page).
         A wearable pendant that records the moments the wearer chooses (sized for about 2 h a day) and hands footage to a cloud pipeline that assembles a nightly 60-120s highlight reel.
       </p>
@@ -174,6 +175,7 @@ flowchart TD
                 <span class="badge badge-success badge-soft">#18/#19 flag button + NM activation — landed</span>
                 <span class="badge badge-success badge-soft">#8 app screen wiring — merged (PR #22)</span>
                 <span class="badge badge-success badge-soft">WiFi re-onboarding QR — merged (PR #25)</span>
+                <span class="badge badge-info badge-soft">device pairing (own pendant login) - designed and built 2026-11-19</span>
                 <span class="badge badge-success badge-soft">#9 FLAG date fix — merged (PR #13)</span>
                 <span class="badge badge-success badge-soft">#6/#12 CI hardening — merged (PR #11/#14)</span>
                 <span class="badge badge-warning badge-soft">device provisioning + preflight — draft (PR #26, blocked on physical Pi test)</span>
@@ -195,19 +197,23 @@ flowchart TD
         <pre class="mermaid">
 flowchart TD
   A["systemd starts\nvisio-recorder\nEnvironmentFile=\n/etc/visio-recorder.env"] --> B{"3 debounced samples:\nunder 10% or\nunder 3300 mV,\nand not externally\npowered?"}
-  B -- yes --> B1["HALTED LED (solid red),\narm wake on charge,\npower off cleanly"]
-  B -- no --> C{"session.json exists?"}
-  C -- "no (first boot)" --> D["QR onboarding:\nWiFi NM keyfile\n+ Supabase auth,\nup to 60 attempts"]
+  B -- yes --> B1["HALTED LED (solid red),\narm wake on charge,\npower off cleanly\n(before pairing state\nis even read)"]
+  B -- no --> C{"pairing state?"}
+  C -- "UNPAIRED (incl. legacy\nor unreadable session)" --> D0["delete session.json"]
+  D0 --> D["scan QR v2:\nWiFi NM keyfile\n+ pairing.json,\nup to 60 attempts"]
   D -- "never succeeds" --> D1["exit 1"]
   D -- "succeeds" --> D2["nmcli connection reload\n+ up visio"]
-  D2 -- "activation fails" --> D3["CRITICAL LED, exit 1\n(systemd retries)"]
-  D2 -- ok --> E
-  C -- yes --> C1["best-effort nmcli\nreload + up\n(if keyfile exists;\nnever fatal)"]
-  C1 --> E["load_or_create_device_id"]
-  E --> F{"device_registered marker exists?"}
-  F -- no --> G["register_device, then touch marker"]
-  F -- yes --> H
-  G --> H["flush_pending queue\n(flag markers\nbefore segments)"]
+  C -- "PENDING\n(code saved)" --> D2
+  D2 -- "activation fails" --> D3["CRITICAL LED, exit 1\n(systemd retries;\n3rd failure in a row\ndrops the code, rescan)"]
+  D2 -- ok --> P["anonymous sign-in,\nclaim_pairing(code)"]
+  P -- "code refused" --> P1["clear pairing,\nCRITICAL LED, exit 1\n(rescan next boot)"]
+  P -- "unreachable" --> P2["exit 1\n(retry next boot)"]
+  P -- "device_id" --> G
+  C -- "PAIRED" --> C1["best-effort nmcli\nreload + up\n(if keyfile exists;\nnever fatal)"]
+  C1 --> E["refresh-token grant\n(own login; never\njudged by the\nlocal clock)"]
+  E -- "definitely refused" --> E1["clear pairing,\nCRITICAL LED, exit 1\n(rescan next boot)"]
+  E -- ok --> G
+  G["one supabase client\n(storage, status,\nflag worker)"] --> H["flush_pending queue\n(flag markers\nbefore segments)"]
   H --> R["recover_orphaned_\nsegments\n(mux + queue leftover\n.h264/.mp4; keep\nnon-empty captures\non mux failure)"]
   R -- "recovered any" --> H2["flush_pending again"]
   R -- none --> I0
@@ -307,10 +313,10 @@ flowchart TD
           <thead><tr><th>State</th><th>Look</th><th>Capturing?</th><th>Enters when</th><th>Exits when (to)</th><th>Status</th></tr></thead>
           <tbody>
             <tr><td>Off</td><td>Dark</td><td>No</td><td>Shutting down finished, or power was cut from any state (ungraceful; the next boot recovers the cut segment)</td><td>Power applied, the PiJuice power button, or systemd starting the daemon (Booting)</td><td>Partly built: no <span class="font-mono text-xs bg-base-200 rounded px-1">ExecStopPost=</span> yet, and the WS2812B latches its last frame, so a crash leaves the last colour lit</td></tr>
-            <tr><td>Booting</td><td>White, dim solid (same look as Stopped)</td><td>No</td><td>Daemon start</td><td>No <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span> (Scanning, first boot); session on disk (Stopped, or Recording if the <span class="font-mono text-xs bg-base-200 rounded px-1">/run</span> marker says a crash interrupted a recording); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
-            <tr><td>Scanning</td><td>Cyan, pulsing</td><td>No</td><td>First boot with no <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span>; a hold released at 10 s or more from Stopped; Setup needed and any press; <span class="font-mono text-xs bg-base-200 rounded px-1">visio-reonboard</span></td><td>QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; power-off hold or SIGTERM (Shutting down)</td><td>New (today onboarding shows Recording green, and giving up exits 1 into a restart loop)</td></tr>
+            <tr><td>Booting</td><td>White, dim solid (same look as Stopped)</td><td>No</td><td>Daemon start</td><td>Not paired: no finished pairing, a legacy or unreadable <span class="font-mono text-xs bg-base-200 rounded px-1">session.json</span>, or a saved login the server refuses at boot (Scanning); a saved pairing code not yet claimed (stays Booting while Wi-Fi comes up and the code is claimed, then Stopped; a refused code goes to Scanning); paired with the login restored (Stopped, or Recording if the <span class="font-mono text-xs bg-base-200 rounded px-1">/run</span> marker says a crash interrupted a recording); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
+            <tr><td>Scanning</td><td>Cyan, pulsing</td><td>No</td><td>A boot that is not paired (first boot, a legacy or unreadable session, a refused pairing code, a removed or revoked login, or a saved code whose Wi-Fi failed on 3 boots in a row); a hold released at 10 s or more from Stopped; Setup needed and any press; <span class="font-mono text-xs bg-base-200 rounded px-1">visio-reonboard</span></td><td>QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; power-off hold or SIGTERM (Shutting down)</td><td>New (today onboarding shows Recording green, and giving up exits 1 into a restart loop; a failed Wi-Fi activation after a scan exits 1 with the pairing code kept, and the third such boot in a row drops the code and scans)</td></tr>
             <tr><td>Setup needed</td><td>Cyan, dim solid</td><td>No</td><td>First-boot scanning used its 60 attempts</td><td>A press or a hold released before 5 s (Scanning, a fresh 60 attempts); power cycle (Booting, then Scanning); power-off (Shutting down)</td><td>New</td></tr>
-            <tr><td>Stopped</td><td>White, dim solid</td><td>No</td><td>Every boot with a session; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (<span class="font-mono text-xs bg-base-200 rounded px-1">stop_reason = storage_full</span>); a re-onboard that timed out or was cancelled</td><td>A hold released between 2 and 5 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
+            <tr><td>Stopped</td><td>White, dim solid</td><td>No</td><td>Every paired boot; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (<span class="font-mono text-xs bg-base-200 rounded px-1">stop_reason = storage_full</span>); a re-onboard that timed out or was cancelled</td><td>A hold released between 2 and 5 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Designed (PR #103)</td></tr>
             <tr><td>Recording</td><td>Green, solid (red flashing or yellow pulsing while a health condition holds, see the resolver)</td><td>Yes</td><td>A hold released between 2 and 5 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b)</td><td>A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down)</td><td>Built (today derived from intent, not evidence)</td></tr>
             <tr><td>Flag saved (overlay)</td><td>Magenta, 150 ms</td><td>Yes</td><td>A short press released while Recording, once the marker is fsynced (PR #100)</td><td>After 150 ms, back to the underlying state</td><td>Designed (PR #100)</td></tr>
             <tr><td>Shutting down</td><td>White, pulsing</td><td>No</td><td>From any running state: a hold released at 5-10 s, or at 10 s or more outside Stopped, SIGTERM or SIGINT (a reboot, <span class="font-mono text-xs bg-base-200 rounded px-1">systemctl stop</span>, a watchdog restart), or a battery halt's drain finishing (the LED stays Halted red, which outranks this)</td><td>The graceful steps above finish or <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span> passes (systemd then kills the process): Off, powered down for the hold and the battery halt, restarted for a reboot or watchdog</td><td>Designed (PR #103 covers SIGTERM; the hold and the power-off are new)</td></tr>
@@ -350,8 +356,8 @@ stateDiagram-v2
     Off --> Running: power on
     state Running {
         [*] --> Booting
-        Booting --> Scanning: no session.json
-        Booting --> Stopped: session on disk
+        Booting --> Scanning: not paired, or login revoked
+        Booting --> Stopped: paired, login restored
         Booting --> HaltedBattery: battery halt
         Scanning --> Booting: QR read, Wi-Fi up
         Scanning --> SetupNeeded: 60 attempts, first boot
@@ -392,7 +398,7 @@ stateDiagram-v2
         <li>Upload retry is <em>in-process</em>, owned by the existing upload worker: while segments are queued it blocks on its work queue only until a retry deadline, armed when the queue becomes non-empty and again after each round, and retries everything still queued once that deadline passes. A segment arriving does not restart the deadline, so a steady stream of segments cannot postpone a round. Each deadline is set from the backoff when armed, doubling per consecutive failure from 30 s to a 480 s cap and indexed by the same <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter that drives the CRITICAL LED, so retry failures escalate and a retry success clears it. The decision is the pure <span class="font-mono text-xs bg-base-200 rounded px-1">next_worker_step</span>, unit-tested without threads. A stopping worker never starts a round, and a round that tries no file (the queue emptied, or it was cancelled before its first file) leaves the counter and the LED untouched. No second thread and no scheduler; a new segment or the shutdown sentinel still wakes the worker at once, and a round in flight stops early once the loop is shutting down so a backlog is never uploaded through a battery halt. The startup flush is now the backstop rather than the only retry, for flag markers too: <span class="font-mono text-xs bg-base-200 rounded px-1">FlagUploadWorker</span> runs the same decision over its own queue (see the flag press path above). Planned (LED state machine): the backoff gets its own attempt counter, advanced by rounds skipped for lack of NetworkManager connectivity <span class="font-mono text-xs bg-base-200 rounded px-1">full</span>, so the 30-480 s schedule still settles offline while <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counts only failures on a working connection.</li>
         <li>A flag press is durable before it is acknowledged and acknowledged before it is uploaded: <span class="font-mono text-xs bg-base-200 rounded px-1">write_flag_marker</span> fsyncs the marker and the queue directory, the press handler then asks <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> for a 150 ms magenta blink, and only then hands the path to the flag-upload worker. The blink runs on the controller's own thread with its wait outside the controller's lock, so the gpiozero callback thread neither sleeps nor touches the driver, and a real state change landing mid-blink wins.</li>
         <li>Flag markers travel with their footage. <span class="font-mono text-xs bg-base-200 rounded px-1">flush_pending</span> drains markers before segments (<span class="font-mono text-xs bg-base-200 rounded px-1">markers_before_segments</span>), and while the daemon runs the upload worker asks the flag-upload worker to flush its pending markers - before the segment it just recorded and before each retry round - and waits, the flush itself bounded at 30 s. Before that flush the worker waits until the segment's end plus the 3 s restart gap, since a press in that gap flags the segment that just ended and its marker would otherwise be uploaded after that segment; the gap wait is capped at the gap, so it never holds an upload longer than 3 s, and a retry round waits on the newest segment the run has queued. Once the loop is stopping (a stop, shutdown or battery halt) the gap is not waited and the flush is bounded at 5 s (<span class="font-mono text-xs bg-base-200 rounded px-1">STOP_MARKER_FLUSH_TIMEOUT_SEC</span>): markers on the card still go up ahead of every segment the drain uploads, the cut-short last segment included, without a 30 s flush spending systemd's <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span>; flags are only taken while recording, and a press in those last seconds goes up on the flag-upload worker's retries or the next boot's flush. A capture that wrote no footage is discarded before the worker sees it, so it costs no flush and does not move the end time a retry round waits on. Markers keep exactly one uploader, so the two threads never race one, and if the flush cannot finish the segment is still uploaded: footage outranks marker ordering, and the pipeline's late-marker handling is the backstop.</li>
-        <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
+        <li>The pendant never writes <span class="font-mono text-xs bg-base-200 rounded px-1">devices</span>: its device id comes from <span class="font-mono text-xs bg-base-200 rounded px-1">claim_pairing</span> and is saved in <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> with a <span class="font-mono text-xs bg-base-200 rounded px-1">"pairing": 2</span> marker, so a pendant onboarded under the old contract rescans. Every pairing step is resumable after a power cut. The battery boot check runs before this gate, so a flat pendant powers off without scanning or signing in; the gate's one client backs the segment uploader, the status reporter and the flag-upload worker, which starts only after the gate, and every early exit closes the <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span>. See <a href="#pairing" class="link link-primary">Device Pairing</a>.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
         <li>The stop path's <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout; the halt path's is bounded by <span class="font-mono text-xs bg-base-200 rounded px-1">UPLOAD_DRAIN_TIMEOUT_SEC</span> (120 s). On a halt the HALTED LED is applied after the join, so it is the final state and never raced by a slow in-flight upload. The bound exists because a dying battery is exactly when an upload is most likely to hang on a weak signal, and waiting forever for it ends in a brownout rather than a power-off. A stop pending or arriving during the halt drain caps the rest of it at <span class="font-mono text-xs bg-base-200 rounded px-1">STOP_HALT_DRAIN_TIMEOUT_SEC</span> (15 s), so the power-off still lands inside <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span>; a stop that cuts a capture short ends as a stop, and the next boot's battery check confirms the halt.</li>
         <li>Shutdown is bounded by the unit, not by the segment length: <span class="font-mono text-xs bg-base-200 rounded px-1">KillMode=mixed</span> so systemd signals only the daemon (the default control-group mode would signal <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> too and lose the segment the daemon is finalising), and <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span> in place of systemd's 90 s default, which the old segment-long stop used to run into.</li>
@@ -491,7 +497,7 @@ flowchart TD
         <table class="table table-sm">
           <thead><tr><th>State</th><th>Entered when</th><th>LED</th><th>Leaves when</th></tr></thead>
           <tbody>
-            <tr><td class="font-semibold">BOOTING</td><td>process start: battery check, onboarding, registration, orphan recovery, startup flush</td><td>STOPPED (dim white); a low battery goes to the app</td><td>the recording loop starts</td></tr>
+            <tr><td class="font-semibold">BOOTING</td><td>process start: battery check, pairing gate (onboarding and the pendant's own login), orphan recovery, startup flush</td><td>STOPPED (dim white); a low battery goes to the app</td><td>the recording loop starts</td></tr>
             <tr><td class="font-semibold">STOPPED</td><td>loop start on every boot; a hold while RECORDING</td><td>STOPPED</td><td>a hold (to RECORDING); SIGTERM; battery halt</td></tr>
             <tr><td class="font-semibold">RECORDING</td><td>a hold while STOPPED</td><td>RECORDING, LOW_BATTERY or CRITICAL (uploads no longer show on the LED)</td><td>a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt</td></tr>
             <tr><td class="font-semibold">SHUTTING_DOWN</td><td>SIGTERM or SIGINT in any state</td><td>SHUTTING_DOWN (white, pulsing)</td><td>the process exits</td></tr>
@@ -542,7 +548,7 @@ flowchart TD
       <span><strong>Manual flag button wired (issue #18).</strong> <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> registers a gpiozero listener on GPIO 17 (pull-up, 50ms bounce) whose handler debounces, writes the <span class="font-mono text-xs bg-base-200 rounded px-1">FLAG_YYYYMMDD_HHMMSS.marker</span>, fsyncs the file and the queue directory, asks the <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> for a 150 ms magenta acknowledgement blink, and hands the path to a dedicated flag-upload worker thread that uploads it immediately (the gpiozero callback thread touches neither the network nor the driver); a 2s cooldown drops bounce/double-taps. A failed upload is retried in process on the segments' backoff by that same worker, which stays the only uploader of a marker, and the next boot's markers-first flush is the backstop.</span>
     </div>
     <div class="alert alert-success alert-soft" role="alert">
-      <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + session are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
+      <span><strong>NetworkManager keyfile activated after write (issue #19).</strong> After onboarding, <span class="font-mono text-xs bg-base-200 rounded px-1">main()</span> runs <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection reload</span> then <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection up visio</span> behind a <span class="font-mono text-xs bg-base-200 rounded px-1">ConnectionActivator</span> protocol. On failure: CRITICAL LED, exit 1; keyfile + pairing code are on disk, so systemd restart + NM autoconnect retry from there. Restart boots also retry the reload/up best-effort whenever the keyfile exists (NM does not reliably load dropped-in keyfiles on its own); that retry never fails the boot.</span>
     </div>
     <div class="alert alert-warning alert-soft" role="alert">
       <span><strong>LED SPI rewire: provisioning follow-ups and bench checks open (2026-11).</strong> The firmware now drives the LED over SPI0 MOSI, freeing GPIO 18 for I2S audio and removing the <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span> need that kept the daemon on root. Draft PR #26 still installs and checks <span class="font-mono text-xs bg-base-200 rounded px-1">rpi_ws281x</span>; it needs <span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>, SPI and <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> enabled, and a <span class="font-mono text-xs bg-base-200 rounded px-1">spidev</span> preflight check. Dropping root additionally needs onboarding to create the WiFi profile with <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection add</span> instead of writing a keyfile (NetworkManager rejects non-root-owned keyfiles, and its D-Bus policy denies <span class="font-mono text-xs bg-base-200 rounded px-1">ReloadConnections</span> to non-root callers), a <span class="font-mono text-xs bg-base-200 rounded px-1">visio</span> user in <span class="font-mono text-xs bg-base-200 rounded px-1">video gpio i2c spi</span> and a polkit rule for <span class="font-mono text-xs bg-base-200 rounded px-1">settings.modify.system</span> + <span class="font-mono text-xs bg-base-200 rounded px-1">network-control</span>. On the bench: move the data wire to header pin 19, check each colour, confirm a 3.3 V data line drives the WS2812B reliably, and confirm the fitted part is a WS2812B-V5. Full list: <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26">provisioning spec, LED SPI rewire follow-ups</a>.</span>
@@ -558,7 +564,7 @@ flowchart TD
       <table class="table table-sm">
         <thead><tr><th>Table</th><th>Key columns</th></tr></thead>
         <tbody>
-          <tr><td class="font-mono">devices</td><td>device_id, user_id, name, created_at</td></tr>
+          <tr><td class="font-mono">devices</td><td>device_id, user_id, name, created_at, push_token, device_user_id (the paired pendant's own anonymous login, unique)</td></tr>
           <tr><td class="font-mono">device_status</td><td>device_id, battery_pct, storage_used_gb, storage_free_gb, segments_pending, segments_uploaded_today, recording_active, segments_rejected, audio_active, updated_at</td></tr>
           <tr><td class="font-mono">segments</td><td>id, device_id, recorded_at, duration_sec, s3_key, motion_score, audio_score, scene_score, composite_score, manually_flagged, user_feedback</td></tr>
           <tr><td class="font-mono">reels</td><td>id, device_id, date, s3_key, duration_sec, style, created_at; unique (device_id, date) so same-day pipeline re-runs upsert</td></tr>
@@ -568,7 +574,7 @@ flowchart TD
       </table>
     </div>
     <div class="alert alert-info alert-soft text-sm" role="alert">
-      <span><span class="font-mono text-xs bg-base-200 rounded px-1">device_status</span> write access: the firmware daemon authenticates as <span class="font-mono text-xs bg-base-200 rounded px-1">authenticated</span> (its own user session), not <span class="font-mono text-xs bg-base-200 rounded px-1">service_role</span> — grant added in <span class="font-mono text-xs bg-base-200 rounded px-1">20260710090000_grant_device_status_writes.sql</span>, row-filtered by the existing owner-scoped RLS policy.</span>
+      <span><span class="font-mono text-xs bg-base-200 rounded px-1">device_status</span> write access: only the paired pendant's own anonymous login writes its device's row (and uploads into its <span class="font-mono text-xs bg-base-200 rounded px-1">segments/{device_id}/</span> folder); the owner reads, and the pipeline uses <span class="font-mono text-xs bg-base-200 rounded px-1">service_role</span>. See <a href="#pairing" class="link link-primary">Device Pairing</a>, migration <span class="font-mono text-xs bg-base-200 rounded px-1">20261119120000_device_pairing.sql</span>.</span>
     </div>
   </section>
 
@@ -652,7 +658,7 @@ score = base_score * 1.5  (if manually flagged)
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Device</h3>
-        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime with a stale banner on channel error. Re-onboard button opens a QR display screen encoding WiFi credentials plus the signed-in user's current Supabase session tokens.</p>
+        <p class="text-xs text-base-content/70 mt-1">Live battery/storage/upload status via Supabase Realtime with a stale banner on channel error. Re-onboard opens a QR with the Wi-Fi credentials and a one-time pairing code, then reports "Pendant paired" or an expired code. "Remove device" revokes the pendant's login behind a confirmation; the device then shows "Not paired" with a "Pair pendant" button. With no device, the app shows "Set up your Visio" and runs the same pairing.</p>
       </div>
       <div class="card bg-base-100 shadow p-4">
         <h3 class="font-semibold text-sm">Archive</h3>
@@ -666,12 +672,53 @@ score = base_score * 1.5  (if manually flagged)
       <span><strong>Regenerate bottom sheet not wired.</strong> It has no backend consumer yet, so it stays out of scope for issue #8; the regenerate button surfaces as inert/"not available yet" rather than functional.</span>
     </div>
     <div class="alert alert-info alert-soft text-sm" role="alert">
-      <span><strong>WiFi re-onboarding QR screen - resolved.</strong> The Device tab's Re-onboard button now navigates to a <span class="font-mono text-xs bg-base-200 rounded px-1">@react-navigation/native-stack</span> route rendering a form (SSID/password) then a <span class="font-mono text-xs bg-base-200 rounded px-1">react-native-qrcode-svg</span> QR code, encoding the exact <span class="font-mono text-xs bg-base-200 rounded px-1">{ssid, password, user_access_token, user_refresh_token}</span> shape firmware's <span class="font-mono text-xs bg-base-200 rounded px-1">parse_onboarding_qr_payload</span> expects.</span>
+      <span><strong>WiFi re-onboarding QR screen - resolved.</strong> The Device tab's Re-onboard button now navigates to a <span class="font-mono text-xs bg-base-200 rounded px-1">@react-navigation/native-stack</span> route rendering a form (SSID/password) then a <span class="font-mono text-xs bg-base-200 rounded px-1">react-native-qrcode-svg</span> QR code, now encoding payload v2, <span class="font-mono text-xs bg-base-200 rounded px-1">{v: 2, ssid, password, pairing_code}</span>, the shape firmware's <span class="font-mono text-xs bg-base-200 rounded px-1">parse_onboarding_qr_payload</span> accepts (the v1 session-token payload is refused).</span>
+    </div>
+  </section>
+
+  <section id="pairing" class="space-y-4">
+    <h2 class="text-2xl font-bold">Device Pairing <span class="badge badge-success badge-soft align-middle">built (PR #105)</span></h2>
+    <p class="text-base-content/70 max-w-3xl">The Re-onboard QR used to hand the pendant the phone's own Supabase session, so the pendant lost its login when the phone refreshed twice or the user logged out. Per the <a class="link link-primary" href="superpowers/specs/2026-11-19-visio-device-pairing-design.md">device pairing spec</a> the pendant now has its own login, with no service-role code on the pairing path; the two live tests that pinned those failures pass. Plan: <a class="link link-primary" href="superpowers/plans/2026-11-19-visio-device-pairing.md">2026-11-19-visio-device-pairing.md</a>.</p>
+    <div class="card bg-base-100 shadow p-4">
+      <pre class="mermaid">
+sequenceDiagram
+  participant App
+  participant DB as Supabase Auth + Postgres
+  participant Pendant
+  App->>DB: rpc create_pairing_code(device_id) as owner
+  DB-->>App: one-time code (stored hashed, 10 min)
+  App->>App: QR {v:2, ssid, password, pairing_code}
+  Pendant->>Pendant: scan, join Wi-Fi
+  Pendant->>DB: anonymous sign-in
+  DB-->>Pendant: its own session
+  Pendant->>DB: rpc claim_pairing(code)
+  DB-->>Pendant: device_id (devices.device_user_id linked)
+  Pendant->>DB: status upserts + segment uploads as the device user
+  App->>DB: rpc unpair_device(device_id) on Remove device
+  DB->>DB: clear link, delete the device user and its sessions
+      </pre>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Data model</h3>
+        <p class="text-xs text-base-content/70 mt-1"><span class="font-mono text-xs bg-base-200 rounded px-1">devices.device_user_id</span> (unique, the pendant's anonymous auth user) and <span class="font-mono text-xs bg-base-200 rounded px-1">private.device_pairing_codes</span> (SHA-256 of a 256-bit code, single use). Helpers <span class="font-mono text-xs bg-base-200 rounded px-1">private.owned_device_ids()</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">private.paired_device_id()</span> are the one place every policy asks who may act for a device.</p>
+      </div>
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Permissions</h3>
+        <p class="text-xs text-base-content/70 mt-1">The owner reads; the device user writes only its device's <span class="font-mono text-xs bg-base-200 rounded px-1">device_status</span> row and uploads only into <span class="font-mono text-xs bg-base-200 rounded px-1">segments/{device_id}/</span>, reading back only its own uploads. The owner loses direct inserts on <span class="font-mono text-xs bg-base-200 rounded px-1">devices</span> and all storage writes. The pipeline (service role) is unchanged.</p>
+      </div>
+      <div class="card bg-base-100 shadow p-4">
+        <h3 class="font-semibold text-sm">Lifecycle</h3>
+        <p class="text-xs text-base-content/70 mt-1">Policies resolve the link at query time, so Remove device revokes at once even while the pendant's access token is still valid. Re-pairing deletes the previous device user. App logout touches only the phone's session. The login never expires by time. A boot restores it with the refresh-token grant and unpairs only on GoTrue's codes for a gone token, session or user, so a pendant booting before NTP sync is never unpaired. A daily <span class="font-mono text-xs bg-base-200 rounded px-1">pg_cron</span> job deletes anonymous users no device points at.</p>
+      </div>
+    </div>
+    <div class="alert alert-warning alert-soft text-sm" role="alert">
+      <span><strong>Manual step:</strong> anonymous sign-ins must be enabled on the hosted project (CAPTCHA off, no session time-box), the migration applied, firmware and app shipped together, and the test pendant re-onboarded once. Firmware rejects the old v1 QR payload rather than accept the owner's session again. The old pendant's copy of the owner's phone session is deleted from its disk but stays valid on the server until the phone signs out, so sign out and back in on the phone after re-onboarding.</span>
     </div>
   </section>
 
   <footer class="border-t border-base-content/10 pt-6 pb-12 text-xs text-base-content/50 space-y-1">
-    <p>Source of truth: every spec under <span class="font-mono">docs/superpowers/specs/</span> - the pendant design spec plus the WiFi re-onboarding QR and device provisioning &amp; preflight specs. Regenerate this page after editing any of them - see <span class="font-mono">docs/architecture-regeneration.md</span>.</p>
+    <p>Source of truth: every spec under <span class="font-mono">docs/superpowers/specs/</span> - the pendant design spec plus the WiFi re-onboarding QR, device provisioning &amp; preflight, recording stop/start control and device pairing specs. Regenerate this page after editing any of them - see <span class="font-mono">docs/architecture-regeneration.md</span>.</p>
     <p>A pre-commit hook blocks commits that change any of those specs without updating that spec's line in this page's embedded <span class="font-mono">source-sha256</span> manifest.</p>
   </footer>
 

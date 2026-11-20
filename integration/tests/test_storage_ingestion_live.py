@@ -16,95 +16,61 @@ Needs a running `supabase start` instance; skips automatically otherwise
 (see conftest.py and integration/README.md).
 """
 
-import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
-from supabase import create_client
 
 from pipeline.adapters.supabase_store import SupabaseStore
 from pipeline.ingestion import build_segments_from_object_keys
-from visio_recorder.supabase_clients import SupabaseStorage
+from tests.pendant import PairedDevice
 from visio_recorder.uploader import upload_segment
 
 pytestmark = pytest.mark.usefixtures("live_supabase_env")
 
 
 def test_firmware_uploaded_object_is_ingested_by_pipeline_listing(
-    live_supabase_env, tmp_path: Path
+    paired_device: PairedDevice, tmp_path: Path
 ):
-    url = live_supabase_env["url"]
-    admin_client = create_client(url, live_supabase_env["service_role_key"])
-    run_id = uuid.uuid4().hex[:8]
-    owner_email = f"storage-owner-{run_id}@example.test"
-    password = "correct-horse-battery-staple"
+    admin_client = paired_device.admin
+    device_id = paired_device.device_id
 
-    owner_id = admin_client.auth.admin.create_user(
-        {"email": owner_email, "password": password, "email_confirm": True}
-    ).user.id
+    recorded_at = datetime(2026, 7, 14, 9, 0, 0, tzinfo=UTC)
+    stub_segment = tmp_path / recorded_at.strftime("%Y%m%d_%H%M%S.mp4")
+    stub_segment.write_bytes(b"stub mp4 bytes")
 
-    device_id: str | None = None
-    stub_segment: Path | None = None
-    try:
-        # supabase-py types APIResponse.data as bare JSON (it can be any JSON
-        # value), so the row shape has to be narrowed here before it is indexed.
-        inserted = cast(
-            list[dict[str, Any]],
-            admin_client.table("devices")
-            .insert({"user_id": owner_id, "name": f"storage test device {run_id}"})
-            .execute()
-            .data,
-        )
-        device_id = str(inserted[0]["device_id"])
+    # Uploaded as the paired pendant's own login, the only one that may write
+    # to the segments bucket; the paired_device fixture removes the object.
+    object_path = upload_segment(
+        paired_device.pendant.clients.storage, device_id, stub_segment
+    )
+    assert object_path == f"{device_id}/{stub_segment.name}"
 
-        recorded_at = datetime(2026, 7, 14, 9, 0, 0, tzinfo=UTC)
-        stub_segment = tmp_path / recorded_at.strftime("%Y%m%d_%H%M%S.mp4")
-        stub_segment.write_bytes(b"stub mp4 bytes")
+    pipeline_store = SupabaseStore(admin_client)
+    object_keys = pipeline_store.list_segment_object_keys(device_id, date(2026, 7, 14))
+    assert object_keys == [object_path], (
+        "pipeline's live bucket listing must see the object firmware's "
+        "real upload adapter just wrote"
+    )
 
-        owner_client = create_client(url, live_supabase_env["anon_key"])
-        owner_client.auth.sign_in_with_password(
-            {"email": owner_email, "password": password}
-        )
-        object_path = upload_segment(
-            SupabaseStorage(owner_client), device_id, stub_segment
-        )
-        assert object_path == f"{device_id}/{stub_segment.name}"
+    # The real probe is ffmpeg (covered in pipeline's
+    # test_ffmpeg_media_live.py); this test is about the storage handoff,
+    # so it measures the bytes pipeline actually downloads from the bucket.
+    downloaded: dict[str, bytes] = {}
 
-        pipeline_store = SupabaseStore(admin_client)
-        object_keys = pipeline_store.list_segment_object_keys(
-            device_id, date(2026, 7, 14)
-        )
-        assert object_keys == [object_path], (
-            "pipeline's live bucket listing must see the object firmware's "
-            "real upload adapter just wrote"
-        )
+    def measure_downloaded(key: str) -> float:
+        local = pipeline_store.download_segment(key, tmp_path / "pipeline")
+        downloaded[key] = local.read_bytes()
+        return 40.0
 
-        # The real probe is ffmpeg (covered in pipeline's
-        # test_ffmpeg_media_live.py); this test is about the storage handoff,
-        # so it measures the bytes pipeline actually downloads from the bucket.
-        downloaded: dict[str, bytes] = {}
-
-        def measure_downloaded(key: str) -> float:
-            local = pipeline_store.download_segment(key, tmp_path / "pipeline")
-            downloaded[key] = local.read_bytes()
-            return 40.0
-
-        (tmp_path / "pipeline").mkdir()
-        segments, rejected_keys = build_segments_from_object_keys(
-            object_keys, device_id, measure_downloaded
-        )
-        assert rejected_keys == []
-        assert len(segments) == 1
-        assert segments[0].device_id == device_id
-        assert segments[0].recorded_at == recorded_at.replace(tzinfo=None)
-        assert segments[0].s3_key == object_path
-        assert segments[0].duration_sec == 40.0
-        assert downloaded == {object_path: b"stub mp4 bytes"}
-    finally:
-        if device_id is not None and stub_segment is not None:
-            admin_client.storage.from_("segments").remove(
-                [f"{device_id}/{stub_segment.name}"]
-            )
-        admin_client.auth.admin.delete_user(owner_id)
+    (tmp_path / "pipeline").mkdir()
+    segments, rejected_keys = build_segments_from_object_keys(
+        object_keys, device_id, measure_downloaded
+    )
+    assert rejected_keys == []
+    assert len(segments) == 1
+    assert segments[0].device_id == device_id
+    assert segments[0].recorded_at == recorded_at.replace(tzinfo=None)
+    assert segments[0].s3_key == object_path
+    assert segments[0].duration_sec == 40.0
+    assert downloaded == {object_path: b"stub mp4 bytes"}

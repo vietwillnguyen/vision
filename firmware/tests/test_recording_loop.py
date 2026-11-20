@@ -538,7 +538,7 @@ def test_recover_orphaned_segments_leaves_device_state_files_alone(tmp_path):
     data_dir = tmp_path / "data"
     queue_dir = data_dir / "queue"
     queue_dir.mkdir(parents=True)
-    for name in ("session.json", "device.json", "device_registered"):
+    for name in ("session.json", "device.json", "pairing.json"):
         (data_dir / name).write_text("x")
     (queue_dir / "20260803_115500.mp4").write_bytes(b"queued")
 
@@ -549,7 +549,7 @@ def test_recover_orphaned_segments_leaves_device_state_files_alone(tmp_path):
     assert recovered == []
     assert sorted(p.name for p in data_dir.iterdir()) == [
         "device.json",
-        "device_registered",
+        "pairing.json",
         "queue",
         "session.json",
     ]

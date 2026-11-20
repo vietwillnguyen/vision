@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
+from supabase import create_client
+
 from visio_recorder.battery import (
     BATTERY_BOOT_SAMPLE_INTERVAL_SEC,
     BATTERY_BOOT_SAMPLES,
@@ -32,7 +34,7 @@ from visio_recorder.capture import (
     record_segment,
     segment_path,
 )
-from visio_recorder.device_identity import load_or_create_device_id, register_device
+from visio_recorder.device_identity import load_paired_device_id
 from visio_recorder.drivers import (
     GpioZeroFlagButton,
     PiJuiceBatteryReader,
@@ -40,14 +42,31 @@ from visio_recorder.drivers import (
     open_pijuice,
 )
 from visio_recorder.flag_button import FlagUploadWorker, make_flag_press_handler
-from visio_recorder.led import LedController, LedDriver, apply_led_state
+from visio_recorder.led import LedController, LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, SubprocessCommandRunner
 from visio_recorder.onboarding import (
+    ConnectionActivator,
     NmcliConnectionActivator,
+    QrScanner,
     RpicamZbarScanner,
     activate_connection,
     reactivate_connection_if_configured,
     run_onboarding,
+)
+from visio_recorder.pairing import (
+    DEVICE_FILE,
+    MAX_FAILED_PENDING_ACTIVATIONS,
+    PAIRING_FILE,
+    SESSION_FILE,
+    Pairing,
+    PairingRejectedError,
+    PairingState,
+    PairingUnavailableError,
+    clear_local_pairing,
+    complete_pairing,
+    pairing_state,
+    record_failed_activation,
+    reset_failed_activations,
 )
 from visio_recorder.power import (
     PiJuicePowerController,
@@ -83,7 +102,12 @@ from visio_recorder.segment_size import (
     default_segment_duration_ms,
     predicted_segment_bytes,
 )
-from visio_recorder.supabase_clients import build_supabase_clients
+from visio_recorder.supabase_clients import (
+    SessionRevokedError,
+    SupabaseClients,
+    restore_supabase_client,
+    supabase_clients_for,
+)
 from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
 from visio_recorder.uploader import StorageClient
 
@@ -91,7 +115,6 @@ _DEFAULT_DATA_DIR = "/var/lib/visio-recorder"
 _ONBOARDING_MAX_ATTEMPTS = 60
 _NM_KEYFILE_PATH = Path("/etc/NetworkManager/system-connections/visio.nmconnection")
 _NM_CONNECTION_ID = "visio"  # the [connection] id inside the keyfile
-_DEVICE_NAME = "visio-pendant"
 # How long a stopping (or halting) upload worker gives the flag worker to send
 # the markers queued ahead of a segment. A normal flush may take the flag
 # worker's own 30 s timeout, but that alone would spend systemd's whole
@@ -855,19 +878,121 @@ def run_recording_loop(
     return _complete_battery_halt(deps, halt_verdict, worker_thread)
 
 
+def ensure_paired(
+    data_dir: Path,
+    scanner: QrScanner,
+    activator: ConnectionActivator,
+    led_driver: LedDriver,
+    pair: Callable[[], Pairing],
+    *,
+    nm_keyfile_path: Path = _NM_KEYFILE_PATH,
+    max_attempts: int = _ONBOARDING_MAX_ATTEMPTS,
+) -> Pairing | None:
+    """The boot gate: the paired device, or None when the daemon must exit 1.
+
+    ``UNPAIRED`` deletes any session first (a pendant onboarded the old way
+    still holds its owner's) and scans for a QR. ``PENDING`` (a scanned code
+    not yet claimed) and a fresh scan both bring Wi-Fi up before ``pair``,
+    so a first boot with no connectivity never reaches the network. Exiting 1
+    lets systemd's Restart=on-failure retry from whatever state is on disk.
+    """
+    state = pairing_state(data_dir)
+    if state is PairingState.PAIRED:
+        reactivate_connection_if_configured(
+            activator, _NM_CONNECTION_ID, nm_keyfile_path
+        )
+        device_id = load_paired_device_id(data_dir / DEVICE_FILE)
+        return None if device_id is None else Pairing(device_id=device_id)
+    if state is PairingState.UNPAIRED:
+        # Also drops an unreadable pairing.json, which cannot be resumed.
+        (data_dir / SESSION_FILE).unlink(missing_ok=True)
+        (data_dir / PAIRING_FILE).unlink(missing_ok=True)
+        payload = run_onboarding(
+            scanner, nm_keyfile_path, data_dir / PAIRING_FILE, max_attempts
+        )
+        if payload is None:
+            return None
+    pending_path = data_dir / PAIRING_FILE
+    if not activate_connection(activator, _NM_CONNECTION_ID, led_driver):
+        if record_failed_activation(pending_path):
+            _logger.error(
+                "Wi-Fi did not come up on %d boots in a row; dropping the pairing "
+                "code and scanning for a new QR next boot (check the Wi-Fi password)",
+                MAX_FAILED_PENDING_ACTIVATIONS,
+            )
+        return None
+    reset_failed_activations(pending_path)
+    try:
+        return pair()
+    except PairingRejectedError:
+        _logger.exception("pairing was refused; scanning for a new QR next boot")
+        apply_led_state(led_driver, LedState.CRITICAL)
+        return None
+    except PairingUnavailableError:
+        _logger.exception("pairing could not finish; retrying next boot")
+        return None
+
+
+def pair_and_connect(
+    data_dir: Path,
+    scanner: QrScanner,
+    activator: ConnectionActivator,
+    led_driver: LedDriver,
+    url: str,
+    key: str,
+    *,
+    client_factory: Callable[[str, str], Any] = create_client,
+    nm_keyfile_path: Path = _NM_KEYFILE_PATH,
+    max_attempts: int = _ONBOARDING_MAX_ATTEMPTS,
+) -> tuple[str, SupabaseClients] | None:
+    """Pass the boot gate and sign in; None when the daemon must exit 1."""
+    paired = ensure_paired(
+        data_dir,
+        scanner,
+        activator,
+        led_driver,
+        lambda: complete_pairing(url, key, data_dir, client_factory),
+        nm_keyfile_path=nm_keyfile_path,
+        max_attempts=max_attempts,
+    )
+    if paired is None:
+        return None
+    client = paired.client
+    if client is None:
+        try:
+            client = restore_supabase_client(
+                url, key, data_dir / SESSION_FILE, client_factory=client_factory
+            )
+        except SessionRevokedError:
+            _logger.exception("this pendant's login was revoked; scanning next boot")
+            handle_revoked_login(data_dir, led_driver)
+            return None
+    # Exactly one client, and so one auto-refresh timer and one session.json
+    # persister, per process: a pairing boot keeps the client that paired.
+    return paired.device_id, supabase_clients_for(client)
+
+
+def handle_revoked_login(data_dir: Path, led_driver: LedDriver) -> None:
+    """Go back to scanning after Remove device or a re-pair elsewhere.
+
+    Only a definite rejection of the login reaches here; network failures
+    never unpair. Queued footage stays on the SD card.
+    """
+    clear_local_pairing(data_dir)
+    apply_led_state(led_driver, LedState.CRITICAL)
+
+
 def main() -> int:
     """Compose the daemon from its already-tested parts.
 
     Thin on purpose: no branching logic of its own beyond the boot-sequence
-    gates the pieces it calls already own. Validated on real hardware in
-    Epic 5 rather than through additional unit tests (see the plan's
+    gates the pieces it calls already own. The boot order and what each early
+    exit leaves running are pinned by the ``main()`` tests with every hardware
+    factory faked; the hardware itself is validated in Epic 5 (see the plan's
     Handoff section).
     """
     config = load_config(os.environ)
 
-    session_path = config.data_dir / "session.json"
-    state_path = config.data_dir / "device.json"
-    registered_marker_path = config.data_dir / "device_registered"
     queue_dir = config.data_dir / "queue"
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -877,6 +1002,36 @@ def main() -> int:
     # Every LED write in the process goes through this one owner, which also
     # renders the flag acknowledgement blink on its own thread.
     led_driver = LedController(Ws2812LedDriver())
+    try:
+        return _boot_and_record(
+            config, queue_dir, command_runner, pijuice, battery_reader, led_driver
+        )
+    finally:
+        # Every exit closes the LED owner: the battery halt's power-off, the
+        # pairing gate sending the pendant back to scanning (a revoked login
+        # included) and the end of recording. On the halt path the loop has
+        # already applied the Halted red, which the controller never blinks
+        # over, and any blink still in flight lost to that write, so closing
+        # it cannot leave anything but the red on the pixel.
+        led_driver.close()
+
+
+def _boot_and_record(
+    config: DaemonConfig,
+    queue_dir: Path,
+    command_runner: CommandRunner,
+    pijuice: Any | None,
+    battery_reader: BatteryReader,
+    led_driver: LedController,
+) -> int:
+    """main()'s boot order, with the LED owner main() closes on every exit.
+
+    The battery check runs first and may power off before the pendant's
+    pairing state is even read; only a boot that may record passes the
+    pairing gate, which yields the one supabase client every uploader and the
+    status reporter share; the flag button and its worker start only after
+    that, so an early exit leaves no worker thread behind.
+    """
     power_controller = resolve_power_controller(command_runner, pijuice)
 
     startup = run_startup_sequence(battery_reader, led_driver)
@@ -886,35 +1041,17 @@ def main() -> int:
         power_controller.power_off(wake_on_charge_pct=WAKE_ON_CHARGE_PCT)
         return 0
 
-    if not session_path.exists():
-        payload = run_onboarding(
-            RpicamZbarScanner(),
-            _NM_KEYFILE_PATH,
-            session_path,
-            _ONBOARDING_MAX_ATTEMPTS,
-        )
-        if payload is None:
-            return 1
-        if not activate_connection(
-            NmcliConnectionActivator(), _NM_CONNECTION_ID, led_driver
-        ):
-            # Keyfile and session are on disk; systemd's Restart=on-failure
-            # plus NetworkManager autoconnect retry from here.
-            return 1
-    else:
-        reactivate_connection_if_configured(
-            NmcliConnectionActivator(), _NM_CONNECTION_ID, _NM_KEYFILE_PATH
-        )
-
-    device_id = load_or_create_device_id(state_path)
-
-    clients = build_supabase_clients(
-        config.supabase_url, config.supabase_anon_key, session_path
+    connected = pair_and_connect(
+        config.data_dir,
+        RpicamZbarScanner(),
+        NmcliConnectionActivator(),
+        led_driver,
+        config.supabase_url,
+        config.supabase_anon_key,
     )
-
-    if not registered_marker_path.exists():
-        register_device(clients.registration, device_id, _DEVICE_NAME)
-        registered_marker_path.touch()
+    if connected is None:
+        return 1
+    device_id, clients = connected
 
     capture_runner = SubprocessInterruptibleRunner()
     audio = resolve_audio(command_runner, config.audio)
@@ -987,12 +1124,7 @@ def main() -> int:
             # rather than exiting and waiting for the PiJuice's charge wake.
             _logger.warning("battery recovered; restarting the recording loop")
     finally:
-        # Order matters on the halt path: the loop has already applied the
-        # Halted red, which the controller never blinks over, and any blink
-        # still in flight lost to that write, so closing the controller here
-        # cannot leave anything but the red on the pixel.
         flag_upload_worker.stop()
-        led_driver.close()
     return 0
 
 

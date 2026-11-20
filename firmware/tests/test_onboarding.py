@@ -8,8 +8,14 @@ from visio_recorder.onboarding import (
     reactivate_connection_if_configured,
     run_onboarding,
 )
+from visio_recorder.pairing import read_pending_pairing
 
 VALID_PAYLOAD = json.dumps(
+    {"v": 2, "ssid": "HomeNet", "password": "hunter2secret", "pairing_code": "code-1"}
+)
+
+# What an app from before the pairing change shows: the owner's own session.
+V1_PAYLOAD = json.dumps(
     {
         "ssid": "HomeNet",
         "password": "hunter2secret",
@@ -22,53 +28,63 @@ VALID_PAYLOAD = json.dumps(
 class FakeScanner:
     def __init__(self, results):
         self._results = list(results)
+        self.scans = 0
 
     def scan(self):
+        self.scans += 1
         return self._results.pop(0) if self._results else None
 
 
-def test_run_onboarding_writes_keyfile_and_session_on_first_good_scan(tmp_path):
+def test_run_onboarding_writes_keyfile_and_pending_code_on_first_good_scan(tmp_path):
     scanner = FakeScanner([None, "not json", VALID_PAYLOAD])
     keyfile = tmp_path / "visio.nmconnection"
-    session = tmp_path / "session.json"
+    pending = tmp_path / "pairing.json"
 
-    payload = run_onboarding(scanner, keyfile, session, max_attempts=5)
+    payload = run_onboarding(scanner, keyfile, pending, max_attempts=5)
 
     assert payload is not None and payload.ssid == "HomeNet"
     assert "psk=hunter2secret" in keyfile.read_text()
-    assert json.loads(session.read_text()) == {
-        "access_token": "at-123",
-        "refresh_token": "rt-456",
-    }
+    assert read_pending_pairing(pending) == "code-1"
+    # The pendant's login comes from pairing, never from the QR.
+    assert not (tmp_path / "session.json").exists()
+
+
+def test_run_onboarding_keeps_scanning_past_a_qr_from_an_older_app(tmp_path):
+    scanner = FakeScanner([V1_PAYLOAD, VALID_PAYLOAD])
+    keyfile = tmp_path / "visio.nmconnection"
+    pending = tmp_path / "pairing.json"
+
+    payload = run_onboarding(scanner, keyfile, pending, max_attempts=5)
+
+    assert payload is not None
+    assert scanner.scans == 2
+    assert read_pending_pairing(pending) == "code-1"
+    assert not (tmp_path / "session.json").exists()
 
 
 def test_run_onboarding_treats_invalid_credentials_as_failed_attempt(tmp_path):
     payload_with_short_password = json.dumps(
-        {
-            "ssid": "HomeNet",
-            "password": "short",
-            "user_access_token": "at-123",
-            "user_refresh_token": "rt-456",
-        }
+        {"v": 2, "ssid": "HomeNet", "password": "short", "pairing_code": "code-1"}
     )
     scanner = FakeScanner([payload_with_short_password])
     keyfile = tmp_path / "visio.nmconnection"
-    session = tmp_path / "session.json"
+    pending = tmp_path / "pairing.json"
 
-    payload = run_onboarding(scanner, keyfile, session, max_attempts=1)
+    payload = run_onboarding(scanner, keyfile, pending, max_attempts=1)
 
     assert payload is None
     assert not keyfile.exists()
-    assert not session.exists()
+    assert not pending.exists()
 
 
 def test_run_onboarding_gives_up_after_max_attempts(tmp_path):
     scanner = FakeScanner([None, "garbage"])
 
-    payload = run_onboarding(scanner, tmp_path / "k", tmp_path / "s", max_attempts=2)
+    payload = run_onboarding(scanner, tmp_path / "k", tmp_path / "p", max_attempts=2)
 
     assert payload is None
     assert not (tmp_path / "k").exists()
+    assert not (tmp_path / "p").exists()
 
 
 def test_nmcli_activator_runs_reload_then_up_in_order():

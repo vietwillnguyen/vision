@@ -4,6 +4,7 @@ import stat
 import pytest
 
 from visio_recorder.wifi_onboard import (
+    OnboardingPayload,
     QrDecodeError,
     parse_onboarding_qr_payload,
     render_nm_keyfile,
@@ -13,63 +14,108 @@ from visio_recorder.wifi_onboard import (
     write_wpa_supplicant,
 )
 
+# Distinctive values, so an assertion can prove an error message leaks neither.
+PASSWORD = "hunter2pass"
+PAIRING_CODE = "Zq8-one-time-pairing-code_Xy"
+
 VALID_PAYLOAD = json.dumps(
-    {
-        "ssid": "HomeNet",
-        "password": "hunter2",
-        "user_access_token": "access-abc",
-        "user_refresh_token": "refresh-xyz",
-    }
+    {"v": 2, "ssid": "HomeNet", "password": PASSWORD, "pairing_code": PAIRING_CODE}
 )
+
+
+def _assert_leaks_no_secret(message: str) -> None:
+    assert PASSWORD not in message
+    assert PAIRING_CODE not in message
 
 
 def test_parse_valid_qr_payload():
     result = parse_onboarding_qr_payload(VALID_PAYLOAD)
-    assert result.ssid == "HomeNet"
-    assert result.password == "hunter2"
-    assert result.user_access_token == "access-abc"
-    assert result.user_refresh_token == "refresh-xyz"
+    assert result == OnboardingPayload(
+        ssid="HomeNet", password=PASSWORD, pairing_code=PAIRING_CODE
+    )
 
 
 def test_parse_invalid_qr_payload_raises():
-    bad_payload = "not json but contains hunter2 and refresh-xyz"
+    bad_payload = f"not json but contains {PASSWORD} and {PAIRING_CODE}"
     with pytest.raises(QrDecodeError) as exc_info:
         parse_onboarding_qr_payload(bad_payload)
     message = str(exc_info.value)
-    assert "hunter2" not in message
-    assert "refresh-xyz" not in message
+    _assert_leaks_no_secret(message)
     assert "not valid JSON" in message
 
 
-def test_parse_qr_payload_missing_fields_raises():
+def test_parse_rejects_a_v1_payload_from_an_older_app():
+    # Accepting it would put the owner's own session back on the pendant.
     payload = json.dumps(
         {
             "ssid": "HomeNet",
-            "password": "hunter2",
+            "password": PASSWORD,
+            "user_access_token": "access-abc",
             "user_refresh_token": "refresh-xyz",
         }
     )
     with pytest.raises(QrDecodeError) as exc_info:
         parse_onboarding_qr_payload(payload)
     message = str(exc_info.value)
-    assert "hunter2" not in message
+    _assert_leaks_no_secret(message)
     assert "refresh-xyz" not in message
+    assert "older app version" in message
+
+
+@pytest.mark.parametrize("version", [1, 3, "2", 2.5, True, None])
+def test_parse_rejects_an_unsupported_version(version):
+    data = json.loads(VALID_PAYLOAD)
+    data["v"] = version
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(json.dumps(data))
+    message = str(exc_info.value)
+    _assert_leaks_no_secret(message)
+    assert "unsupported QR version" in message
+
+
+def test_parse_rejects_a_missing_version_even_with_a_pairing_code():
+    data = json.loads(VALID_PAYLOAD)
+    del data["v"]
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(json.dumps(data))
+    _assert_leaks_no_secret(str(exc_info.value))
+
+
+@pytest.mark.parametrize("payload", ["[]", '"text"', "2", "null"])
+def test_parse_rejects_a_payload_that_is_not_an_object(payload):
+    with pytest.raises(QrDecodeError):
+        parse_onboarding_qr_payload(payload)
+
+
+@pytest.mark.parametrize("field", ["ssid", "password", "pairing_code"])
+def test_parse_qr_payload_missing_field_raises(field):
+    data = json.loads(VALID_PAYLOAD)
+    del data[field]
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(json.dumps(data))
+    message = str(exc_info.value)
+    _assert_leaks_no_secret(message)
     assert "missing required field" in message
-    assert "user_access_token" in message
+    assert field in message
 
 
-@pytest.mark.parametrize(
-    "field", ["ssid", "password", "user_access_token", "user_refresh_token"]
-)
+@pytest.mark.parametrize("field", ["ssid", "password", "pairing_code"])
 def test_parse_qr_payload_non_string_field_raises(field):
     data = json.loads(VALID_PAYLOAD)
     data[field] = 123
     with pytest.raises(QrDecodeError) as exc_info:
         parse_onboarding_qr_payload(json.dumps(data))
     message = str(exc_info.value)
-    assert "hunter2" not in message
-    assert "refresh-xyz" not in message
+    _assert_leaks_no_secret(message)
     assert field in message
+
+
+def test_parse_qr_payload_empty_pairing_code_raises():
+    data = json.loads(VALID_PAYLOAD)
+    data["pairing_code"] = ""
+    with pytest.raises(QrDecodeError) as exc_info:
+        parse_onboarding_qr_payload(json.dumps(data))
+    assert "pairing_code" in str(exc_info.value)
 
 
 def test_render_wpa_supplicant_includes_ssid_and_password():

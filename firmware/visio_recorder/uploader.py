@@ -14,3 +14,12 @@ def upload_segment(client: StorageClient, device_id: str, local_path: Path) -> s
 
 class ObjectTooLargeError(Exception):
     """Storage refused the object because it is over its size limit (413)."""
+
+
+class ObjectAlreadyStoredError(Exception):
+    """Storage holds this key already, under a login this one cannot read (409).
+
+    The pendant reads back only what its own login uploaded, so after a
+    re-pair an object stored by the previous login looks absent to the
+    idempotency check and the upload is answered as a duplicate.
+    """

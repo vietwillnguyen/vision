@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from pipeline.orchestrator import DeviceRecord, OrchestratorDeps, run_nightly
+from visio_recorder.pairing import CLAIM_ARG, CLAIM_RPC
 
 SCHEMA_FIXTURE = Path(__file__).parent / "fixtures" / "public_schema.json"
 
@@ -209,3 +210,36 @@ def test_reel_row_matches_migration_columns(nightly_run):
     assert not missing, f"pipeline's reel row is missing required columns: {missing}"
     assert columns["duration_sec"]["data_type"] == "integer"
     assert isinstance(row["duration_sec"], int)
+
+
+def _load_function(name: str) -> dict:
+    """Return the fixture's signature for a public RPC.
+
+    The pairing functions are the API the app and firmware call; firmware has
+    no generated client, so this fixture is its "migration changed, build goes
+    red" check.
+    """
+    functions = json.loads(SCHEMA_FIXTURE.read_text())["functions"]
+    assert name in functions, (
+        f"{SCHEMA_FIXTURE.name} has no {name} function; "
+        "regenerate it with scripts/gen-db-types.sh"
+    )
+    return functions[name]
+
+
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("claim_pairing", {"p_code": "text"}),
+        ("create_pairing_code", {"p_device_id": "uuid"}),
+        ("unpair_device", {"p_device_id": "uuid"}),
+    ],
+)
+def test_pairing_function_signatures(name, args):
+    assert _load_function(name)["args"] == args
+
+
+def test_firmware_claims_with_the_rpc_the_migration_defines():
+    # Firmware has no generated client: a renamed function or argument in the
+    # migration has to redden this instead of failing on a pendant.
+    assert list(_load_function(CLAIM_RPC)["args"]) == [CLAIM_ARG]

@@ -76,29 +76,48 @@ psql "$db_url" --no-psqlrc --quiet --tuples-only --no-align \
   --file=/dev/stdin > "$fixture_out" <<'SQL'
 select jsonb_pretty(jsonb_build_object(
   'generated_by', 'scripts/gen-db-types.sh',
-  'source', 'information_schema.columns, schema public, base tables only',
-  'tables', coalesce(jsonb_object_agg(table_name, columns), '{}'::jsonb)
-))
-from (
-  select
-    c.table_name,
-    jsonb_object_agg(
-      c.column_name,
-      jsonb_build_object(
-        'data_type', c.data_type,
-        'is_nullable', c.is_nullable = 'YES',
-        'has_default', c.column_default is not null
-      )
-      order by c.column_name
-    ) as columns
-  from information_schema.columns c
-  join information_schema.tables t
-    on t.table_schema = c.table_schema
-   and t.table_name = c.table_name
-  where c.table_schema = 'public'
-    and t.table_type = 'BASE TABLE'
-  group by c.table_name
-) per_table;
+  'source', 'information_schema.columns (base tables only) and information_schema.routines, schema public',
+  'tables', (
+    select coalesce(jsonb_object_agg(table_name, columns), '{}'::jsonb)
+    from (
+      select
+        c.table_name,
+        jsonb_object_agg(
+          c.column_name,
+          jsonb_build_object(
+            'data_type', c.data_type,
+            'is_nullable', c.is_nullable = 'YES',
+            'has_default', c.column_default is not null
+          )
+          order by c.column_name
+        ) as columns
+      from information_schema.columns c
+      join information_schema.tables t
+        on t.table_schema = c.table_schema
+       and t.table_name = c.table_name
+      where c.table_schema = 'public'
+        and t.table_type = 'BASE TABLE'
+      group by c.table_name
+    ) per_table
+  ),
+  -- The RPCs (information_schema.routines and their IN parameters). Firmware
+  -- has no generated client, so its contract test checks the RPC name and
+  -- argument names it sends against this.
+  'functions', (
+    select coalesce(jsonb_object_agg(r.routine_name, jsonb_build_object(
+      'args', (
+        select coalesce(jsonb_object_agg(p.parameter_name, p.data_type), '{}'::jsonb)
+        from information_schema.parameters p
+        where p.specific_schema = r.specific_schema
+          and p.specific_name = r.specific_name
+          and p.parameter_mode = 'IN'
+      ),
+      'returns', r.data_type
+    )), '{}'::jsonb)
+    from information_schema.routines r
+    where r.specific_schema = 'public'
+  )
+));
 SQL
 
 echo "gen-db-types: wrote $types_out and $fixture_out" >&2

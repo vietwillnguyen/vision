@@ -1,5 +1,5 @@
 {
-    "source": "information_schema.columns, schema public, base tables only",
+    "source": "information_schema.columns (base tables only) and information_schema.routines, schema public",
     "tables": {
         "reels": {
             "id": {
@@ -61,6 +61,11 @@
             },
             "push_token": {
                 "data_type": "text",
+                "has_default": false,
+                "is_nullable": true
+            },
+            "device_user_id": {
+                "data_type": "uuid",
                 "has_default": false,
                 "is_nullable": true
             }
@@ -227,6 +232,26 @@
                 "has_default": true,
                 "is_nullable": false
             }
+        }
+    },
+    "functions": {
+        "claim_pairing": {
+            "args": {
+                "p_code": "text"
+            },
+            "returns": "uuid"
+        },
+        "unpair_device": {
+            "args": {
+                "p_device_id": "uuid"
+            },
+            "returns": "void"
+        },
+        "create_pairing_code": {
+            "args": {
+                "p_device_id": "uuid"
+            },
+            "returns": "record"
         }
     },
     "generated_by": "scripts/gen-db-types.sh"

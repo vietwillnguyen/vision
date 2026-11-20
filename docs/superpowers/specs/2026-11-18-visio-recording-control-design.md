@@ -69,7 +69,7 @@ Every recommendation the brief listed was re-verified against `main` at `7f713a9
 | 4.4: STOPPED (dim white, solid) and SHUTTING_DOWN (white, pulsing) LED states | Not landed; `LedState` still has exactly RECORDING, UPLOADING, LOW_BATTERY and CRITICAL. PR #98 changes how the LED state is derived (an `upload_critical` input to `next_led_state`, a run-long `UploadHealth` counter, and `_upload_showing_led` bracketing every upload) but adds no state | `firmware/visio_recorder/led.py:5-9`, PR #98 diff of `recording_loop.py` |
 | 4.4: a gpiozero callback thread setting the LED breaks the single-owner invariant, and the real driver has no lock | Half moved. The SPI driver that replaced the PWM one (PR #85) takes a lock around every frame, so two threads can no longer interleave bytes on the wire. The ownership invariant itself is unchanged and PR #98 leans on it harder: the worker owns every upload LED call and the main thread applies only the halt CRITICAL after joining it | `firmware/visio_recorder/ws2812_spi.py:97-117`, `firmware/visio_recorder/daemon.py:255-263` (PR #98 docstring) |
 | 4.6: `recording_active` hard-coded `True`, so a stopped device never reaches the app | Mostly moved in PR #70. `_push_recording_status` upserts `true` before the first capture and `false` after the loop exits for any reason. The per-segment upsert inside `on_segment_complete` still passes the literal `True`, which is correct today only because the loop has no in-process stopped state | `firmware/visio_recorder/daemon.py:210-240,318-323,369-377`, `firmware/visio_recorder/recording_loop.py:223` |
-| 8 note: the stopped state must be persisted on the data partition, not an overlay | Not landed, and under the unconditional ruling it is no longer needed for the reboot case; see "Persistence" | `firmware/visio_recorder/daemon.py:392-396` (the data dir holds `session.json`, `device.json`, `device_registered`, `queue/`) |
+| 8 note: the stopped state must be persisted on the data partition, not an overlay | Not landed, and under the unconditional ruling it is no longer needed for the reboot case; see "Persistence" | `firmware/visio_recorder/daemon.py:392-396` (the data dir holds `session.json`, `device.json`, `queue/`, and since device pairing `pairing.json` instead of `device_registered`) |
 | 3.2: a killed capture leaks an orphan `.h264` forever | Fixed in PR #70; `recover_orphaned_segments` runs at boot and the audio-failure path already queues a non-empty partial capture in the same run | `firmware/visio_recorder/recording_loop.py:106-156`, `daemon.py:352-367` |
 | 9.1-9.3: non-idempotent, mislabelled, whole-file-read uploads | Fixed in PRs #77 and #83 | `firmware/visio_recorder/supabase_clients.py:27-78` |
 | App renders `Recording` or `Paused` from `recording_active` | Unchanged and ready; realtime on `device_status` is enabled | `app/src/screens/DeviceScreen.tsx:48-50`, `app/src/hooks/useDeviceStatus.ts:62-92`, `supabase/migrations/20260720120000_enable_device_status_realtime.sql` |
@@ -106,7 +106,7 @@ States, with the LED each one shows:
 
 | State | Entered when | LED | Leaves when |
 |---|---|---|---|
-| BOOTING | process start; battery check, onboarding, registration, orphan recovery, startup flush | STOPPED (dim white); a low battery goes to the app, since health states only show while recording | the recording loop starts |
+| BOOTING | process start; battery check, pairing gate (onboarding and the pendant's own login), orphan recovery, startup flush | STOPPED (dim white); a low battery goes to the app, since health states only show while recording | the recording loop starts |
 | STOPPED | loop start on every boot; a hold while RECORDING | STOPPED | a hold (to RECORDING); SIGTERM (to SHUTTING_DOWN); battery halt (to HALTED) |
 | RECORDING | a hold while STOPPED | RECORDING, LOW_BATTERY or CRITICAL (uploads no longer show on the LED) | a hold (to STOPPED, after the in-flight capture is cut); SIGTERM; battery halt |
 | SHUTTING_DOWN | SIGTERM or SIGINT in any state | SHUTTING_DOWN (white) | the process exits |
@@ -181,7 +181,7 @@ Nothing is written to the overlay or the data partition for this, so the August 
 
 `device_status.recording_active` already exists (`boolean not null default false`), the firmware already owns the row, and the app already subscribes to it; for the recommended first ship there is no migration.
 Its meaning sharpens to "the loop is currently capturing": `true` while RECORDING, `false` in every other state.
-The daemon pushes it at four points: once at boot after registration (so the app leaves "Loading device status..." on first boot and shows Stopped even before any press), on every STOPPED-to-RECORDING and RECORDING-to-STOPPED transition, and at loop exit as today.
+The daemon pushes it at four points: once at boot after the pairing gate signs the pendant in (so the app leaves "Loading device status..." on first boot and shows Stopped even before any press), on every STOPPED-to-RECORDING and RECORDING-to-STOPPED transition, and at loop exit as today.
 The per-segment upsert in `on_segment_complete` stops passing the literal `True` and reads the live value through a small `StatusReporter` that stamps `recording_active` from `RecordingControl` at send time under a lock, so a short segment uploaded after a stop press reports `false`, and the worker's upsert can no longer paint over the main thread's transition push.
 All transition pushes log and swallow their own failures, as the start and exit pushes already do; a stop may never depend on reaching Supabase.
 
@@ -207,7 +207,7 @@ Short segments are routine once the button exists; the clip is `min(15 s, durati
 
 Today `run_startup_sequence` shows RECORDING green at boot, before onboarding and before any capture.
 It changes to STOPPED (or LOW_BATTERY when the battery is low; CRITICAL and halt when it is critical, unchanged), so a pendant scanning a QR code is honestly not recording.
-Onboarding itself is unchanged; after it writes the keyfile and session and activates the connection, registration runs, the boot status push reports stopped, and the device waits for a hold.
+Onboarding itself is unchanged by this spec; after it writes the keyfile and the pairing code, activates the connection and claims the code (the pendant's own login, see the device pairing design), the boot status push reports stopped, and the device waits for a hold.
 Whether completing onboarding should start recording once is decision 3; the ruling says no, and this spec recommends no, because the first thing a new wearer should learn is that the button is what starts it.
 
 ### systemd unit

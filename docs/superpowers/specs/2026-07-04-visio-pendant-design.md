@@ -151,10 +151,17 @@ A single Python systemd service manages the full device lifecycle.
    A confirmed halt (charge or voltage, and only while not externally powered) shows the Halted solid red LED and runs the power-off sequence instead of exiting 0 - an exit left the Pi powered and discharging, which is how an idle pendant browns out mid-write.
    A confirmed low battery proceeds but shows the low-battery LED throughout, with the hysteresis band already applied.
    See Battery and Power Management for the thresholds, the debounce, and the power-off sequence.
-3. First boot only (no session file on disk yet): scan a QR code via `rpicam-still` + zbar to onboard WiFi (writes the NetworkManager keyfile) and Supabase auth, up to 60 attempts; exit 1 if onboarding never succeeds.
-   Then activate the connection (`nmcli connection reload` + `nmcli connection up visio`); on activation failure, flash the Critical red LED and exit 1 so systemd retries.
-   On restart boots (session file already on disk), the same reload/up runs again as a best-effort retry whenever the keyfile exists, so a first boot whose activation failed is not stranded offline; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
-4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
+   This check runs before the pairing gate: a confirmed halt powers off before the pairing state is even read, so an unpaired or pending pendant on a flat battery never scans or touches the network.
+3. Pairing gate (as-built, device pairing, [`2026-11-19-visio-device-pairing-design.md`](2026-11-19-visio-device-pairing-design.md)): the daemon reads its pairing state from the data dir.
+   `UNPAIRED` (no finished pairing, including a pendant onboarded under the old contract) deletes any `session.json`, then scans a QR code via `rpicam-still` + zbar, up to 60 attempts, which writes the NetworkManager keyfile and saves the one-time pairing code to `pairing.json`; exit 1 if no QR ever parses.
+   `UNPAIRED` after a good scan and `PENDING` (a saved code not yet claimed) both activate the connection (`nmcli connection reload` + `nmcli connection up visio`; on failure, flash the Critical red LED and exit 1 so systemd retries), then sign in anonymously and claim the code with `claim_pairing`, which returns the owner's `device_id`.
+   A saved code whose Wi-Fi activation fails on `MAX_FAILED_PENDING_ACTIVATIONS` (3) boots in a row is dropped, so the next boot scans again instead of retrying a mistyped Wi-Fi password forever.
+   A refused code clears the attempt, flashes Critical and exits 1, so the next boot scans again; a network or server failure exits 1 and keeps the code for the next boot.
+   `PAIRED` boots run the same reload/up as a best-effort retry whenever the keyfile exists; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
+4. Sign in as the pendant: a pairing boot keeps the client that just claimed the code, and a `PAIRED` boot restores the saved `session.json` with the refresh-token grant (`restore_supabase_client`), so exactly one supabase client and one auto-refresh timer run per boot, and every rotated token is saved atomically.
+   An unreadable `session.json` counts as unpaired.
+   A definite rejection (the login was removed in the app or replaced by a re-pair) clears the local pairing, flashes Critical and exits 1, so the next boot scans for a QR; network failures never unpair.
+   The pendant no longer writes `devices`: the device id comes from the claim.
 5. Flush any pending upload queue left over from a previous run, then recover orphaned captures that an unclean stop (a capture killed instead of finalised, power cut, crash) left at the top level of the data dir, and flush again only if anything was recovered.
    The flush drains flag markers before segments (`markers_before_segments`), so a boot that cannot finish a backlog never sends a day's segments and leaves their flags behind; see Manual flag button.
    A lone or interrupted `.h264` is (re-)muxed and queued, and a lone `.mp4` is queued as is.
@@ -349,10 +356,10 @@ Capture region:
 | State | Look | Capturing? | Enters when | Exits when (to) | Status |
 |---|---|---|---|---|---|
 | Off | Dark | No | Shutting down finished, or power was cut from any state (ungraceful; the next boot recovers the cut segment) | Power applied, the PiJuice power button, or systemd starting the daemon (Booting) | Partly built: no `ExecStopPost=` yet, and the WS2812B latches its last frame, so a crash leaves the last colour lit |
-| Booting | White, dim solid (same look as Stopped) | No | Daemon start | No `session.json` (Scanning, first boot); session on disk (Stopped, or Recording if the `/run` marker says a crash interrupted a recording); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down) | Designed (PR #103) |
-| Scanning | Cyan, pulsing | No | First boot with no `session.json`; a hold released at 10 s or more from Stopped; Setup needed and any press; `visio-reonboard` | QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; power-off hold or SIGTERM (Shutting down) | New (today onboarding shows Recording green, and giving up exits 1 into a restart loop) |
+| Booting | White, dim solid (same look as Stopped) | No | Daemon start | Not paired: no finished pairing, a legacy or unreadable `session.json`, or a saved login the server refuses at boot (Scanning); a saved pairing code not yet claimed (stays Booting while Wi-Fi comes up and the code is claimed, then Stopped; a refused code goes to Scanning); paired with the login restored (Stopped, or Recording if the `/run` marker says a crash interrupted a recording); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down) | Designed (PR #103) |
+| Scanning | Cyan, pulsing | No | A boot that is not paired (first boot, a legacy or unreadable session, a refused pairing code, a removed or revoked login, or a saved code whose Wi-Fi failed on 3 boots in a row); a hold released at 10 s or more from Stopped; Setup needed and any press; `visio-reonboard` | QR read and Wi-Fi up (Booting, then Stopped); 60 attempts, about 2-3 min, with no QR: first boot (Setup needed), re-onboard (Stopped, old profile kept); a short press during a re-onboard cancels it (Stopped, old profile kept); a failed Wi-Fi activation counts as an attempt and scanning continues; power-off hold or SIGTERM (Shutting down) | New (today onboarding shows Recording green, and giving up exits 1 into a restart loop; a failed Wi-Fi activation after a scan exits 1 with the pairing code kept, and the third such boot in a row drops the code and scans) |
 | Setup needed | Cyan, dim solid | No | First-boot scanning used its 60 attempts | A press or a hold released before 5 s (Scanning, a fresh 60 attempts); power cycle (Booting, then Scanning); power-off (Shutting down) | New |
-| Stopped | White, dim solid | No | Every boot with a session; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (`stop_reason = storage_full`); a re-onboard that timed out or was cancelled | A hold released between 2 and 5 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down) | Designed (PR #103) |
+| Stopped | White, dim solid | No | Every paired boot; a 2 s hold while Recording; finishing onboarding; under 256 MB free while Recording (`stop_reason = storage_full`); a re-onboard that timed out or was cancelled | A hold released between 2 and 5 s (Recording, refused while under 1.5 GB free); a hold released at 10 s or more (Scanning); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down) | Designed (PR #103) |
 | Recording | Green, solid (red flashing or yellow pulsing while a health condition holds, see the resolver) | Yes | A hold released between 2 and 5 s from Stopped; a crash-restart that resumes a recording (PR #103 decision D2-b) | A 2 s hold (Stopped, after the in-flight segment is cut); under 256 MB free (Stopped, storage full); 3 capture failures in a row (Halted, camera); battery halt confirmed (Halted, battery); power-off hold or SIGTERM (Shutting down) | Built (today derived from intent, not evidence) |
 | Flag saved (overlay) | Magenta, 150 ms | Yes | A short press released while Recording, once the marker is fsynced (PR #100) | After 150 ms, back to the underlying state | Designed (PR #100) |
 | Shutting down | White, pulsing | No | From any running state: a hold released at 5-10 s, or at 10 s or more outside Stopped, SIGTERM or SIGINT (a reboot, `systemctl stop`, a watchdog restart), or a battery halt's drain finishing (the LED stays Halted red, which outranks this) | The graceful steps above finish or `TimeoutStopSec=30` passes (systemd then kills the process): Off, powered down for the hold and the battery halt, restarted for a reboot or watchdog | Designed (PR #103 covers SIGTERM; the hold and the power-off are new) |
@@ -363,7 +370,7 @@ What the wearer can do in each state that needs them:
 
 - **Setup needed:** open the app's QR screen, then press the button to scan again; power cycling also restarts scanning.
 - **Stopped because storage is full:** get the pendant on Wi-Fi so the queue uploads and frees space, then hold 2 s; the app shows "Storage full" and the backlog size.
-- **Critical (still recording):** for the SD card, get on Wi-Fi so the queue uploads; for upload failures, open the app (an expired login is fixed by re-onboarding, a full bucket by freeing storage).
+- **Critical (still recording):** for the SD card, get on Wi-Fi so the queue uploads; for upload failures, open the app (a full bucket is fixed by freeing storage; a login removed in the app or replaced by a re-pair is not detected mid-run, and the next boot finds it refused and returns the pendant to QR scanning, so pair it again from the app).
 - **Halted, battery:** plug in a charger; during the drain that cancels the halt and the pendant carries on, after it the pendant powers off and comes back by itself (PiJuice) or when powered on.
 - **Halted, camera:** hold 2 s to retry; if it fails again, hold 5 s to power off safely and reseat the camera ribbon.
 - **Any state:** hold 5 s until the LED pulses white, then release, to power off safely; unplugging is the only unsafe way to turn it off.
@@ -420,8 +427,8 @@ stateDiagram-v2
     Off --> Running: power on
     state Running {
         [*] --> Booting
-        Booting --> Scanning: no session.json
-        Booting --> Stopped: session on disk
+        Booting --> Scanning: not paired, or login revoked
+        Booting --> Stopped: paired, login restored
         Booting --> HaltedBattery: battery halt
         Scanning --> Booting: QR read, Wi-Fi up
         Scanning --> SetupNeeded: 60 attempts, first boot
@@ -463,7 +470,7 @@ Decide at M3 with the measured power cost of uploading; it changes only the Wait
 
 Transition rules:
 - **Boot.** Every boot comes up Stopped and only a 2 s hold starts recording (PR #103, decisions D2-b and D3-a: a daemon crash-restart within one power cycle resumes the wearer's last choice through a `/run` marker, and finishing onboarding leaves the pendant Stopped).
-  Recording always requires `session.json`: no path reaches Recording without a saved login.
+  Recording always requires a paired login restored from `session.json`: no path reaches Recording without one.
   The unit drops `After=network-online.target` (keeping a plain `Wants=`), so an offline boot lights the LED within seconds instead of waiting for the network-online timeout; the startup flush already tolerates no network.
 - **Button gestures** (one button, GPIO 17, told apart by hold time with gpiozero's `Button(hold_time=2)`, `held_time` and a timer for the later thresholds).
   The same hold ladder applies in every state, and the LED previews what releasing will do, so the wearer can let go at the right moment without looking at a phone:
@@ -661,8 +668,12 @@ This avoids needing to configure a captive portal or AP mode (`hostapd`).
 **As-built deviation:** the daemon writes a NetworkManager keyfile (`/etc/NetworkManager/system-connections/visio.nmconnection`) instead of `wpa_supplicant.conf`, because stock Raspberry Pi OS Bookworm uses NetworkManager and does not honor `wpa_supplicant.conf`.
 
 **As-built activation:** after onboarding writes the keyfile, `main()` runs `nmcli connection reload` then `nmcli connection up visio` (behind a `ConnectionActivator` protocol with a subprocess-backed real implementation).
-On activation failure the daemon flashes the Critical red LED and exits 1; the keyfile and session are already on disk, so systemd's `Restart=on-failure` plus NetworkManager autoconnect retry from there rather than re-running onboarding.
+On activation failure the daemon flashes the Critical red LED and exits 1; the keyfile and the pairing code are already on disk, so systemd's `Restart=on-failure` plus NetworkManager autoconnect retry from there rather than re-running onboarding.
 Planned change (LED state machine above): a first-boot activation failure returns to Scanning, and a re-onboard activation failure restores the previous profile and returns to Stopped, so neither exits into the restart loop.
+
+**As-built (device pairing, 2026-11):** the QR carries the Wi-Fi credentials plus a one-time pairing code (payload v2), never a login.
+The pendant signs in anonymously once Wi-Fi is up and claims the code, so it holds a login of its own that the phone refreshing or logging out cannot touch.
+See [`2026-11-19-visio-device-pairing-design.md`](2026-11-19-visio-device-pairing-design.md).
 Because NetworkManager does not reliably load dropped-in keyfiles on its own, restart boots also retry the reload/up best-effort whenever the keyfile exists; that retry never fails the boot.
 
 ### Device Status Reporting
@@ -886,7 +897,12 @@ A full 8-hour day (~14.4GB, ~480 segments) scales each line by four and stays un
 - Recording active / paused indicator.
 - Settings: WiFi re-onboarding (show QR code), resolution, segment length, score weights.
 
-**As-built gap:** resolved - see [`2026-07-20-wifi-reonboard-qr-screen-design.md`](2026-07-20-wifi-reonboard-qr-screen-design.md). The Re-onboard button navigates to a QR display screen that encodes the WiFi credentials plus the signed-in user's current Supabase session tokens.
+**As-built gap:** resolved - see [`2026-07-20-wifi-reonboard-qr-screen-design.md`](2026-07-20-wifi-reonboard-qr-screen-design.md). The Re-onboard button navigates to a QR display screen.
+
+**As-built (device pairing, 2026-11):** that QR now encodes the Wi-Fi credentials plus a one-time pairing code, and the screen reports "Pendant paired" once the pendant claims it, or offers a new code when it expires.
+The tab also has "Remove device", which revokes the pendant's login behind a confirmation and keeps the device and its footage; a device without a pendant shows "Not paired" with a "Pair pendant" button.
+An account with no device sees "Set up your Visio", which starts the same pairing and creates the device when the pendant claims the code.
+See [`2026-11-19-visio-device-pairing-design.md`](2026-11-19-visio-device-pairing-design.md).
 
 **Tab 4 - Archive**
 
@@ -896,7 +912,9 @@ A full 8-hour day (~14.4GB, ~480 segments) scales each line by four and stays un
 ### Auth
 
 Supabase Auth with email/password.
-Each device is linked to a user account via a `device_id` UUID generated on first boot.
+Each device is linked to a user account via a `device_id` UUID.
+
+**As-built (device pairing, 2026-11):** the `devices` row is created by the database when a pendant claims the owner's first pairing code, not by the pendant, and each pendant signs in as its own anonymous auth user linked by `devices.device_user_id`.
 
 ---
 
@@ -904,7 +922,8 @@ Each device is linked to a user account via a `device_id` UUID generated on firs
 
 ```sql
 users            -- Supabase Auth managed
-devices          -- device_id, user_id, name, created_at
+devices          -- device_id, user_id, name, created_at, push_token,
+                 --   device_user_id (the paired pendant's own anonymous login, unique)
 device_status    -- device_id, battery_pct, storage_used_gb, storage_free_gb,
                  --   segments_pending, segments_uploaded_today, recording_active, updated_at
 segments         -- id, device_id, recorded_at, duration_sec, s3_key,

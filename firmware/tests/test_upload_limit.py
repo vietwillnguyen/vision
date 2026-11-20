@@ -16,7 +16,7 @@ from visio_recorder.upload_limit import (
     split_segment,
     upload_queued,
 )
-from visio_recorder.uploader import ObjectTooLargeError
+from visio_recorder.uploader import ObjectAlreadyStoredError, ObjectTooLargeError
 
 MAX = 1000
 
@@ -65,12 +65,20 @@ class FakeSplitRunner:
 
 
 class RecordingStorage:
-    def __init__(self, too_large_over: int | None = None, fail: bool = False):
+    def __init__(
+        self,
+        too_large_over: int | None = None,
+        fail: bool = False,
+        already_stored: bool = False,
+    ):
         self.too_large_over = too_large_over
         self.fail = fail
+        self.already_stored = already_stored
         self.uploaded: list[tuple[str, int]] = []
 
     def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
+        if self.already_stored:
+            raise ObjectAlreadyStoredError(f"{object_path} exists but is not visible")
         size = local_path.stat().st_size
         if self.too_large_over is not None and size > self.too_large_over:
             raise ObjectTooLargeError(f"{object_path} is {size} bytes")
@@ -273,6 +281,29 @@ def test_upload_queued_moves_an_unsplittable_segment_aside_and_never_retries_it(
     assert [p.name for p in rejected_dir(queue_dir).iterdir()] == [
         "20261116_090000.mp4"
     ]
+
+
+def test_upload_queued_sets_aside_a_segment_an_earlier_pairing_stored(tmp_path, caplog):
+    # After a re-pair the new login cannot see what the previous one uploaded,
+    # so storage answers 409 to a key that looks absent. Retrying it unchanged
+    # would fail forever.
+    queue_dir = tmp_path / "queue"
+    path = _segment(queue_dir, "20261116_090000.mp4", 10)
+
+    with caplog.at_level("ERROR"):
+        outcome = upload_queued(
+            path,
+            RecordingStorage(already_stored=True),
+            "dev",
+            _limit(FakeSplitRunner([])),
+        )
+
+    assert (outcome.uploaded, outcome.failed, outcome.rejected) == (0, 0, 1)
+    assert list(queue_dir.iterdir()) == []
+    assert [p.name for p in rejected_dir(queue_dir).iterdir()] == [
+        "20261116_090000.mp4"
+    ]
+    assert "20261116_090000.mp4" in caplog.text
 
 
 def test_upload_queued_keeps_a_segment_queued_on_a_network_failure(tmp_path):

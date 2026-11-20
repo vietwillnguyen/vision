@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from visio_recorder.private_files import write_private_text_atomic
+
 _UNSAFE_CHARS = ('"', "\n", "\r", "\\")
 _PSK_MIN_LENGTH = 8
 _PSK_MAX_LENGTH = 63
@@ -12,37 +14,69 @@ class QrDecodeError(ValueError):
     pass
 
 
-@dataclass
+# The QR contract the app writes; docs/superpowers/specs/
+# 2026-11-19-visio-device-pairing-design.md, "QR payload v2".
+QR_PAYLOAD_VERSION = 2
+
+
+@dataclass(frozen=True)
 class OnboardingPayload:
     ssid: str
     password: str
-    user_access_token: str
-    user_refresh_token: str
+    pairing_code: str
 
 
 def parse_onboarding_qr_payload(payload: str) -> OnboardingPayload:
+    """Parse the app's v2 onboarding QR: Wi-Fi credentials and a pairing code.
+
+    A v1 payload (the owner's own session tokens) is refused outright rather
+    than accepted for compatibility: accepting it would put the owner's login
+    back on the pendant. Messages carry only the payload length, never a
+    value, because the payload holds the Wi-Fi password and a pairing code.
+    """
     try:
         data = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise QrDecodeError(
             f"invalid onboarding QR payload: not valid JSON (length={len(payload)})"
         ) from exc
+    if not isinstance(data, dict):
+        raise QrDecodeError(
+            f"invalid onboarding QR payload: not a JSON object (length={len(payload)})"
+        )
+
+    version = data.get("v")
+    # v1 had no version field and carried session tokens instead of a code.
+    if "v" not in data and "pairing_code" not in data:
+        raise QrDecodeError(
+            f"QR is from an older app version; update the app (length={len(payload)})"
+        )
+    # bool is an int subclass, and "2" is not the JSON number 2.
+    if type(version) is not int or version != QR_PAYLOAD_VERSION:
+        raise QrDecodeError(
+            "invalid onboarding QR payload: unsupported QR version "
+            f"(expected {QR_PAYLOAD_VERSION}, length={len(payload)})"
+        )
 
     fields = {}
-    for field in ("ssid", "password", "user_access_token", "user_refresh_token"):
-        try:
-            value = data[field]
-        except (KeyError, TypeError) as exc:
+    for field in ("ssid", "password", "pairing_code"):
+        if field not in data:
             raise QrDecodeError(
                 f"invalid onboarding QR payload: missing required field {field!r} "
                 f"(length={len(payload)})"
-            ) from exc
+            )
+        value = data[field]
         if not isinstance(value, str):
             raise QrDecodeError(
                 f"invalid onboarding QR payload: field {field!r} is not a string "
                 f"(length={len(payload)})"
             )
         fields[field] = value
+    if not fields["pairing_code"]:
+        raise QrDecodeError(
+            "invalid onboarding QR payload: field 'pairing_code' is empty "
+            f"(length={len(payload)})"
+        )
     return OnboardingPayload(**fields)
 
 
@@ -114,6 +148,12 @@ def write_nm_keyfile(path: Path, ssid: str, password: str) -> None:
 def write_session_credentials(
     path: Path, access_token: str, refresh_token: str
 ) -> None:
-    _write_private_text(
-        path, json.dumps({"access_token": access_token, "refresh_token": refresh_token})
-    )
+    """Replace ``session.json`` atomically, readable only by its owner.
+
+    The refresh token rotates on every refresh and the old one stops working,
+    so this file is rewritten during normal running, not just at pairing. A
+    torn write would leave neither token and the pendant would need pairing
+    again, hence the atomic replace.
+    """
+    content = json.dumps({"access_token": access_token, "refresh_token": refresh_token})
+    write_private_text_atomic(path, content)

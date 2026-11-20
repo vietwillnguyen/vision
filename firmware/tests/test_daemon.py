@@ -44,12 +44,16 @@ from visio_recorder.capture import AudioSettings, CaptureExit, VideoSettings
 from visio_recorder.daemon import (
     STOP_MARKER_FLUSH_TIMEOUT_SEC,
     LoopDeps,
+    ensure_paired,
+    handle_revoked_login,
     load_config,
+    pair_and_connect,
     resolve_audio,
     resolve_power_controller,
     run_recording_loop,
     run_startup_sequence,
 )
+from visio_recorder.device_identity import store_paired_device_id
 from visio_recorder.drivers import Ws2812LedDriver
 from visio_recorder.flag_button import (
     FLAG_UPLOAD_THREAD_NAME,
@@ -58,12 +62,23 @@ from visio_recorder.flag_button import (
     write_flag_marker,
 )
 from visio_recorder.led import LedController, LedPattern, LedState, apply_led_state
+from visio_recorder.pairing import (
+    MAX_FAILED_PENDING_ACTIVATIONS,
+    Pairing,
+    PairingRejectedError,
+    PairingState,
+    PairingUnavailableError,
+    pairing_state,
+    write_pending_pairing,
+)
 from visio_recorder.power import (
     PiJuicePowerController,
     SystemdPowerController,
 )
 from visio_recorder.recording_loop import DiskStats, LoopOutcome, RetryBackoff
+from visio_recorder.supabase_clients import SupabaseStorage
 from visio_recorder.upload_queue import list_pending
+from visio_recorder.wifi_onboard import write_session_credentials
 
 CRITICAL_LED = ((255, 0, 0), LedPattern.FLASHING)
 HALTED_LED = ((255, 0, 0), LedPattern.SOLID)
@@ -1951,6 +1966,302 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
     assert list_pending(queue_dir) == []
 
 
+# The pairing gate main() runs before anything touches Supabase.
+
+PAIRED_DEVICE_ID = "11111111-1111-1111-1111-111111111111"
+QR_V2 = (
+    '{"v": 2, "ssid": "HomeNet", "password": "hunter2secret", "pairing_code": "code-1"}'
+)
+
+
+class ScriptedScanner:
+    def __init__(self, results) -> None:
+        self._results = list(results)
+        self.scans = 0
+
+    def scan(self):
+        self.scans += 1
+        return self._results.pop(0) if self._results else None
+
+
+class RecordingActivator:
+    def __init__(self, events: list, fail: bool = False) -> None:
+        self._events = events
+        self._fail = fail
+
+    def activate(self, connection_id: str) -> None:
+        self._events.append(("activate", connection_id))
+        if self._fail:
+            raise RuntimeError("nmcli failed")
+
+
+@dataclass
+class PairingRig:
+    data_dir: Path
+    events: list = field(default_factory=list)
+    led: FakeLedDriver = field(default_factory=FakeLedDriver)
+    pair_error: Exception | None = None
+
+    def pair(self) -> Pairing:
+        self.events.append("pair")
+        if self.pair_error is not None:
+            if isinstance(self.pair_error, PairingRejectedError):
+                # What complete_pairing does before raising it.
+                (self.data_dir / "pairing.json").unlink(missing_ok=True)
+                (self.data_dir / "session.json").unlink(missing_ok=True)
+            raise self.pair_error
+        store_paired_device_id(self.data_dir / "device.json", PAIRED_DEVICE_ID)
+        (self.data_dir / "pairing.json").unlink(missing_ok=True)
+        return Pairing(device_id=PAIRED_DEVICE_ID)
+
+    def run(
+        self, scanner: ScriptedScanner, *, activation_fails: bool = False
+    ) -> str | None:
+        paired = ensure_paired(
+            self.data_dir,
+            scanner,
+            RecordingActivator(self.events, fail=activation_fails),
+            self.led,
+            self.pair,
+            nm_keyfile_path=self.data_dir / "visio.nmconnection",
+            max_attempts=3,
+        )
+        return None if paired is None else paired.device_id
+
+
+def _session(data_dir: Path) -> None:
+    write_session_credentials(data_dir / "session.json", "at", "rt")
+
+
+def test_unpaired_deletes_a_stale_session_then_scans_activates_and_pairs(tmp_path):
+    # A pendant onboarded the old way still has the owner's session on disk.
+    (tmp_path / "device.json").write_text('{"device_id": "legacy"}')
+    _session(tmp_path)
+    rig = PairingRig(tmp_path)
+    scanner = ScriptedScanner([QR_V2])
+
+    device_id = rig.run(scanner)
+
+    assert device_id == PAIRED_DEVICE_ID
+    assert scanner.scans == 1
+    assert rig.events == [("activate", "visio"), "pair"]
+    assert not (tmp_path / "session.json").exists()
+
+
+def test_unpaired_without_a_good_scan_never_touches_the_network(tmp_path):
+    rig = PairingRig(tmp_path)
+
+    assert rig.run(ScriptedScanner([])) is None
+
+    assert rig.events == []
+
+
+def test_pending_resumes_without_scanning(tmp_path):
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path)
+    scanner = ScriptedScanner([QR_V2])
+
+    assert rig.run(scanner) == PAIRED_DEVICE_ID
+
+    assert scanner.scans == 0
+    assert rig.events == [("activate", "visio"), "pair"]
+
+
+def test_pending_with_failed_activation_keeps_the_code_and_shows_critical(tmp_path):
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path)
+
+    assert rig.run(ScriptedScanner([]), activation_fails=True) is None
+
+    assert "pair" not in rig.events
+    assert rig.led.calls[-1] == CRITICAL_LED
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_pending_gives_up_on_the_code_after_repeated_failed_activations(tmp_path):
+    # A mistyped Wi-Fi password at first pairing can never connect, so
+    # retrying the saved code forever would leave the pendant stuck.
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path)
+
+    for _ in range(MAX_FAILED_PENDING_ACTIVATIONS - 1):
+        assert rig.run(ScriptedScanner([]), activation_fails=True) is None
+        assert pairing_state(tmp_path) is PairingState.PENDING
+    assert rig.run(ScriptedScanner([]), activation_fails=True) is None
+
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+    assert "pair" not in rig.events
+    assert rig.led.calls[-1] == CRITICAL_LED
+    scanner = ScriptedScanner([QR_V2])
+    assert rig.run(scanner) == PAIRED_DEVICE_ID
+    assert scanner.scans == 1
+
+
+def test_a_fresh_scan_whose_activation_fails_counts_towards_giving_up(tmp_path):
+    rig = PairingRig(tmp_path)
+
+    assert rig.run(ScriptedScanner([QR_V2]), activation_fails=True) is None
+    for _ in range(MAX_FAILED_PENDING_ACTIVATIONS - 1):
+        rig.run(ScriptedScanner([]), activation_fails=True)
+
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+
+
+def test_a_successful_activation_resets_the_failed_activation_count(tmp_path):
+    # A home router that was briefly down is not a wrong password.
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path, pair_error=PairingUnavailableError("offline"))
+    for _ in range(MAX_FAILED_PENDING_ACTIVATIONS - 1):
+        rig.run(ScriptedScanner([]), activation_fails=True)
+    rig.run(ScriptedScanner([]))
+    for _ in range(MAX_FAILED_PENDING_ACTIVATIONS - 1):
+        rig.run(ScriptedScanner([]), activation_fails=True)
+
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_a_rejected_pairing_shows_critical_and_rescans_next_boot(tmp_path):
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path, pair_error=PairingRejectedError("used code"))
+
+    assert rig.run(ScriptedScanner([])) is None
+
+    assert rig.led.calls[-1] == CRITICAL_LED
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+
+
+def test_an_unavailable_pairing_retries_next_boot(tmp_path):
+    write_pending_pairing(tmp_path / "pairing.json", "code-1")
+    rig = PairingRig(tmp_path, pair_error=PairingUnavailableError("offline"))
+
+    assert rig.run(ScriptedScanner([])) is None
+
+    assert pairing_state(tmp_path) is PairingState.PENDING
+
+
+def test_paired_boots_normally_without_scanning_or_pairing(tmp_path):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    (tmp_path / "visio.nmconnection").touch()
+    rig = PairingRig(tmp_path)
+    scanner = ScriptedScanner([QR_V2])
+
+    assert rig.run(scanner) == PAIRED_DEVICE_ID
+
+    assert scanner.scans == 0
+    # The best-effort reactivation a restart boot always does.
+    assert rig.events == [("activate", "visio")]
+
+
+def test_paired_with_an_unreadable_session_scans_for_a_new_qr(tmp_path):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    (tmp_path / "session.json").write_text("")
+    rig = PairingRig(tmp_path)
+    scanner = ScriptedScanner([QR_V2])
+
+    assert rig.run(scanner) == PAIRED_DEVICE_ID
+
+    assert scanner.scans == 1
+    assert rig.events == [("activate", "visio"), "pair"]
+
+
+def test_a_revoked_login_returns_the_pendant_to_scanning(tmp_path):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    led = FakeLedDriver()
+
+    handle_revoked_login(tmp_path, led)
+
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+    assert not (tmp_path / "session.json").exists()
+    assert led.calls[-1] == CRITICAL_LED
+
+
+# pair_and_connect, against a fake supabase-py client.
+
+
+class _FakeAuthSession:
+    def __init__(self, access_token: str, refresh_token: str) -> None:
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+
+
+class _FakeAuth:
+    def __init__(self) -> None:
+        self._subscribers: list = []
+
+    def on_auth_state_change(self, callback) -> None:
+        self._subscribers.append(callback)
+
+    def _emit(self, event: str) -> None:
+        for callback in self._subscribers:
+            callback(event, _FakeAuthSession(f"{event}-at", f"{event}-rt"))
+
+    def sign_in_anonymously(self) -> None:
+        self._emit("SIGNED_IN")
+
+    def refresh_session(self, refresh_token: str | None = None) -> None:
+        self._emit("TOKEN_REFRESHED")
+
+
+class _FakeClaim:
+    def execute(self):
+        return type("Response", (), {"data": PAIRED_DEVICE_ID})()
+
+
+class _FakeSupabaseClient:
+    def __init__(self) -> None:
+        self.auth = _FakeAuth()
+
+    def rpc(self, name: str, params: dict) -> _FakeClaim:
+        return _FakeClaim()
+
+
+def _pair_and_connect(data_dir: Path, scanner: ScriptedScanner, made: list):
+    def factory(url: str, key: str) -> _FakeSupabaseClient:
+        made.append(_FakeSupabaseClient())
+        return made[-1]
+
+    return pair_and_connect(
+        data_dir,
+        scanner,
+        RecordingActivator([]),
+        FakeLedDriver(),
+        "http://x",
+        "anon",
+        client_factory=factory,
+        nm_keyfile_path=data_dir / "visio.nmconnection",
+        max_attempts=3,
+    )
+
+
+def test_a_pairing_boot_keeps_using_the_client_that_paired(tmp_path):
+    # Two live clients meant two auto-refresh timers rotating one refresh
+    # token and two writers racing on one session.json.
+    made: list = []
+
+    connected = _pair_and_connect(tmp_path, ScriptedScanner([QR_V2]), made)
+
+    assert connected is not None
+    device_id, clients = connected
+    assert device_id == PAIRED_DEVICE_ID
+    assert len(made) == 1
+    assert isinstance(clients.storage, SupabaseStorage)
+    assert clients.storage._client is made[0]
+
+
+def test_a_paired_boot_restores_the_login_with_one_client(tmp_path):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    made: list = []
+
+    connected = _pair_and_connect(tmp_path, ScriptedScanner([]), made)
+
+    assert connected is not None
+    assert connected[0] == PAIRED_DEVICE_ID
+    assert len(made) == 1
+
+
 # --- choosing how this device powers itself off ------------------------------
 
 
@@ -2585,3 +2896,241 @@ def test_a_press_after_the_halt_leaves_the_halted_red_on_the_wire(tmp_path):
     assert _colours(spi)[-1] == (255, 0, 0)
     assert MAGENTA not in _colours(spi)
     assert spi.overlapping_writes == 0
+
+
+# --- main(): the battery boot check, the pairing gate and the recording run ---
+#
+# main() composes the boot from parts tested above. These tests drive it with
+# every hardware factory replaced by a fake, to pin the order the merged boot
+# runs them in and what it leaves behind on each early exit.
+
+
+class _RecordingLedController(LedController):
+    """The real single LED owner, remembering every instance main() builds."""
+
+    instances: list["_RecordingLedController"] = []
+
+    def __init__(self, driver, **kwargs) -> None:
+        super().__init__(driver, **kwargs)
+        self.writes: list[tuple[tuple[int, int, int], LedPattern]] = []
+        _RecordingLedController.instances.append(self)
+
+    def set(self, color, pattern) -> None:
+        self.writes.append((color, pattern))
+        super().set(color, pattern)
+
+
+class _FakeFlagButton:
+    def __init__(self) -> None:
+        self.callback: Callable[[], None] | None = None
+
+    def on_press(self, callback: Callable[[], None]) -> None:
+        self.callback = callback
+
+
+@dataclass
+class MainRig:
+    """Everything main() reaches for, faked; ``run`` calls the real main()."""
+
+    data_dir: Path
+    monkeypatch: pytest.MonkeyPatch
+    battery_pct: int = 85
+    scanner: ScriptedScanner = field(default_factory=lambda: ScriptedScanner([]))
+    activation_fails: bool = False
+    refresh_error: Exception | None = None
+    power: FakePowerController = field(default_factory=FakePowerController)
+    raw_led: FakeLedDriver = field(default_factory=FakeLedDriver)
+    made_clients: list = field(default_factory=list)
+    flag_workers: list = field(default_factory=list)
+    loop_deps: list = field(default_factory=list)
+    events: list = field(default_factory=list)
+
+    def run(self) -> int:
+        import visio_recorder.daemon as daemon
+
+        mp = self.monkeypatch
+        _RecordingLedController.instances = []
+        mp.setenv("SUPABASE_URL", "http://x")
+        mp.setenv("SUPABASE_ANON_KEY", "anon")
+        mp.setenv("VISIO_DATA_DIR", str(self.data_dir))
+        mp.setenv("VISIO_AUDIO", "off")
+        mp.setattr(daemon, "open_pijuice", lambda: None)
+        mp.setattr(
+            daemon,
+            "PiJuiceBatteryReader",
+            lambda _: FakeBatteryReader(self.battery_pct),
+        )
+        mp.setattr(daemon, "Ws2812LedDriver", lambda: self.raw_led)
+        mp.setattr(daemon, "LedController", _RecordingLedController)
+        mp.setattr(daemon, "resolve_power_controller", lambda *_: self.power)
+        mp.setattr(daemon, "SubprocessCommandRunner", FakeCommandRunner)
+        mp.setattr(daemon, "SubprocessInterruptibleRunner", FakeCaptureRunner)
+        mp.setattr(daemon, "RpicamZbarScanner", lambda: self.scanner)
+        mp.setattr(
+            daemon,
+            "NmcliConnectionActivator",
+            lambda: RecordingActivator(self.events, fail=self.activation_fails),
+        )
+        mp.setattr(daemon, "GpioZeroFlagButton", _FakeFlagButton)
+        mp.setattr(daemon.signal, "signal", lambda *_: None)
+
+        real_startup = daemon.run_startup_sequence
+
+        def startup(reader, led):
+            self.events.append("battery check")
+            return real_startup(reader, led, sleep=lambda _: None)
+
+        mp.setattr(daemon, "run_startup_sequence", startup)
+
+        real_pair_and_connect = daemon.pair_and_connect
+
+        def factory(url: str, key: str) -> _FakeSupabaseClient:
+            client = _FakeSupabaseClient()
+            if self.refresh_error is not None:
+                error = self.refresh_error
+
+                def refuse(refresh_token=None):
+                    raise error
+
+                client.auth.refresh_session = refuse  # type: ignore[method-assign]
+            self.made_clients.append(client)
+            return client
+
+        def pair_and_connect_(*args, **kwargs):
+            self.events.append("pairing gate")
+            return real_pair_and_connect(
+                *args,
+                client_factory=factory,
+                nm_keyfile_path=self.data_dir / "visio.nmconnection",
+                max_attempts=2,
+                **kwargs,
+            )
+
+        mp.setattr(daemon, "pair_and_connect", pair_and_connect_)
+
+        real_worker = daemon.FlagUploadWorker
+
+        def flag_worker(*args, **kwargs):
+            worker = real_worker(*args, **kwargs)
+            self.flag_workers.append(worker)
+            return worker
+
+        mp.setattr(daemon, "FlagUploadWorker", flag_worker)
+
+        def loop(deps, stop):
+            self.events.append("recording loop")
+            self.loop_deps.append(deps)
+            return LoopOutcome.STOPPED
+
+        mp.setattr(daemon, "run_recording_loop", loop)
+        return daemon.main()
+
+    @property
+    def led(self) -> "_RecordingLedController":
+        assert len(_RecordingLedController.instances) == 1
+        return _RecordingLedController.instances[0]
+
+
+def test_main_a_flat_battery_powers_off_before_an_unpaired_pendant_scans(
+    tmp_path, monkeypatch
+):
+    # The legacy session an old-contract pendant holds is only deleted by the
+    # pairing gate, which a flat battery never reaches.
+    _session(tmp_path)
+    rig = MainRig(tmp_path, monkeypatch, battery_pct=2)
+
+    assert rig.run() == 0
+
+    assert rig.power.powered_off
+    assert rig.events == ["battery check"]
+    assert rig.scanner.scans == 0
+    assert rig.made_clients == []
+    assert (tmp_path / "session.json").exists()
+    assert rig.led.writes[-1] == HALTED_LED
+    assert not rig.led._thread.is_alive()
+
+
+def test_main_runs_the_battery_check_before_the_pairing_gate(tmp_path, monkeypatch):
+    rig = MainRig(tmp_path, monkeypatch, scanner=ScriptedScanner([QR_V2]))
+
+    assert rig.run() == 0
+
+    assert rig.events[:2] == ["battery check", "pairing gate"]
+    assert rig.events[-1] == "recording loop"
+    assert not rig.power.powered_off
+
+
+def test_main_onboarding_led_writes_go_through_the_single_led_owner(
+    tmp_path, monkeypatch
+):
+    # A fresh scan whose Wi-Fi fails shows Critical; it must be drawn by the
+    # one LedController, not by a second writer on the raw driver.
+    rig = MainRig(
+        tmp_path,
+        monkeypatch,
+        scanner=ScriptedScanner([QR_V2]),
+        activation_fails=True,
+    )
+
+    assert rig.run() == 1
+
+    assert rig.led.writes[-1] == CRITICAL_LED
+    assert rig.raw_led.calls == rig.led.writes
+    assert pairing_state(tmp_path) is PairingState.PENDING
+    assert not rig.led._thread.is_alive()
+
+
+def test_main_flag_worker_and_status_reporter_share_the_one_pairing_client(
+    tmp_path, monkeypatch
+):
+    rig = MainRig(tmp_path, monkeypatch, scanner=ScriptedScanner([QR_V2]))
+
+    assert rig.run() == 0
+
+    assert len(rig.made_clients) == 1
+    (client,) = rig.made_clients
+    (deps,) = rig.loop_deps
+    (flag_worker,) = rig.flag_workers
+    assert deps.device_id == PAIRED_DEVICE_ID
+    assert deps.storage_client._client is client
+    assert deps.status_client._client is client
+    assert flag_worker._storage_client._client is client
+    assert deps.flush_markers == flag_worker.flush_markers
+    assert deps.led_driver is rig.led
+    assert not flag_worker._thread.is_alive()
+    assert not rig.led._thread.is_alive()
+
+
+def test_main_a_paired_boot_restores_the_login_with_one_client(tmp_path, monkeypatch):
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    rig = MainRig(tmp_path, monkeypatch, scanner=ScriptedScanner([QR_V2]))
+
+    assert rig.run() == 0
+
+    assert rig.scanner.scans == 0
+    assert len(rig.made_clients) == 1
+    assert rig.loop_deps[0].storage_client._client is rig.made_clients[0]
+
+
+def test_main_a_revoked_login_at_boot_goes_back_to_scanning_and_stops_threads(
+    tmp_path, monkeypatch
+):
+    from supabase_auth.errors import AuthApiError
+
+    store_paired_device_id(tmp_path / "device.json", PAIRED_DEVICE_ID)
+    _session(tmp_path)
+    rig = MainRig(
+        tmp_path,
+        monkeypatch,
+        refresh_error=AuthApiError("refused", 400, "user_not_found"),
+    )
+
+    assert rig.run() == 1
+
+    assert pairing_state(tmp_path) is PairingState.UNPAIRED
+    assert not (tmp_path / "session.json").exists()
+    assert rig.led.writes[-1] == CRITICAL_LED
+    assert rig.flag_workers == []
+    assert rig.loop_deps == []
+    assert not rig.led._thread.is_alive()

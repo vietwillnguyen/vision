@@ -1,4 +1,4 @@
-import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,7 +7,15 @@ from typing import Any
 from storage3.exceptions import StorageApiError
 from supabase import create_client
 
-from visio_recorder.uploader import ObjectTooLargeError
+from visio_recorder.session_store import (
+    LoginRefusedError,
+    read_saved_session,
+    restore_session,
+    session_persister,
+)
+from visio_recorder.uploader import ObjectAlreadyStoredError, ObjectTooLargeError
+
+_logger = logging.getLogger(__name__)
 
 # Content types by suffix for everything firmware uploads. Explicit rather than
 # `mimetypes`, whose answer depends on the host's /etc/mime.types. Anything
@@ -54,6 +62,9 @@ class SupabaseStorage:
         A 413 from storage (object over the bucket's size limit) is raised as
         ``ObjectTooLargeError`` so the caller splits the file instead of
         retrying it unchanged forever; see ``visio_recorder.upload_limit``.
+        A 409 for a key the lookup could not see (stored under an earlier
+        pairing) is raised as ``ObjectAlreadyStoredError`` so the caller sets
+        the file aside instead of retrying it forever.
         """
         bucket_api = self._client.storage.from_(bucket)
         stored_size = _stored_size(bucket_api, object_path)
@@ -74,6 +85,11 @@ class SupabaseStorage:
                 raise ObjectTooLargeError(
                     f"{bucket}/{object_path} ({local_path.stat().st_size} bytes) "
                     f"is over the storage size limit: {err.message}"
+                ) from err
+            if str(err.status) == "409":
+                raise ObjectAlreadyStoredError(
+                    f"{bucket}/{object_path} is already stored but not readable "
+                    f"by this login: {err.message}"
                 ) from err
             raise
 
@@ -104,22 +120,42 @@ class SupabaseStatus:
         self._client.table("device_status").upsert(status).execute()
 
 
-class SupabaseRegistration:
-    def __init__(self, client: Any, user_id: str) -> None:
-        self._client = client
-        self._user_id = user_id
-
-    def upsert_device(self, device_id: str, name: str) -> None:
-        self._client.table("devices").upsert(
-            {"device_id": device_id, "user_id": self._user_id, "name": name}
-        ).execute()
-
-
 @dataclass
 class SupabaseClients:
     storage: SupabaseStorage
     status: SupabaseStatus
-    registration: SupabaseRegistration
+
+
+class SessionRevokedError(Exception):
+    """The pendant's login no longer exists: removed in the app, or re-paired."""
+
+
+def restore_supabase_client(
+    url: str,
+    key: str,
+    session_path: Path,
+    client_factory: Callable[[str, str], Any] = create_client,
+) -> Any:
+    """A client signed back in as the pendant from ``session.json``."""
+    session = read_saved_session(session_path)
+    if session is None:
+        raise SessionRevokedError("the pendant's session.json is missing or unreadable")
+    client = client_factory(url, key)
+    # Registered before the restore, whose refresh rotates the refresh token:
+    # that first rotation has to be saved too.
+    client.auth.on_auth_state_change(session_persister(session_path))
+    try:
+        restore_session(client, session["refresh_token"])
+    except LoginRefusedError as err:
+        raise SessionRevokedError(f"the pendant's {err}") from err
+    return client
+
+
+def supabase_clients_for(client: Any) -> SupabaseClients:
+    return SupabaseClients(
+        storage=SupabaseStorage(client),
+        status=SupabaseStatus(client),
+    )
 
 
 def build_supabase_clients(
@@ -128,14 +164,6 @@ def build_supabase_clients(
     session_path: Path,
     client_factory: Callable[[str, str], Any] = create_client,
 ) -> SupabaseClients:
-    client = client_factory(url, key)
-    session = json.loads(session_path.read_text())
-    auth_response = client.auth.set_session(
-        session["access_token"], session["refresh_token"]
-    )
-    user_id = auth_response.user.id
-    return SupabaseClients(
-        storage=SupabaseStorage(client),
-        status=SupabaseStatus(client),
-        registration=SupabaseRegistration(client, user_id),
+    return supabase_clients_for(
+        restore_supabase_client(url, key, session_path, client_factory)
     )
