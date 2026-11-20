@@ -1,6 +1,10 @@
+import os
+import signal
 import subprocess
 import threading
-from dataclasses import dataclass, field
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +14,7 @@ import pytest
 from tests.fakes import (
     FailingStorageClient,
     FakeBatteryReader,
+    FakeCaptureRunner,
     FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
@@ -35,8 +40,9 @@ from visio_recorder.battery import (
     BatteryMonitor,
     BatteryState,
 )
-from visio_recorder.capture import AudioSettings, VideoSettings
+from visio_recorder.capture import AudioSettings, CaptureExit, VideoSettings
 from visio_recorder.daemon import (
+    STOP_MARKER_FLUSH_TIMEOUT_SEC,
     LoopDeps,
     load_config,
     resolve_audio,
@@ -45,7 +51,13 @@ from visio_recorder.daemon import (
     run_startup_sequence,
 )
 from visio_recorder.drivers import Ws2812LedDriver
-from visio_recorder.led import LedPattern
+from visio_recorder.flag_button import (
+    FLAG_UPLOAD_THREAD_NAME,
+    FlagUploadWorker,
+    make_flag_press_handler,
+    write_flag_marker,
+)
+from visio_recorder.led import LedController, LedPattern, LedState, apply_led_state
 from visio_recorder.power import (
     PiJuicePowerController,
     SystemdPowerController,
@@ -152,7 +164,8 @@ def test_load_config_missing_supabase_anon_key_raises_value_error_naming_it():
 def _make_deps(
     tmp_path,
     *,
-    command_runner,
+    capture_runner=None,
+    command_runner=None,
     battery,
     led_driver,
     storage_client=None,
@@ -162,9 +175,12 @@ def _make_deps(
     monotonic=None,
     power_controller=None,
     upload_drain_timeout_sec=None,
+    flush_markers=None,
+    sleep=None,
 ) -> LoopDeps:
     return LoopDeps(
-        command_runner=command_runner,
+        command_runner=command_runner or FakeCommandRunner(),
+        capture_runner=capture_runner or FakeCaptureRunner(),
         storage_client=storage_client or FakeStorageClient(),
         status_client=status_client or FakeStatusClient(),
         led_driver=led_driver,
@@ -179,6 +195,8 @@ def _make_deps(
         video=VideoSettings(),
         upload_limit=unlimited_upload_limit(),
         audio=audio,
+        flush_markers=flush_markers,
+        sleep=sleep or (lambda seconds: None),
         **({} if retry_backoff is None else {"retry_backoff": retry_backoff}),
         **({} if monotonic is None else {"monotonic": monotonic}),
         **(
@@ -195,12 +213,12 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
     storage = FakeStorageClient()
     status = FakeStatusClient()
 
-    runner = FakeCommandRunner(
+    runner = FakeCaptureRunner(
         on_record=lambda count: stop.set() if count >= 3 else None
     )
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
@@ -215,8 +233,13 @@ def test_each_cycle_records_a_named_segment_and_worker_uploads_it(tmp_path):
         "device-abc/20260704_120001.mp4",
         "device-abc/20260704_120002.mp4",
     ]
-    # One upsert per segment, bracketed by the loop's start and exit reports.
-    assert [u["segments_uploaded_today"] for u in status.upserts] == [0, 1, 2, 3, 3]
+    # One upsert per segment, bracketed by the loop's start report and the
+    # stop's two reports, one before the drain and one after it.
+    counts = [u["segments_uploaded_today"] for u in status.upserts]
+    assert len(counts) == 6
+    assert counts[0] == 0
+    assert {1, 2, 3} <= set(counts)
+    assert counts[-1] == 3
 
 
 def test_halt_battery_sets_halted_led_drains_queue_and_powers_off(tmp_path):
@@ -236,10 +259,11 @@ def test_halt_battery_sets_halted_led_drains_queue_and_powers_off(tmp_path):
             battery.trigger_halt()
             gate.set()
 
-    runner = FakeCommandRunner(on_record=on_record, mux_gate=gate)
+    runner = FakeCaptureRunner(on_record=on_record)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
+        command_runner=FakeCommandRunner(mux_gate=gate),
         battery=responsive_battery(battery),
         led_driver=led,
         storage_client=storage,
@@ -294,10 +318,10 @@ def test_halt_join_waits_for_slow_worker_before_applying_halted_led(tmp_path):
         if count >= 1:
             battery.trigger_halt()
 
-    runner = FakeCommandRunner(on_record=on_record)
+    runner = FakeCaptureRunner(on_record=on_record)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=responsive_battery(battery),
         led_driver=led,
         storage_client=storage,
@@ -333,12 +357,12 @@ def test_three_consecutive_upload_failures_set_critical_and_success_resets(tmp_p
     # (counter climbs back to the threshold at 8).
     storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 4, 6, 7, 8})
 
-    runner = FakeCommandRunner(
+    runner = FakeCaptureRunner(
         on_record=lambda count: stop.set() if count >= 8 else None
     )
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
@@ -380,12 +404,21 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
     # reported.
     status = ScriptedStatusClient(fail_on_attempts={2})
 
-    runner = FakeCommandRunner(
-        on_record=lambda count: stop.set() if count >= 3 else None
+    starts = iter(range(1, 100))
+
+    def on_capture_start() -> None:
+        # Hold each capture until the worker has reported the one before, so
+        # attempt 2 is segment 1's upsert and not the stop's own push.
+        started = next(starts)
+        _wait_for(lambda: status.attempts >= started)
+
+    runner = FakeCaptureRunner(
+        on_record=lambda count: stop.set() if count >= 3 else None,
+        on_capture_start=on_capture_start,
     )
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
@@ -405,11 +438,13 @@ def test_worker_survives_status_upsert_exception_and_keeps_processing(tmp_path):
     # uploaded and their status reported, proving the worker kept running.
     assert "device-abc/20260704_120001.mp4" in storage.uploaded
     assert "device-abc/20260704_120002.mp4" in storage.uploaded
-    # Start report, segments 2 and 3, exit report.
+    # Start report, segment 2, the stop's report before the drain, segment 3
+    # uploaded by that drain, and the report after it.
     assert [u["recording_active"] for u in status.upserts] == [
         True,
         True,
-        True,
+        False,
+        False,
         False,
     ]
 
@@ -419,12 +454,12 @@ def test_setting_stop_exits_after_in_flight_cycle_and_joins_worker(tmp_path):
     led = FakeLedDriver()
     storage = FakeStorageClient()
 
-    runner = FakeCommandRunner(
+    runner = FakeCaptureRunner(
         on_record=lambda count: stop.set() if count >= 2 else None
     )
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
@@ -582,6 +617,128 @@ def test_the_boot_samples_seed_the_loop_s_moving_average():
     assert result.battery.sample().should_halt is False
 
 
+STOP_SEGMENT_SEC = 5.0
+
+
+def test_sigterm_during_a_capture_cuts_it_short_instead_of_waiting_for_the_segment(
+    tmp_path,
+):
+    # The loop observes ``stop`` only between segments, so a SIGTERM landing
+    # just after a capture starts waits out the whole segment: 300 s measured
+    # on the device with the old five-minute segments, and a full minute with
+    # today's 60 s default. systemd's stop timeout fires long before that and
+    # SIGKILLs the daemon, which is what loses the in-flight segment. The
+    # capture must be cut short cleanly instead.
+    stop = threading.Event()
+    capturing = threading.Event()
+    storage = FakeStorageClient()
+    runner = FakeCaptureRunner(
+        duration_sec=STOP_SEGMENT_SEC, on_capture_start=capturing.set
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+    )
+
+    signalled_at: list[float] = []
+
+    def sigterm_mid_capture() -> None:
+        assert capturing.wait(timeout=10), "the capture never started"
+        signalled_at.append(time.monotonic())
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    # The daemon's own handler shape: SIGTERM sets stop, and the loop is on
+    # the main thread, so the handler runs there exactly as it does in main().
+    previous_handler = signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    killer = threading.Thread(target=sigterm_mid_capture)
+    try:
+        killer.start()
+        run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+    finally:
+        killer.join(timeout=10)
+        signal.signal(signal.SIGTERM, previous_handler)
+
+    stop_latency_sec = time.monotonic() - signalled_at[0]
+    assert runner.record_count == 1
+    assert runner.cancelled_captures == 1
+    # The cut-short segment is muxed, queued and uploaded like a full one.
+    assert storage.uploaded == ["device-abc/20261118_090000.mp4"]
+    assert stop_latency_sec < STOP_SEGMENT_SEC / 2, (
+        f"stop took {stop_latency_sec:.1f}s of a {STOP_SEGMENT_SEC:.0f}s segment"
+    )
+
+
+def test_a_cancelled_capture_exiting_non_zero_still_uploads_its_segment(tmp_path):
+    # BENCH-1 again, this time through the loop: if rpicam-vid -s turns out to
+    # exit non-zero on SIGUSR2, the footage it finalised is still footage. It
+    # must be muxed, queued and uploaded, not dropped as a failed capture.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    runner = FakeCaptureRunner(
+        duration_sec=STOP_SEGMENT_SEC,
+        exit_code_after_cancel=1,
+        on_capture_start=stop.set,
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert runner.cancelled_captures == 1
+    assert storage.uploaded == ["device-abc/20261118_090000.mp4"]
+    assert list(deps.data_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("leaves_a_file", [True, False])
+def test_a_capture_cancelled_before_its_first_frame_is_discarded(
+    tmp_path, leaves_a_file
+):
+    # A stop landing in the first moments of a segment leaves an empty file,
+    # or no file at all when the capture was signalled before it opened its
+    # output. There is nothing to mux either way, so it is dropped here rather
+    # than queued - and neither case may raise, because this is the ordinary
+    # stop path, not a failure.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+
+    class CancelledBeforeTheFirstFrame(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            capture_exit = super().run(args, cancel)
+            if capture_exit.cancelled:
+                output_path = Path(args[args.index("-o") + 1])
+                if leaves_a_file:
+                    output_path.write_bytes(b"")
+                else:
+                    output_path.unlink()
+            return capture_exit
+
+    runner = CancelledBeforeTheFirstFrame(
+        duration_sec=STOP_SEGMENT_SEC, on_capture_start=stop.set
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert runner.cancelled_captures == 1
+    assert storage.uploaded == []
+    # Nothing left behind for the next boot to recover either.
+    assert list(deps.data_dir.iterdir()) == []
+
+
 def test_loop_reports_recording_active_before_the_first_segment(tmp_path):
     # Without this the app keeps whatever the last run left (after a halt or
     # stop: Paused) for a whole segment after recording has resumed.
@@ -596,7 +753,7 @@ def test_loop_reports_recording_active_before_the_first_segment(tmp_path):
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         status_client=status,
@@ -616,7 +773,7 @@ def test_stop_reports_recording_inactive_as_the_final_status(tmp_path):
     status = FakeStatusClient()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(
+        capture_runner=FakeCaptureRunner(
             on_record=lambda count: stop.set() if count >= 2 else None
         ),
         battery=battery_state(85),
@@ -631,11 +788,123 @@ def test_stop_reports_recording_inactive_as_the_final_status(tmp_path):
     assert final["segments_uploaded_today"] == 2
     assert final["segments_pending"] == 0
     assert final["battery_pct"] == 85
-    assert [u["recording_active"] for u in status.upserts] == [
-        True,
-        True,
-        True,
-        False,
+    # Start report, two segments, and the stop's reports before and after the
+    # drain; once a row has said stopped, no later row says recording.
+    flags = [u["recording_active"] for u in status.upserts]
+    assert len(flags) == 5
+    assert flags[0] is True
+    assert flags == sorted(flags, reverse=True)
+
+
+def _wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition never became true"
+        time.sleep(0.005)
+
+
+class _OrderedStorage(FakeStorageClient):
+    def __init__(self, events: list[tuple], gate: threading.Event | None = None):
+        super().__init__()
+        self._events = events
+        self._gate = gate
+
+    def upload(self, bucket: str, object_path: str, local_path: Path) -> None:
+        self._events.append(("upload", object_path))
+        if self._gate is not None and len(self.uploaded) == 0:
+            assert self._gate.wait(timeout=5), "the stop's push never came"
+        super().upload(bucket, object_path, local_path)
+
+
+class _OrderedStatus(FakeStatusClient):
+    def __init__(self, events: list[tuple]):
+        super().__init__()
+        self._events = events
+
+    def upsert_device_status(self, status: dict) -> None:
+        self._events.append(
+            ("status", status["recording_active"], status["segments_pending"])
+        )
+        super().upsert_device_status(status)
+
+
+def test_a_stop_reports_recording_inactive_before_the_drain_uploads(tmp_path):
+    # systemd's 30 s stop budget can expire while the drain is still
+    # uploading over slow WiFi. The app must already show the stop by then:
+    # the cut segment is muxed and queued, recording_active=False is pushed
+    # with it counted as pending, and only then does its upload start.
+    events: list[tuple] = []
+    stop = threading.Event()
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(
+            duration_sec=STOP_SEGMENT_SEC, on_capture_start=stop.set
+        ),
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=_OrderedStorage(events),
+        status_client=_OrderedStatus(events),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert events == [
+        ("status", True, 0),
+        ("status", False, 1),
+        ("upload", "device-abc/20261118_090000.mp4"),
+        ("status", False, 0),
+        ("status", False, 0),
+    ]
+
+
+def test_a_stop_during_an_earlier_upload_neither_waits_for_it_nor_is_undone(
+    tmp_path,
+):
+    # A stop that lands while the worker is still uploading an earlier
+    # segment must push recording_active=False without waiting for that
+    # upload, and the earlier segment's own upsert, landing after the stop's
+    # push, must not flip the app back to Recording.
+    events: list[tuple] = []
+    stop = threading.Event()
+    pushed_stopped = threading.Event()
+    storage = _OrderedStorage(events, gate=pushed_stopped)
+
+    class Status(_OrderedStatus):
+        def upsert_device_status(self, status: dict) -> None:
+            super().upsert_device_status(status)
+            if status["recording_active"] is False:
+                pushed_stopped.set()
+
+    starts = iter(range(1, 100))
+
+    def on_capture_start() -> None:
+        if next(starts) == 2:
+            _wait_for(lambda: len(events) >= 2)
+            stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(on_capture_start=on_capture_start),
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        status_client=Status(events),
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert events == [
+        ("status", True, 0),
+        ("upload", "device-abc/20261118_090000.mp4"),
+        ("status", False, 2),
+        ("status", False, 1),
+        ("upload", "device-abc/20261118_090001.mp4"),
+        ("status", False, 0),
+        ("status", False, 0),
+    ]
+    assert storage.uploaded == [
+        "device-abc/20261118_090000.mp4",
+        "device-abc/20261118_090001.mp4",
     ]
 
 
@@ -646,7 +915,7 @@ def test_battery_halt_reports_recording_inactive_after_the_drain(tmp_path):
     battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(
+        capture_runner=FakeCaptureRunner(
             on_record=lambda count: battery.trigger_halt() if count >= 1 else None
         ),
         battery=responsive_battery(battery),
@@ -673,7 +942,7 @@ def test_a_confirmed_voltage_floor_halts_the_loop_the_same_way_a_flat_one_does(
     battery = FakeTelemetryBatteryReader(pct=55, voltage_mv=3900)
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(
+        capture_runner=FakeCaptureRunner(
             on_record=lambda count: setattr(battery, "voltage_mv", 3100)
         ),
         battery=responsive_battery(battery),
@@ -696,10 +965,10 @@ def test_a_charging_pendant_keeps_recording_through_a_flat_gauge(tmp_path):
     stop = threading.Event()
     power = FakePowerController()
     battery = FakeTelemetryBatteryReader(pct=2, voltage_mv=3000, external_power=True)
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 3 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 3 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=responsive_battery(battery),
         led_driver=FakeLedDriver(),
         power_controller=power,
@@ -734,7 +1003,7 @@ def test_charge_returning_during_the_drain_cancels_the_power_off(tmp_path):
         # One segment recorded, then the pack reads flat: the halt is
         # declared with that segment still queued, so the charger lands
         # while the drain is in flight.
-        command_runner=FakeCommandRunner(
+        capture_runner=FakeCaptureRunner(
             on_record=lambda count: setattr(battery, "pct", 5)
         ),
         battery=responsive_battery(battery),
@@ -770,7 +1039,7 @@ def test_a_cancelled_halt_resumes_with_the_upload_critical_latch_still_red(tmp_p
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(
+        capture_runner=FakeCaptureRunner(
             on_record=lambda count: setattr(battery, "pct", 5)
         ),
         battery=responsive_battery(battery),
@@ -795,7 +1064,7 @@ def test_a_re_entered_loop_keeps_the_day_count_and_the_failure_streak(tmp_path):
     status = FakeStatusClient()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(
+        capture_runner=FakeCaptureRunner(
             on_record=lambda n: stop.set() if n >= 2 else None
         ),
         battery=battery_state(85),
@@ -811,7 +1080,7 @@ def test_a_re_entered_loop_keeps_the_day_count_and_the_failure_streak(tmp_path):
     led = FakeLedDriver()
     deps.led_driver = led
     deps.storage_client = FailingStorageClient()
-    deps.command_runner = FakeCommandRunner(
+    deps.capture_runner = FakeCaptureRunner(
         on_record=lambda n: stop.set() if n >= 3 else None
     )
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 13, 0, 0)))
@@ -824,7 +1093,7 @@ def test_a_re_entered_loop_keeps_the_day_count_and_the_failure_streak(tmp_path):
     stop.clear()
     led = FakeLedDriver()
     deps.led_driver = led
-    deps.command_runner = FakeCommandRunner(
+    deps.capture_runner = FakeCaptureRunner(
         on_record=lambda n: stop.set() if n >= 1 else None
     )
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 14, 0, 0)))
@@ -890,10 +1159,10 @@ def test_a_gauge_that_stays_unreadable_halts_and_powers_off(tmp_path):
                 raise RuntimeError("pijuice GetChargeLevel failed: COMM_ERROR")
             return super().get_charge_pct()
 
-    runner = FakeCommandRunner()
+    runner = FakeCaptureRunner()
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=BatteryState(DiesAfterTwoReads()),
         led_driver=led,
         status_client=status,
@@ -938,7 +1207,7 @@ def test_a_wedged_upload_cannot_hold_a_dying_battery_open_forever(tmp_path):
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery=responsive_battery(battery),
         led_driver=FakeLedDriver(),
         storage_client=WedgedStorageClient(),
@@ -958,16 +1227,14 @@ def test_a_wedged_upload_cannot_hold_a_dying_battery_open_forever(tmp_path):
 
 
 def test_capture_failure_reports_recording_inactive_and_still_raises(tmp_path):
-    class FailingCapture(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid":
-                raise RuntimeError("camera not detected")
-            super().run(args)
+    class FailingCapture(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            raise RuntimeError("camera not detected")
 
     status = FakeStatusClient()
     deps = _make_deps(
         tmp_path,
-        command_runner=FailingCapture(),
+        capture_runner=FailingCapture(),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         status_client=status,
@@ -991,7 +1258,7 @@ def test_status_push_failures_at_start_and_exit_never_stop_the_daemon(tmp_path):
     storage = FakeStorageClient()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=lambda count: stop.set()),
+        capture_runner=FakeCaptureRunner(on_record=lambda count: stop.set()),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1073,10 +1340,10 @@ def test_loop_records_audio_segments_and_reports_audio_active(tmp_path):
     stop = threading.Event()
     storage = FakeStorageClient()
     status = FakeStatusClient()
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 2 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 2 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1086,13 +1353,13 @@ def test_loop_records_audio_segments_and_reports_audio_active(tmp_path):
 
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 16, 9, 0, 0)))
 
-    captures = [c for c in runner.calls if c[0] == "rpicam-vid"]
+    captures = runner.calls
     assert all(c[c.index("-o") + 1].endswith(".ts") for c in captures)
     assert storage.uploaded == [
         "device-abc/20261116_090000.mp4",
         "device-abc/20261116_090001.mp4",
     ]
-    assert [u["audio_active"] for u in status.upserts] == [True, True, True, True]
+    assert [u["audio_active"] for u in status.upserts] == [True] * 5
 
 
 def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
@@ -1104,19 +1371,18 @@ def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
     storage = FakeStorageClient()
     status = FakeStatusClient()
 
-    class MicGoneOnSecondCapture(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            mic_gone = "--libav-audio" in args and self.record_count == 1
-            if args[0] == "rpicam-vid" and mic_gone:
+    class MicGoneOnSecondCapture(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if "--libav-audio" in args and self.record_count == 1:
                 with self._lock:
                     self.calls.append(args)
                 raise subprocess.CalledProcessError(1, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     runner = MicGoneOnSecondCapture(on_record=lambda n: stop.set() if n >= 3 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1126,9 +1392,7 @@ def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
 
     run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 16, 9, 0, 0)))
 
-    outputs = [
-        Path(c[c.index("-o") + 1]).name for c in runner.calls if c[0] == "rpicam-vid"
-    ]
+    outputs = [Path(c[c.index("-o") + 1]).name for c in runner.calls]
     assert outputs == [
         "20261116_090000.ts",
         "20261116_090001.ts",
@@ -1140,8 +1404,12 @@ def test_a_failing_audio_capture_falls_back_to_video_only_and_keeps_recording(
         "device-abc/20261116_090002.mp4",
         "device-abc/20261116_090003.mp4",
     ]
-    per_segment = [u["audio_active"] for u in status.upserts[1:-1]]
-    assert per_segment == [True, False, False]
+    # The start report and the .ts segment report audio; the two .h264
+    # segments after the fallback and the stop's two reports do not.
+    flags = [u["audio_active"] for u in status.upserts]
+    assert len(flags) == 6
+    assert flags[0] is True
+    assert flags.count(True) == 2
     assert status.upserts[-1]["audio_active"] is False
 
 
@@ -1156,17 +1424,17 @@ def test_a_failed_audio_capture_uploads_its_partial_ts_the_same_run(
     stop = threading.Event()
     storage = FakeStorageClient()
 
-    class DiesMidSegment(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+    class DiesMidSegment(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if "--libav-audio" in args:
                 Path(args[args.index("-o") + 1]).write_bytes(partial_bytes)
                 raise subprocess.CalledProcessError(1, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     runner = DiesMidSegment(on_record=lambda n: stop.set() if n >= 1 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1188,16 +1456,16 @@ def test_the_capture_after_a_failed_audio_one_waits_for_a_new_second(tmp_path):
     storage = FakeStorageClient()
     slept: list[float] = []
 
-    class DiesAtOnce(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+    class DiesAtOnce(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if "--libav-audio" in args:
                 Path(args[args.index("-o") + 1]).write_bytes(b"ts-data")
                 raise subprocess.CalledProcessError(1, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     deps = _make_deps(
         tmp_path,
-        command_runner=DiesAtOnce(on_record=lambda n: stop.set()),
+        capture_runner=DiesAtOnce(on_record=lambda n: stop.set()),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1233,16 +1501,16 @@ def test_a_clock_stepping_back_after_the_fallback_never_stalls_recording(tmp_pat
         ]
     )
 
-    class DiesOnce(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid" and "--libav-audio" in args:
+    class DiesOnce(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            if "--libav-audio" in args:
                 Path(args[args.index("-o") + 1]).write_bytes(b"ts-data")
                 raise subprocess.CalledProcessError(1, args)
-            super().run(args)
+            return super().run(args, cancel)
 
     deps = _make_deps(
         tmp_path,
-        command_runner=DiesOnce(on_record=lambda n: stop.set() if n >= 2 else None),
+        capture_runner=DiesOnce(on_record=lambda n: stop.set() if n >= 2 else None),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1260,15 +1528,13 @@ def test_a_clock_stepping_back_after_the_fallback_never_stalls_recording(tmp_pat
 
 
 def test_a_failing_video_only_capture_still_escapes_the_loop(tmp_path):
-    class Killed(FakeCommandRunner):
-        def run(self, args: list[str]) -> None:
-            if args[0] == "rpicam-vid":
-                raise subprocess.CalledProcessError(-15, args)
-            super().run(args)
+    class Killed(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            raise subprocess.CalledProcessError(-15, args)
 
     deps = _make_deps(
         tmp_path,
-        command_runner=Killed(),
+        capture_runner=Killed(),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
     )
@@ -1297,12 +1563,12 @@ def test_startup_and_loop_drive_the_spi_led_through_every_colour(tmp_path):
     battery = FakeTelemetryBatteryReader(pct=85)
     storage = ScriptedStorageClient(fail_on_attempts={2, 3, 4})
     stop = threading.Event()
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 6 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 6 else None)
 
     assert _startup(battery, led)[0].proceed
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
@@ -1333,12 +1599,12 @@ def test_a_low_battery_paints_startup_and_every_upload_yellow_on_the_wire(tmp_pa
     led = Ws2812LedDriver(spi=spi)
     battery = FakeTelemetryBatteryReader(pct=15)
     stop = threading.Event()
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 2 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 2 else None)
 
     assert _startup(battery, led)[0].proceed
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=responsive_battery(battery),
         led_driver=led,
         storage_client=FakeStorageClient(),
@@ -1367,10 +1633,10 @@ def test_critical_red_survives_the_next_segments_upload_colours(tmp_path):
     # Segments 1-4 fail (CRITICAL from 3 on), segment 5 succeeds and clears it.
     storage = ScriptedStorageClient(fail_on_attempts={1, 2, 3, 4})
     stop = threading.Event()
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 5 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 5 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
@@ -1433,7 +1699,7 @@ def test_a_failed_segment_is_retried_in_process_without_a_restart(tmp_path):
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1487,7 +1753,7 @@ def test_a_retry_round_still_runs_while_segments_arrive_faster_than_the_backoff(
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1533,7 +1799,7 @@ def test_a_stop_with_a_lapsed_retry_deadline_leaves_the_critical_led_red(tmp_pat
     storage = SlowAndDown()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery=battery_state(85),
         led_driver=led,
         storage_client=storage,
@@ -1590,7 +1856,7 @@ def test_the_worker_waits_longer_after_each_failed_retry_round(tmp_path):
     storage = CountingFailure()
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1629,7 +1895,7 @@ def test_retry_rounds_escalate_to_the_critical_led_without_a_new_segment(tmp_pat
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery=battery_state(85),
         led_driver=led,
         storage_client=FailUntilRed(),
@@ -1672,7 +1938,7 @@ def test_a_queue_left_by_the_startup_flush_is_drained_without_a_restart(tmp_path
 
     deps = _make_deps(
         tmp_path,
-        command_runner=FakeCommandRunner(on_record=on_record),
+        capture_runner=FakeCaptureRunner(on_record=on_record),
         battery=battery_state(85),
         led_driver=FakeLedDriver(),
         storage_client=storage,
@@ -1715,10 +1981,10 @@ def test_a_fixed_full_percentage_only_source_never_halts_or_warns(tmp_path):
     led = FakeLedDriver()
     power = FakePowerController()
     unmetered = FakeBatteryReader(100)
-    runner = FakeCommandRunner(on_record=lambda n: stop.set() if n >= 3 else None)
+    runner = FakeCaptureRunner(on_record=lambda n: stop.set() if n >= 3 else None)
     deps = _make_deps(
         tmp_path,
-        command_runner=runner,
+        capture_runner=runner,
         battery=BatteryState(unmetered),
         led_driver=led,
         power_controller=power,
@@ -1744,3 +2010,578 @@ def test_a_fixed_full_percentage_only_source_boots_straight_into_recording():
     assert result.proceed is True
     assert result.battery_pct == 100
     assert led.calls == [RECORDING_LED]
+
+
+MAGENTA = (255, 0, 255)
+
+
+class _HeldBlink:
+    """Holds a blink open until the test releases it."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, seconds: float) -> None:
+        self.started.set()
+        assert self.release.wait(timeout=5), "the blink was never released"
+
+
+def _colours(spi: SimulatedSpiDevice) -> list[tuple[int, int, int]]:
+    return [decode_frame(frame, 6_250_000)[0] for frame in spi.writes]
+
+
+def test_a_press_blinks_magenta_on_the_wire_and_puts_the_state_back(tmp_path):
+    # The real led.py, the real SPI driver and the real press handler, with
+    # only /dev/spidev0.0 simulated: the colours a WS2812B would latch,
+    # decoded from the wire bytes by the datasheet-timing receiver. Storage
+    # is never reached, which is the point - the acknowledgement is what the
+    # wearer gets while WiFi is down.
+    spi = SimulatedSpiDevice()
+    blink = _HeldBlink()
+    led = LedController(Ws2812LedDriver(spi=spi), sleep=blink)
+    battery = FakeBatteryReader(85)
+    assert run_startup_sequence(battery, led).proceed
+
+    press = make_flag_press_handler(
+        queue_dir=tmp_path / "queue",
+        submit=lambda path: None,
+        ack=led.ack_flag,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 3, 45)),
+    )
+    press()
+
+    assert blink.started.wait(timeout=5)
+    assert _colours(spi) == [(0, 255, 0), MAGENTA]
+    blink.release.set()
+    led.close()
+
+    assert _colours(spi) == [(0, 255, 0), MAGENTA, (0, 255, 0)]
+    assert spi.overlapping_writes == 0
+
+
+def test_a_press_blinks_over_a_latched_critical_and_restores_the_red(tmp_path):
+    # WiFi has been down for hours, so the LED is red: exactly the case the
+    # local-first acknowledgement exists for. The latch has to come back.
+    spi = SimulatedSpiDevice()
+    blink = _HeldBlink()
+    led = LedController(Ws2812LedDriver(spi=spi), sleep=blink)
+    apply_led_state(led, LedState.CRITICAL)
+
+    press = make_flag_press_handler(
+        queue_dir=tmp_path / "queue",
+        submit=lambda path: None,
+        ack=led.ack_flag,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 3, 45)),
+    )
+    press()
+
+    assert blink.started.wait(timeout=5)
+    blink.release.set()
+    led.close()
+
+    red = (255, 0, 0)
+    assert _colours(spi) == [red, MAGENTA, red]
+    assert spi.overlapping_writes == 0
+
+
+def test_a_queued_marker_reaches_storage_before_the_next_segment(tmp_path):
+    # The outage case end to end: a press whose upload failed is still on the
+    # card when WiFi returns, and the segment it flags must not overtake it -
+    # the nightly run scores a segment against the markers in storage when it
+    # runs, and anything later falls to the DLQ's late-marker retry.
+    queue_dir = tmp_path / "queue"
+    storage = FakeStorageClient()
+    write_flag_marker(queue_dir, datetime(2026, 7, 4, 11, 59, 30))
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    stop = threading.Event()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(on_record=lambda n: stop.set()),
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        flush_markers=flag_worker.flush_markers,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.stop()
+
+    assert storage.uploaded == [
+        "device-abc/FLAG_20260704_115930.marker",
+        "device-abc/20260704_120000.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+
+
+def test_a_press_late_in_the_restart_gap_reaches_storage_before_its_segment(
+    tmp_path,
+):
+    # Segment N's capture returns at T, the worker has it muxed by T+1 - where
+    # the flush used to run - and the wearer presses at T+2.5, inside the 3 s
+    # gap the pipeline attaches to segment N. One fake clock drives all of it.
+    # Recording carries on (the stop lands only on the next capture, once
+    # segment N is up), since the gap is waited out only while recording.
+    queue_dir = tmp_path / "queue"
+    capture_returned_at = 100.0
+    press_at = capture_returned_at + 2.5
+    lock = threading.Lock()
+    now = [0.0]
+    slept: list[float] = []
+    first_segment_uploaded = threading.Event()
+
+    class TimedStorage(FakeStorageClient):
+        markers_stored_when_segment_started: list[str] | None = None
+
+        def upload(self, bucket, object_path, local_path):
+            first = (
+                local_path.suffix == ".mp4"
+                and self.markers_stored_when_segment_started is None
+            )
+            if first:
+                self.markers_stored_when_segment_started = [
+                    key for key in self.uploaded if key.endswith(".marker")
+                ]
+                advance(2.0)
+            super().upload(bucket, object_path, local_path)
+            if first:
+                first_segment_uploaded.set()
+
+    storage = TimedStorage()
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    press = make_flag_press_handler(
+        queue_dir=queue_dir,
+        submit=flag_worker.submit,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 0, 3), step_seconds=0),
+    )
+
+    def advance(seconds: float) -> None:
+        with lock:
+            before = now[0]
+            now[0] += seconds
+            after = now[0]
+        if before < press_at <= after:
+            press()
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        advance(seconds)
+
+    class MuxTakesASecond(FakeCommandRunner):
+        def run(self, args):
+            if "ffmpeg" in args:
+                advance(1.0)
+            super().run(args)
+
+    stop = threading.Event()
+
+    def capture_returns(count: int) -> None:
+        if count == 1:
+            with lock:
+                now[0] = capture_returned_at
+            return
+        assert first_segment_uploaded.wait(timeout=10), "segment N never uploaded"
+        stop.set()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(on_record=capture_returns),
+        command_runner=MuxTakesASecond(),
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        monotonic=lambda: now[0],
+        flush_markers=flag_worker.flush_markers,
+        sleep=sleep,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.stop()
+
+    assert storage.markers_stored_when_segment_started == [
+        "device-abc/FLAG_20260704_120003.marker"
+    ]
+    # Only segment N waited; the cut-short segment N+1 the stop left did not.
+    assert slept == [2.0]
+    assert storage.uploaded == [
+        "device-abc/FLAG_20260704_120003.marker",
+        "device-abc/20260704_120000.mp4",
+        "device-abc/20260704_120001.mp4",
+    ]
+    assert list_pending(queue_dir) == []
+
+
+def test_markers_only_ever_leave_on_the_flag_workers_own_thread(tmp_path):
+    # The invariant that lets both workers run without a lock on the queue:
+    # the upload worker asks for a flush instead of uploading a marker, so
+    # the two can never see the same marker and both send it.
+    queue_dir = tmp_path / "queue"
+
+    class ThreadRecordingStorage(FakeStorageClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.marker_threads: set[str] = set()
+
+        def upload(self, bucket, object_path, local_path):
+            if local_path.suffix == ".marker":
+                self.marker_threads.add(threading.current_thread().name)
+            super().upload(bucket, object_path, local_path)
+
+    storage = ThreadRecordingStorage()
+    for second in (10, 40):
+        write_flag_marker(queue_dir, datetime(2026, 7, 4, 11, 59, second))
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    stop = threading.Event()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(
+            on_record=lambda n: stop.set() if n >= 2 else None
+        ),
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        flush_markers=flag_worker.flush_markers,
+    )
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0)))
+    flag_worker.submit(write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 30)))
+    flag_worker.stop()
+
+    assert storage.marker_threads == {FLAG_UPLOAD_THREAD_NAME}
+    assert list_pending(queue_dir) == []
+
+
+def test_a_stop_mid_capture_flushes_markers_before_the_cut_segment_without_the_gap(
+    tmp_path,
+):
+    # The stop path queues the cut-short last segment on the main thread and
+    # hands the worker an already-muxed segment. A flag pressed during that
+    # capture must still reach storage first, but the stop does not wait out
+    # the restart gap for it: the clock here never moves, so a gap wait would
+    # sleep the full 3 s, and the flush gets the short stop timeout instead of
+    # the flag worker's 30 s, which alone would spend TimeoutStopSec=30.
+    queue_dir = tmp_path / "queue"
+    storage = FakeStorageClient()
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    stop = threading.Event()
+    flush_timeouts: list[float | None] = []
+    slept: list[float] = []
+
+    def flush(timeout: float | None = None) -> bool:
+        flush_timeouts.append(timeout)
+        return flag_worker.flush_markers(timeout=timeout)
+
+    def press_then_stop() -> None:
+        write_flag_marker(queue_dir, datetime(2026, 11, 18, 9, 0, 1))
+        stop.set()
+
+    runner = FakeCaptureRunner(
+        duration_sec=STOP_SEGMENT_SEC, on_capture_start=press_then_stop
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        monotonic=lambda: 50.0,
+        flush_markers=flush,
+        sleep=slept.append,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+    flag_worker.stop()
+
+    assert runner.cancelled_captures == 1
+    assert storage.uploaded == [
+        "device-abc/FLAG_20261118_090001.marker",
+        "device-abc/20261118_090000.mp4",
+    ]
+    assert slept == []
+    assert flush_timeouts == [STOP_MARKER_FLUSH_TIMEOUT_SEC]
+    assert list_pending(queue_dir) == []
+
+
+def test_a_stuck_marker_flush_on_stop_does_not_hold_the_cut_segment_back(tmp_path):
+    # The flush on the stop path is bounded: markers the network will not
+    # take stay on the card, and the cut-short segment still goes up inside
+    # the shutdown budget rather than after the flag worker's own timeout.
+    queue_dir = tmp_path / "queue"
+    release = threading.Event()
+
+    class MarkersHang(FakeStorageClient):
+        def upload(self, bucket, object_path, local_path):
+            if local_path.suffix == ".marker":
+                release.wait(timeout=10)
+                raise OSError("network unreachable")
+            super().upload(bucket, object_path, local_path)
+
+    storage = MarkersHang()
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    write_flag_marker(queue_dir, datetime(2026, 11, 18, 8, 59, 59))
+    stop = threading.Event()
+    deps = replace(
+        _make_deps(
+            tmp_path,
+            capture_runner=FakeCaptureRunner(
+                duration_sec=STOP_SEGMENT_SEC, on_capture_start=stop.set
+            ),
+            battery=battery_state(85),
+            led_driver=FakeLedDriver(),
+            storage_client=storage,
+            flush_markers=flag_worker.flush_markers,
+        ),
+        stop_marker_flush_timeout_sec=0.2,
+    )
+
+    started = time.monotonic()
+    try:
+        run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        flag_worker.stop()
+
+    assert storage.uploaded == ["device-abc/20261118_090000.mp4"]
+    assert elapsed < 2.0
+    # The marker is still on the card for the next try.
+    assert [p.name for p in list_pending(queue_dir)] == ["FLAG_20261118_085959.marker"]
+
+
+def test_a_capture_with_no_footage_is_discarded_without_a_marker_flush(tmp_path):
+    # An empty capture never reaches the worker: nothing is uploaded for it
+    # and no flush is spent on it, and since a segment's restart-gap clock
+    # travels with the segment itself, it cannot move the time the next
+    # flush waits on either. The segments either side keep their flushes,
+    # the cut-short last one included.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    flushes: list[float | None] = []
+
+    def flush(timeout: float | None = None) -> bool:
+        flushes.append(timeout)
+        return True
+
+    class SecondCaptureIsEmpty(FakeCaptureRunner):
+        def run(self, args: list[str], cancel: threading.Event) -> CaptureExit:
+            capture_exit = super().run(args, cancel)
+            if self.record_count == 2:
+                Path(args[args.index("-o") + 1]).write_bytes(b"")
+            return capture_exit
+
+    starts = [0]
+
+    def stop_on_the_third_capture() -> None:
+        starts[0] += 1
+        if starts[0] == 3:
+            stop.set()
+
+    runner = SecondCaptureIsEmpty(on_capture_start=stop_on_the_third_capture)
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery=battery_state(85),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        flush_markers=flush,
+    )
+
+    run_recording_loop(deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0)))
+
+    assert runner.record_count == 3
+    assert storage.uploaded == [
+        "device-abc/20261118_090000.mp4",
+        "device-abc/20261118_090002.mp4",
+    ]
+    assert len(flushes) == 2
+    assert list(deps.data_dir.iterdir()) == []
+
+
+# --- the battery halt composed with the stop path and the flag button --------
+
+
+def test_a_stop_during_the_halt_drain_still_ends_in_the_power_off(tmp_path):
+    # The halt drain may wait 120 s, but a SIGTERM arriving meanwhile gives
+    # systemd 30 s before it kills the daemon - and a halt killed mid-drain
+    # never powers off, which is the brownout the halt exists to prevent. So a
+    # pending stop cuts the rest of the drain short and the power-off follows.
+    stop = threading.Event()
+    power = FakePowerController()
+    led = FakeLedDriver()
+    battery = FakeTelemetryBatteryReader(pct=85, voltage_mv=3900)
+    release = threading.Event()
+    wedged = threading.Event()
+
+    class WedgedStorageClient:
+        def upload(self, bucket, object_path, local_path):
+            wedged.set()
+            assert release.wait(timeout=10), "the test never released the upload"
+
+    def on_record(count: int) -> None:
+        if count == 1:
+            return
+        assert wedged.wait(timeout=5), "the worker never reached the upload"
+        battery.pct = 5
+
+    class SigtermAsTheDrainStarts(FakeStatusClient):
+        # The False push comes just before the drain, so the stop provably
+        # lands while the halt is already draining.
+        def upsert_device_status(self, status: dict) -> None:
+            super().upsert_device_status(status)
+            if not status["recording_active"]:
+                stop.set()
+
+    deps = replace(
+        _make_deps(
+            tmp_path,
+            capture_runner=FakeCaptureRunner(on_record=on_record),
+            battery=responsive_battery(battery),
+            led_driver=led,
+            storage_client=WedgedStorageClient(),
+            status_client=SigtermAsTheDrainStarts(),
+            power_controller=power,
+            upload_drain_timeout_sec=30.0,
+        ),
+        stop_halt_drain_timeout_sec=0.2,
+    )
+
+    started = time.monotonic()
+    try:
+        outcome = run_recording_loop(
+            deps, stop, clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert outcome is LoopOutcome.HALTED
+    assert elapsed < 5.0, f"the halt drain ignored the stop for {elapsed:.1f}s"
+    assert led.calls[-1] == HALTED_LED
+    assert power.power_offs == [WAKE_ON_CHARGE_PCT]
+
+
+def test_a_halt_drain_flushes_markers_before_its_segments_without_the_gap(
+    tmp_path,
+):
+    # The halt drains through the same stopping path as a stop: flags still go
+    # up ahead of the segments, but neither the restart gap nor the flag
+    # worker's 30 s flush may eat into a dying battery's drain.
+    queue_dir = tmp_path / "queue"
+    storage = FakeStorageClient()
+    flag_worker = FlagUploadWorker(storage, "device-abc", queue_dir)
+    power = FakePowerController()
+    battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
+    gate = threading.Event()
+    flush_timeouts: list[float | None] = []
+    slept: list[float] = []
+
+    def flush(timeout: float | None = None) -> bool:
+        flush_timeouts.append(timeout)
+        return flag_worker.flush_markers(timeout=timeout)
+
+    def on_record(count: int) -> None:
+        write_flag_marker(queue_dir, datetime(2026, 7, 4, 12, 0, 0, 500000))
+        battery.trigger_halt()
+        gate.set()
+
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(on_record=on_record),
+        # The gate holds the worker until the halt is observed, so the
+        # segment provably drains on the stopping path.
+        command_runner=FakeCommandRunner(mux_gate=gate),
+        battery=responsive_battery(battery),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        power_controller=power,
+        monotonic=lambda: 50.0,
+        flush_markers=flush,
+        sleep=slept.append,
+    )
+
+    outcome = run_recording_loop(
+        deps, threading.Event(), clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+    flag_worker.stop()
+
+    assert outcome is LoopOutcome.HALTED
+    assert storage.uploaded == [
+        "device-abc/FLAG_20260704_120000.marker",
+        "device-abc/20260704_120000.mp4",
+    ]
+    assert slept == []
+    assert flush_timeouts == [STOP_MARKER_FLUSH_TIMEOUT_SEC]
+    assert power.power_offs == [WAKE_ON_CHARGE_PCT]
+
+
+def test_a_stop_that_cuts_a_capture_short_ends_as_a_stop_not_a_halt(tmp_path):
+    # A stop mid-capture leaves the loop straight from the cut-short segment,
+    # without another battery reading, so a battery that would have confirmed
+    # a halt on the next read does not turn an operator's stop into a
+    # power-off. The segment is kept and uploaded like any stop's, and the
+    # next boot's battery check is what confirms the halt and powers off.
+    stop = threading.Event()
+    storage = FakeStorageClient()
+    power = FakePowerController()
+    battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
+
+    def flat_then_stop() -> None:
+        battery.trigger_halt()
+        stop.set()
+
+    runner = FakeCaptureRunner(
+        duration_sec=STOP_SEGMENT_SEC, on_capture_start=flat_then_stop
+    )
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=runner,
+        battery=responsive_battery(battery),
+        led_driver=FakeLedDriver(),
+        storage_client=storage,
+        power_controller=power,
+    )
+
+    outcome = run_recording_loop(
+        deps, stop, clock=FakeClock(datetime(2026, 11, 18, 9, 0, 0))
+    )
+
+    assert outcome is LoopOutcome.STOPPED
+    assert runner.cancelled_captures == 1
+    assert storage.uploaded == ["device-abc/20261118_090000.mp4"]
+    assert power.power_offs == []
+
+
+def test_a_press_after_the_halt_leaves_the_halted_red_on_the_wire(tmp_path):
+    # The single LED owner is LedController, and Halted is the last thing the
+    # wearer sees before the pendant powers off: an acknowledgement is an
+    # overlay on Recording, so a press once the halt is showing blinks
+    # nothing, and the decoded wire ends on solid red.
+    spi = SimulatedSpiDevice()
+    led = LedController(Ws2812LedDriver(spi=spi), sleep=lambda _: None)
+    power = FakePowerController()
+    battery = TriggerableBatteryReader(healthy_pct=85, halt_pct=5)
+    deps = _make_deps(
+        tmp_path,
+        capture_runner=FakeCaptureRunner(
+            on_record=lambda count: battery.trigger_halt()
+        ),
+        battery=responsive_battery(battery),
+        led_driver=led,
+        power_controller=power,
+    )
+
+    outcome = run_recording_loop(
+        deps, threading.Event(), clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0))
+    )
+    press = make_flag_press_handler(
+        queue_dir=tmp_path / "queue",
+        submit=lambda path: None,
+        ack=led.ack_flag,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 0, 5)),
+    )
+    press()
+    led.close()
+
+    assert outcome is LoopOutcome.HALTED
+    assert _colours(spi)[-1] == (255, 0, 0)
+    assert MAGENTA not in _colours(spi)
+    assert spi.overlapping_writes == 0

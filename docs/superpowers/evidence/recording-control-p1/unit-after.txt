@@ -1,0 +1,22 @@
+# After the fix: the reproduction now passes, and the whole suite with it.
+#
+$ uv run --locked --extra dev pytest tests/test_daemon.py -k sigterm_during_a_capture -v
+
+platform linux -- Python 3.14.2, pytest-9.2.0, pluggy-1.6.0 -- /home/viet/.treehouse/vision-61dce7/4/vision/firmware/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/viet/.treehouse/vision-61dce7/4/vision/firmware
+configfile: pyproject.toml
+plugins: anyio-4.16.0
+collecting ... collected 50 items / 49 deselected / 1 selected
+
+tests/test_daemon.py::test_sigterm_during_a_capture_cuts_it_short_instead_of_waiting_for_the_segment PASSED [100%]
+
+======================= 1 passed, 49 deselected in 0.35s =======================
+
+$ uv run --locked --extra dev pytest -q
+
+........................................................................ [ 27%]
+........................................................................ [ 55%]
+........................................................................ [ 83%]
+..........................................                               [100%]
+258 passed in 7.86s

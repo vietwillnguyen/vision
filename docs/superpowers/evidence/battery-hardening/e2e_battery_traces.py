@@ -11,9 +11,10 @@ which is the whole case for the change.
 
 Part 2 runs the real ``run_recording_loop`` end to end on five of those
 traces, with the camera and ffmpeg faked by the firmware test suite's own
-``FakeCommandRunner`` and the power-off behind ``FakePowerController``. It
-prints the LED colours applied, the segments uploaded, the final status row,
-and whether the device powered off and at what wake level.
+``FakeCaptureRunner`` and ``FakeCommandRunner`` and the power-off behind
+``FakePowerController``. It prints the LED colours applied, the segments
+uploaded, the final status row, and whether the device powered off and at
+what wake level.
 
 Run from firmware/:
 
@@ -32,6 +33,7 @@ FIRMWARE = Path(__file__).resolve().parents[4] / "firmware"
 sys.path.insert(0, str(FIRMWARE))
 
 from tests.fakes import (  # noqa: E402
+    FakeCaptureRunner,
     FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
@@ -58,6 +60,7 @@ LED_NAMES = {
     ((0, 0, 255), LedPattern.PULSING): "blue",
     ((255, 255, 0), LedPattern.PULSING): "yellow",
     ((255, 0, 0), LedPattern.FLASHING): "RED",
+    ((255, 0, 0), LedPattern.SOLID): "HALTED",
 }
 
 
@@ -281,14 +284,15 @@ def run_loop(name: str) -> None:
     power = FakePowerController()
     stop = threading.Event()
     # Stop after the trace is spent, so a trace that never halts still ends.
-    runner = FakeCommandRunner(
+    runner = FakeCaptureRunner(
         on_record=lambda count: stop.set() if count >= len(trace) else None
     )
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         deps = LoopDeps(
-            command_runner=runner,
+            command_runner=FakeCommandRunner(),
+            capture_runner=runner,
             storage_client=storage,
             status_client=status,
             led_driver=led,

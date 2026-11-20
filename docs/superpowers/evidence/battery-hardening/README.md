@@ -63,20 +63,20 @@ On any pack falling fast enough for four samples to matter, the terminal voltage
 
 ## The traces through the real recording loop
 
-**Part 2** of the same output runs five of those traces through the real `run_recording_loop`, with the camera and ffmpeg faked by the firmware test suite's own `FakeCommandRunner` and the power-off behind `FakePowerController`.
+**Part 2** of the same output runs five of those traces through the real `run_recording_loop`, with the camera and ffmpeg faked by the firmware test suite's own `FakeCaptureRunner` and `FakeCommandRunner` and the power-off behind `FakePowerController`.
 
 | Trace | Outcome | Final LED | Powered off |
 |---|---|---|---|
 | `noisy-gauge-healthy-pack` | `stopped` | green | no |
-| `genuine-depletion` | `halted` | RED | yes, wake armed at 25 % |
-| `sagging-voltage-under-load` | `halted` | RED | yes, wake armed at 25 % |
+| `genuine-depletion` | `halted` | HALTED | yes, wake armed at 25 % |
+| `sagging-voltage-under-load` | `halted` | HALTED | yes, wake armed at 25 % |
 | `halt-then-charger-arrives` | `recovered` | green | **no** |
 | `depleting-then-plugged-in` | `stopped` | green | no |
 
-Every halt drains its queue first (`segments_pending=0` in the final status row), pushes `recording_active=False`, and shows the Critical red last, after the worker join, so nothing can paint over it.
+Every halt drains its queue first (`segments_pending=0` in the final status row), pushes `recording_active=False`, and shows the Halted solid red last, after the worker join, so nothing can paint over it.
 
 `halt-then-charger-arrives` is the recovery path end to end.
-Its LED sequence is `blue green RED green`: the halt is declared and the red shown, then the re-read finds external power, the power-off is cancelled, and the red gives way to the live state rather than leaving a resuming pendant sitting red.
+Its LED sequence is `blue green HALTED green`: the halt is declared and the Halted solid red shown, then the re-read finds external power, the power-off is cancelled, and the red gives way to the live state rather than leaving a resuming pendant sitting red.
 The loop returns `recovered`, which is what makes the daemon re-enter it instead of exiting.
 
 ## Unit tests

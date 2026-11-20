@@ -155,7 +155,8 @@ A single Python systemd service manages the full device lifecycle.
    Then activate the connection (`nmcli connection reload` + `nmcli connection up visio`); on activation failure, flash the Critical red LED and exit 1 so systemd retries.
    On restart boots (session file already on disk), the same reload/up runs again as a best-effort retry whenever the keyfile exists, so a first boot whose activation failed is not stranded offline; a failed retry is logged but never fatal, since the device may already be online via autoconnect.
 4. Load or create the device's local `device_id`; register the device with Supabase the first time this ever succeeds, tracked by a separate `device_registered` marker file so a crash between steps 4 and 5 retries registration on the next boot rather than skipping it forever.
-5. Flush any pending upload queue left over from a previous run, then recover orphaned captures that an unclean stop (SIGTERM mid-capture, power cut, crash) left at the top level of the data dir, and flush again only if anything was recovered.
+5. Flush any pending upload queue left over from a previous run, then recover orphaned captures that an unclean stop (a capture killed instead of finalised, power cut, crash) left at the top level of the data dir, and flush again only if anything was recovered.
+   The flush drains flag markers before segments (`markers_before_segments`), so a boot that cannot finish a backlog never sends a day's segments and leaves their flags behind; see Manual flag button.
    A lone or interrupted `.h264` is (re-)muxed and queued, and a lone `.mp4` is queued as is.
    On a mux failure the partial `.mp4` is removed, but the `.h264` is deleted only when it is zero bytes; a non-empty capture is kept for the next boot, since the failure may be transient (for example a full SD card).
    Recovery runs here because no capture is in flight yet; see `recover_orphaned_segments` in `firmware/visio_recorder/recording_loop.py`.
@@ -176,13 +177,14 @@ A single Python systemd service manages the full device lifecycle.
   Planned change (LED state machine below): offline rounds stop counting towards Critical, so the backoff gets its own attempt counter instead of reading `UploadHealth`.
   A round skipped because NetworkManager does not report `full` connectivity is a local check that costs no radio time; it still advances the backoff counter, so an all-day walk settles at one local check every eight minutes, and any success resets both counters.
   `UploadHealth` then counts only failures while connectivity is `full`, which is what the Critical LED needs, and `RetryBackoff`'s docstring changes with it.
-  The *next process startup's* flush (step 5 above) remains the backstop for anything a run could not drain, and is still the only retry for flag markers, which their own worker owns while the daemon runs.
+  The *next process startup's* flush (step 5 above) remains the backstop for anything a run could not drain, including the flag markers that their own worker now retries in process on this same schedule (see Manual flag button).
 - A retry round goes through the same upload path a segment does, so the 50 MB upload limit behaves identically: an oversized segment is split and its parts uploaded, and one that cannot be split under the limit is moved to `rejected/` and so leaves the queue for good, which is what keeps the limit from becoming a retry loop.
   A round's outcome feeds the same consecutive-failure counter a segment's own upload does, so retry failures escalate to Critical and a retry success clears it.
   A round that tries no file, because the queue emptied or the round was cancelled before its first file, is a no-op that deliberately leaves that counter and the LED alone, since reporting "nothing failed" would clear Critical without anything having reached storage.
   A stopping worker does not start a round at all; it goes straight to collecting the shutdown sentinel.
   A round in flight is abandoned when the daemon is stopping or the battery has hit the halt threshold, so a backlog is never uploaded on a dying battery; whatever is left stays queued.
   A round pushes no `device_status` row of its own - the next segment completes within one segment period and reports the new `segments_pending` and `segments_uploaded_today` then.
+  Before its own segment, and before each retry round, the worker has the flag-upload worker flush whatever markers are pending and waits for it, so a segment never reaches storage ahead of its flags (see Manual flag button).
 - After 3 consecutive upload failures the LED escalates to Critical red flash even though recording continues uninterrupted; any subsequent successful upload resets the counter.
   Critical is a latched condition rather than a momentary one, so it is derived from the consecutive-failure counter (`UploadHealth`) instead of being applied once at the moment of escalation.
   That makes the red survive the following segments: while the counter is at or past the threshold, the segment's own upload shows red too, not the Uploading blue and the restored Recording green, and only the resetting success returns the LED to green or yellow.
@@ -279,11 +281,44 @@ A single press inserts a `FLAG_YYYYMMDD_HHMMSS.marker` file into the upload queu
 The cloud pipeline reads this marker and boosts the composite score for the surrounding timestamp.
 Flagged moments are always included in the highlight reel.
 
-**As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler only debounces, writes the marker, and hands the path to a dedicated flag-upload worker thread, keeping gpiozero's callback thread off the network so later presses are never delayed by a slow upload.
+**Local-first contract (as-built).** The device is the source of truth for a flag and the network is an opportunistic sync, so a press is complete the moment the marker is durable on the SD card and nothing about it waits on WiFi.
+`write_flag_marker` creates the marker and fsyncs both the file and the queue directory before returning.
+The directory sync is the load-bearing one: the file is empty, so syncing its data costs almost nothing, while an unsynced directory entry is exactly what a power cut loses.
+The wearer learns the press landed from a short LED acknowledgement blink applied once that sync has returned, never gated on an upload (see the LED state machine).
+
+**As-built wiring:** `main()` registers a gpiozero button listener on GPIO 17 (pull-up, 50ms bounce time) whose press handler only debounces, writes and syncs the marker, asks the LED owner for the acknowledgement blink, and hands the path to a dedicated flag-upload worker thread.
+That keeps gpiozero's callback thread off the network and off the LED, so a slow upload or a blink in progress can never delay detection of a later press.
 The worker uploads each marker immediately as it arrives, so it reaches the pipeline before that night's run.
 Presses within a 2-second cooldown of the last accepted press are dropped (switch bounce and accidental double-taps).
-If the immediate upload fails, the marker stays in the upload queue and the next boot's flush retries it.
-Unlike a segment it gets no in-process retry, since the upload worker's retry rounds skip markers so they never race the flag-upload worker.
+
+**In-process retry (as-built).** A failed marker upload no longer waits for the next boot.
+The flag-upload worker retries whatever markers are still queued for as long as the daemon runs, on the same schedule segments use: while markers are pending it blocks on its work queue only until a retry deadline, and that deadline comes from the same `RetryBackoff` (30 s, doubling per consecutive failure, capped at 480 s) through the same `next_worker_step` decision the upload worker uses.
+It keeps its own consecutive-failure count rather than sharing the upload worker's `UploadHealth`, for two reasons.
+Two threads must not write one counter, and a marker is metadata rather than footage: one that cannot be sent costs a score boost, which must not on its own escalate the Critical LED that means this device is losing video.
+A real outage fails the segments alongside it and escalates there anyway.
+A round stops at its first failure, because markers are empty files and one refusal already proves the network is down, so trying the rest would spend radio power to learn the same thing.
+A new press or the shutdown sentinel still wakes the worker at once, so the retry delays neither, and the next boot's flush remains the backstop.
+
+**Flags travel with their footage (as-built).** The pipeline matches a marker against the segments of the day it is processing, so a segment that reaches storage while its marker is still queued is scored unflagged and the marker falls to the DLQ's late-marker retry.
+Keeping that the exception rather than the rule needs the device to upload every pending marker before any segment:
+
+- the startup flush drains the queue markers-first (`markers_before_segments`), which is the reboot-mid-backlog case;
+- while the daemon runs, the upload worker asks the flag-upload worker to flush its pending markers and waits for that flush - before the segment it has just recorded, and before each in-process retry round.
+  The flush is a request on the flag-upload worker's own work queue, so markers still have exactly one uploader and the two threads never race one.
+  The flush itself is bounded at 30 s; if that elapses, or the flush could not send everything, the segment is uploaded anyway, because footage is worth more than marker ordering and the pipeline's late-marker handling is the backstop.
+- before that flush, the upload worker waits until the segment's end plus the 3 s restart gap (`RESTART_GAP_SEC`, the pipeline's `RESTART_GAP_TOLERANCE_SEC`), because a press in that gap flags the segment that just ended, and without the wait its marker would be uploaded after that segment had already reached storage.
+  The end is when the capture returned, and a retry round waits on the newest segment the run has queued.
+  The gap wait is capped at the gap itself, so it never holds an upload longer than 3 s.
+  Most of the gap is spent muxing the segment, which happens first.
+- once the loop is stopping (a stop, shutdown or battery halt), the gap is not waited and the flush is bounded at 5 s (`STOP_MARKER_FLUSH_TIMEOUT_SEC`) instead of 30 s.
+  Markers already on the card still go up ahead of every segment the drain uploads, the cut-short last segment the main thread queued itself included, but the drain runs inside systemd's `TimeoutStopSec=30`, and a 30 s flush alone would spend it before that segment started uploading.
+  The gap only matters to a recording that carries on: the recording-control design flags only while recording, and a press that still lands in those seconds is fsynced and goes up on the flag-upload worker's retries or the next boot's flush, with the pipeline's late-marker handling as the backstop.
+  A capture that wrote no footage is discarded on the main thread, so it never reaches the worker, costs no flush and does not move the end time a retry round waits on.
+
+The rule is deliberately coarser than the pipeline's matching window: rather than work out which segment each marker belongs to, every pending marker goes first.
+Together with the gap wait, that covers both a marker inside a segment and one in the 3 s restart gap, which the pipeline attaches to the segment that just ended.
+The pipeline's late-marker handling remains the backstop for what the device cannot order: a flush that timed out or failed, or a marker left on the card by a boot that died mid-backlog.
+Markers stay out of `pending_segments`, so the upload worker's own retry rounds still never touch one.
 
 **LED state machine:**
 
@@ -484,6 +519,11 @@ The capture region may use `python-statemachine` (MIT, pure Python) instead of a
 **Battery halt LED (as built, PR #101).** Today's `next_led_state` in `firmware/visio_recorder/recording_loop.py` resolves a confirmed battery halt to `LedState.HALTED` (red, solid) ahead of every other state, instead of applying `LedState.CRITICAL` by hand.
 The halt path applies it last, after the upload worker is joined, so no drained segment's LED restore can paint over it; this is the Halted, battery row above, and the resolver described here replaces `next_led_state` as the rest of the table lands.
 
+**LED ownership and the flag acknowledgement (as built, PR #100).** `LedController` wraps the real driver and is the single owner of the pixel: every resolved write goes through its `set`, which also records the state a blink returns to.
+The Flag saved overlay above is built: the gpiozero callback thread only asks for the 150 ms magenta blink (`FLAG_ACK_BLINK_SEC`) and returns, the blink runs on the controller's own thread with its wait held outside the controller's lock, so a real state change mid-blink wins and the restore re-reads the newest state.
+It also plays over a latched Critical, since Critical only ever colours Recording.
+The controller never blinks over Halted: the acknowledgement is an overlay on Recording, nothing is recording once a halt shows, and Halted has to stay the last frame before the power-off, so a press then writes its marker but leaves the red alone.
+
 **LED driver (as built):** a single pixel with no animation thread, so pulsing and flashing render as their solid colour until `LedController` animates them (see the state machine above).
 `Ws2812LedDriver` writes each colour as one SPI transfer on `/dev/spidev0.0` through py-spidev (Raspberry Pi OS package `python3-spidev`; no on-device compilation, no `/dev/mem`, no root).
 Each WS2812B bit becomes one SPI byte at a 6.4 MHz request: `0xC0` (2 high, 6 low) for a 0 and `0xF0` (4 high, 4 low) for a 1, sent green, red, blue, most significant bit first, between two 240-byte all-zero resets (300 us latch).
@@ -559,9 +599,12 @@ Arming it needs the HAT, so it is a bench step (see the provisioning plan's Task
 A confirmed halt is a shutdown sequence, not an exit.
 The old behaviour - stop recording, flash red, exit 0 - left an idle Pi powered on to discharge to zero and brown out mid-write, which is the single most likely way this device corrupts an SD card.
 
-1. Stop recording. The in-flight capture finishes, or is cut short once the recording-control design's interruptible capture lands.
+1. Stop recording. The battery is read between captures, so the capture before the halt has already finished and is queued like any other.
+   A stop that cuts a capture short (PR #103) leaves the loop straight from that capture without another reading, so it ends as a stop, not a halt: the cut-short segment is queued and uploaded as on any stop, and the next boot's battery check is what confirms the halt and powers off.
 2. Drain the upload queue, bounded by `UPLOAD_DRAIN_TIMEOUT_SEC`. The worker is joined with that timeout rather than indefinitely: a dying battery is exactly when an upload is most likely to hang on a weak signal, and waiting forever for it is how the Pi ends up browning out instead of powering off. Whatever is left stays queued for the next boot.
-3. Push the final `device_status` row, `recording_active = false`, as it does for any loop exit.
+   The drain is the stopping path's, so flag markers still go up ahead of the segments, without the restart-gap wait and on the 5 s stop flush bound (see Manual flag button).
+   A stop (SIGTERM or SIGINT) pending or arriving during the drain caps the rest of it at `STOP_HALT_DRAIN_TIMEOUT_SEC` (15 s): systemd kills the daemon `TimeoutStopSec=30` after the signal, and a halt killed mid-drain never reaches step 6.
+3. Push `recording_active = false` to `device_status` as the drain starts and again once it ends with the final counts, as on any loop exit (PR #103).
 4. Apply the Halted LED (red, solid; see the LED state machine), applied after the join so nothing can overwrite it.
 5. Re-read the battery once more. If external power has appeared during the drain, the halt is cancelled: see Recovery below. A re-read that fails keeps the confirmed halt (or, after enough failures in a row, confirms an `unreadable` halt), so a failed battery reading never prevents the power-off.
 6. Otherwise power off cleanly, and arm the wake.

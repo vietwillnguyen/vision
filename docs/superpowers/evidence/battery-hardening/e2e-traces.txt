@@ -1,9 +1,3 @@
-    log: battery charge 5% (smoothed) confirmed below 10% over 3 readings; halting
-    log: battery charge 4% (smoothed) confirmed below 10% over 4 readings; halting
-    log: battery voltage 3260 mV confirmed below the 3300 mV floor over 2 readings; halting
-    log: battery voltage 3240 mV confirmed below the 3300 mV floor over 3 readings; halting
-    log: battery voltage 3240 mV confirmed below the 3300 mV floor over 2 readings; halting
-    log: external power returned during the battery halt drain at 52%; cancelling the power-off and resuming
 
 ==============================================================================
 Part 1: the same traces through the old policy and the new monitor
@@ -157,6 +151,8 @@ Part 2: five traces through the real run_recording_loop
     LED sequence     blue green blue green blue green blue green blue green blue green blue green
     final status     battery_pct=42 recording_active=False segments_pending=0
     POWERED OFF      no - the device stayed up
+    log: battery charge 5% (smoothed) confirmed below 10% over 3 readings; halting
+    log: battery charge 4% (smoothed) confirmed below 10% over 4 readings; halting
 
 --- genuine-depletion
     The real thing: a pack that keeps falling and does not come back.
@@ -164,9 +160,11 @@ Part 2: five traces through the real run_recording_loop
     outcome          halted
     segments recorded 9
     segments uploaded 9
-    LED sequence     yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow RED
+    LED sequence     yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow yellow HALTED
     final status     battery_pct=3 recording_active=False segments_pending=0
     POWERED OFF      wake-on-charge armed at 25%
+    log: battery voltage 3260 mV confirmed below the 3300 mV floor over 2 readings; halting
+    log: battery voltage 3240 mV confirmed below the 3300 mV floor over 3 readings; halting
 
 --- sagging-voltage-under-load
     The case the percentage alone cannot catch. The gauge still reads half full - it is resistance-compensated and lags - while the cell's terminal voltage has already collapsed under load.
@@ -174,9 +172,11 @@ Part 2: five traces through the real run_recording_loop
     outcome          halted
     segments recorded 2
     segments uploaded 2
-    LED sequence     blue green blue green RED
+    LED sequence     blue green blue green HALTED
     final status     battery_pct=53 recording_active=False segments_pending=0
     POWERED OFF      wake-on-charge armed at 25%
+    log: battery voltage 3240 mV confirmed below the 3300 mV floor over 2 readings; halting
+    log: external power returned during the battery halt drain at 52%; cancelling the power-off and resuming
 
 --- halt-then-charger-arrives
     The rail collapses and the halt is confirmed, then somebody plugs the pendant in while its queue is still draining.
@@ -184,7 +184,7 @@ Part 2: five traces through the real run_recording_loop
     outcome          recovered
     segments recorded 1
     segments uploaded 1
-    LED sequence     blue green RED green
+    LED sequence     blue green HALTED green
     final status     battery_pct=53 recording_active=False segments_pending=0
     POWERED OFF      no - the device stayed up
 
