@@ -35,6 +35,7 @@ import threading
 import time
 from pathlib import Path
 
+from visio_recorder.battery import BatteryState
 from visio_recorder.capture import (
     CaptureExit,
     SubprocessInterruptibleRunner,
@@ -45,6 +46,14 @@ from visio_recorder.led import LedPattern
 from visio_recorder.muxer import SubprocessCommandRunner
 from visio_recorder.recording_loop import ShutilDiskStatsReader
 from visio_recorder.upload_limit import FfprobeDurationProbe, UploadLimit
+
+
+class NeverPowerOff:
+    """A battery that never halts never asks; this would fail loudly if it did."""
+
+    def power_off(self, *, wake_on_charge_pct: int) -> None:
+        raise AssertionError("a steady battery must never power the pendant off")
+
 
 SEGMENT_MS = 8000
 SIGTERM_AFTER_SEC = 1.5
@@ -193,7 +202,8 @@ def measure(runner, label: str) -> dict:
             storage_client=storage,
             status_client=SilentStatus(),
             led_driver=SilentLed(),
-            battery_reader=SteadyBattery(),
+            battery=BatteryState(SteadyBattery()),
+            power_controller=NeverPowerOff(),
             disk_stats_reader=ShutilDiskStatsReader(),
             data_dir=data_dir,
             queue_dir=data_dir / "queue",

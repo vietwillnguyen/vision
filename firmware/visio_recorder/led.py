@@ -11,6 +11,7 @@ class LedState(Enum):
     UPLOADING = "uploading"
     LOW_BATTERY = "low_battery"
     CRITICAL = "critical"
+    HALTED = "halted"
     # Momentary, not a condition: see LedController.ack_flag.
     FLAG_ACK = "flag_ack"
 
@@ -41,6 +42,11 @@ _STATE_TO_COLOR_PATTERN: dict[LedState, tuple[tuple[int, int, int], LedPattern]]
     LedState.UPLOADING: (BLUE, LedPattern.PULSING),
     LedState.LOW_BATTERY: (YELLOW, LedPattern.PULSING),
     LedState.CRITICAL: (RED, LedPattern.FLASHING),
+    # Solid, unlike Critical's flash: Critical is "still recording, needs you",
+    # Halted is "stopped recording, about to power off" (pendant spec, LED
+    # state machine). The SPI driver renders both as solid red until the LED
+    # controller animates patterns.
+    LedState.HALTED: (RED, LedPattern.SOLID),
     LedState.FLAG_ACK: (MAGENTA, LedPattern.SOLID),
 }
 
@@ -125,6 +131,11 @@ class LedController:
             if self._state is None:
                 # Nothing has set a state yet, so there is nothing to return
                 # to and magenta would simply stay on.
+                return
+            if self._state == _STATE_TO_COLOR_PATTERN[LedState.HALTED]:
+                # Halted is terminal and must be the last thing the wearer
+                # sees before the pendant powers off; the acknowledgement is
+                # an overlay on Recording, and nothing is recording now.
                 return
             generation = self._generation
             color, pattern = _STATE_TO_COLOR_PATTERN[LedState.FLAG_ACK]

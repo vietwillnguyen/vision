@@ -8,17 +8,18 @@ import pytest
 from tests.fakes import (
     FailingSplitRunner,
     FailingStorageClient,
-    FakeBatteryReader,
     FakeCaptureRunner,
     FakeClock,
     FakeCommandRunner,
     FakeDiskStatsReader,
     FakeDurationProbe,
     FakeLedDriver,
+    FakePowerController,
     FakeStatusClient,
     FakeStorageClient,
     FakeStorageClientFailingOn,
     SizeCheckedStorageClient,
+    battery_state,
     unlimited_upload_limit,
 )
 from visio_recorder.capture import CaptureExit, VideoSettings
@@ -65,6 +66,25 @@ def test_next_led_state_shows_recording_when_idle_and_healthy():
     assert (
         next_led_state(battery_is_low=False, is_uploading=False) == LedState.RECORDING
     )
+
+
+def test_a_battery_halt_shows_halted_solid_red_over_every_other_condition():
+    # Halted is its own state, not Critical: Critical (red, flashing) means
+    # "still recording, needs you", while a halt has stopped recording and is
+    # about to power off. The pendant spec's LED state machine (PR #102) keeps
+    # the two looks apart so a wearer can tell them apart.
+    for battery_is_low in (False, True):
+        for is_uploading in (False, True):
+            for upload_critical in (False, True):
+                assert (
+                    next_led_state(
+                        battery_is_low,
+                        is_uploading=is_uploading,
+                        upload_critical=upload_critical,
+                        battery_halted=True,
+                    )
+                    == LedState.HALTED
+                )
 
 
 def test_next_led_state_lets_upload_critical_outrank_every_other_condition():
@@ -120,7 +140,7 @@ def test_on_segment_complete_holds_critical_red_across_a_failing_segment(tmp_pat
         storage_client=FailingStorageClient(),
         status_client=FakeStatusClient(),
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -152,7 +172,7 @@ def test_on_segment_complete_clears_critical_red_on_the_success_itself(tmp_path)
         storage_client=FakeStorageClient(),
         status_client=FakeStatusClient(),
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -186,7 +206,7 @@ def test_on_segment_complete_happy_path(tmp_path):
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=41,
         framerate=30,
@@ -235,7 +255,7 @@ def test_on_segment_complete_with_low_battery_uses_low_battery_led(tmp_path):
         storage_client=FakeStorageClient(),
         status_client=FakeStatusClient(),
         led_driver=led,
-        battery_reader=FakeBatteryReader(15),
+        battery=battery_state(15),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -267,7 +287,7 @@ def test_on_segment_complete_reports_real_disk_stats(tmp_path, monkeypatch):
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=41,
         framerate=30,
@@ -316,7 +336,7 @@ def test_failed_upload_restores_led_keeps_queued_file_and_reports_failure(tmp_pa
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -363,7 +383,7 @@ def test_successful_upload_returns_ok_result(tmp_path):
         storage_client=storage,
         status_client=status_client,
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -559,7 +579,8 @@ def test_capture_killed_mid_segment_is_uploaded_on_the_next_boot(tmp_path):
         storage_client=storage,
         status_client=FakeStatusClient(),
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
+        power_controller=FakePowerController(),
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=1.0, free_gb=9.0)),
         data_dir=data_dir,
         queue_dir=queue_dir,
@@ -636,7 +657,7 @@ def test_on_segment_complete_splits_an_oversized_segment_and_uploads_both_parts(
         storage_client=storage,
         status_client=status_client,
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -669,7 +690,7 @@ def test_an_unsplittable_oversized_segment_is_reported_and_not_retried(tmp_path)
         storage_client=storage,
         status_client=status_client,
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -727,7 +748,7 @@ def test_on_segment_complete_muxes_an_audio_capture_and_reports_audio_active(
         storage_client=storage,
         status_client=status_client,
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -859,7 +880,7 @@ def _retry(
         queue_dir=queue_dir,
         storage_client=storage,
         led_driver=led or FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         upload_limit=limit or unlimited_upload_limit(),
         upload_health=health,
@@ -1123,7 +1144,7 @@ def test_on_segment_complete_flushes_the_markers_before_its_own_upload(tmp_path)
         storage_client=storage,
         status_client=FakeStatusClient(),
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,
@@ -1153,7 +1174,7 @@ def test_upload_segment_flushes_the_markers_before_an_already_queued_segment(
         storage_client=storage,
         status_client=FakeStatusClient(),
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         disk_stats_reader=FakeDiskStatsReader(DiskStats(used_gb=0.0, free_gb=0.0)),
@@ -1181,7 +1202,7 @@ def test_a_marker_flush_that_could_not_finish_still_uploads_the_segment(tmp_path
         storage_client=storage,
         status_client=FakeStatusClient(),
         led_driver=FakeLedDriver(),
-        battery_reader=FakeBatteryReader(85),
+        battery=battery_state(85),
         device_id="device-abc",
         segments_uploaded_today=0,
         framerate=30,

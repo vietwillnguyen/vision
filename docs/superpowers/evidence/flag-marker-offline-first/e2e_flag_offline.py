@@ -37,8 +37,14 @@ from pathlib import Path
 FIRMWARE = Path(__file__).resolve().parents[4] / "firmware"
 sys.path.insert(0, str(FIRMWARE))
 
-from tests.fakes import FakeBatteryReader, FakeClock, SimulatedSpiDevice  # noqa: E402
+from tests.fakes import (  # noqa: E402
+    FakeBatteryReader,
+    FakeClock,
+    FakePowerController,
+    SimulatedSpiDevice,
+)
 from tests.ws2812_waveform import decode_frame  # noqa: E402
+from visio_recorder.battery import BatteryState  # noqa: E402
 from visio_recorder.capture import CaptureExit, VideoSettings  # noqa: E402
 from visio_recorder.daemon import (  # noqa: E402
     LoopDeps,
@@ -215,7 +221,8 @@ def _deps(
         storage_client=storage,
         status_client=Status(),
         led_driver=led,
-        battery_reader=FakeBatteryReader(85),
+        battery=BatteryState(FakeBatteryReader(85)),
+        power_controller=FakePowerController(),
         disk_stats_reader=ShutilDiskStatsReader(),
         data_dir=data_dir,
         queue_dir=tmp / "data" / "queue",
@@ -228,6 +235,12 @@ def _deps(
         restart_gap_sec=gap_sec,
         sleep=sleep,
     )
+
+
+def _no_boot_wait(seconds: float) -> None:
+    # The boot battery check samples a few seconds apart; nothing here is
+    # about the battery, so the samples are taken back to back.
+    pass
 
 
 class _NoProbe:
@@ -277,7 +290,9 @@ def scenario_1_long_outage() -> None:
         )
         stop = threading.Event()
         battery = FakeBatteryReader(85)
-        assert run_startup_sequence(battery, led).proceed  # LED: recording green
+        assert run_startup_sequence(
+            battery, led, sleep=_no_boot_wait
+        ).proceed  # LED: recording green
 
         def on_capture(n: int) -> None:
             if n == 1:
@@ -379,7 +394,9 @@ def scenario_2_flaky_wifi() -> None:
         storage = Flaky(online=False)  # flips to True on the first attempt
         spi = SimulatedSpiDevice()
         led = LedController(Ws2812LedDriver(spi=spi))
-        assert run_startup_sequence(FakeBatteryReader(85), led).proceed
+        assert run_startup_sequence(
+            FakeBatteryReader(85), led, sleep=_no_boot_wait
+        ).proceed
         flag_worker = FlagUploadWorker(
             storage, DEVICE, queue_dir, retry_backoff=SCALED_BACKOFF
         )
@@ -527,7 +544,9 @@ def scenario_4_press_during_upload() -> None:
         )
         stop = threading.Event()
         runner = SimulatedCamera(lambda n: stop.set() if n >= 1 else None)
-        assert run_startup_sequence(FakeBatteryReader(85), led).proceed
+        assert run_startup_sequence(
+            FakeBatteryReader(85), led, sleep=_no_boot_wait
+        ).proceed
         deps = _deps(tmp, runner, storage, led, flag_worker)
         loop = threading.Thread(
             target=run_recording_loop,
@@ -625,7 +644,9 @@ def scenario_5_press_in_the_restart_gap() -> None:
             stop.set()
 
         runner = SimulatedCamera(stop_once_the_first_segment_is_stored)
-        assert run_startup_sequence(FakeBatteryReader(85), led).proceed
+        assert run_startup_sequence(
+            FakeBatteryReader(85), led, sleep=_no_boot_wait
+        ).proceed
         deps = _deps(
             tmp,
             runner,

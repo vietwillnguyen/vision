@@ -38,6 +38,7 @@ EXPECTED_STATE_FRAMES = {
     LedState.UPLOADING: _frame(ALL_ZERO, ALL_ZERO, ALL_ONE),  # blue
     LedState.LOW_BATTERY: _frame(ALL_ONE, ALL_ONE, ALL_ZERO),  # yellow
     LedState.CRITICAL: _frame(ALL_ZERO, ALL_ONE, ALL_ZERO),  # red
+    LedState.HALTED: _frame(ALL_ZERO, ALL_ONE, ALL_ZERO),  # red
     LedState.FLAG_ACK: _frame(ALL_ZERO, ALL_ONE, ALL_ONE),  # magenta
 }
 
@@ -46,6 +47,7 @@ EXPECTED_STATE_COLOURS = {
     LedState.UPLOADING: (0, 0, 255),
     LedState.LOW_BATTERY: (255, 255, 0),
     LedState.CRITICAL: (255, 0, 0),
+    LedState.HALTED: (255, 0, 0),
     LedState.FLAG_ACK: (255, 0, 255),
 }
 

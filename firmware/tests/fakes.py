@@ -6,8 +6,14 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
-from visio_recorder.battery import BatteryReader
+from visio_recorder.battery import (
+    BatteryMonitor,
+    BatteryReader,
+    BatteryState,
+    BatteryTelemetryReader,
+)
 from visio_recorder.capture import CaptureExit, InterruptibleCommandRunner
 from visio_recorder.led import LedDriver, LedPattern
 from visio_recorder.muxer import CommandRunner
@@ -22,6 +28,90 @@ class FakeBatteryReader(BatteryReader):
 
     def get_charge_pct(self) -> int:
         return self._pct
+
+
+def responsive_battery(reader: BatteryReader) -> BatteryState:
+    """A debounced battery whose verdict follows its reader on the next read.
+
+    For loop tests about sequencing - when the drain runs, which LED is last,
+    what the status row says - rather than about the debounce itself, which
+    ``test_battery.py`` owns. A realistic window and confirmation count here
+    would only add segments to assert over without testing anything the
+    battery suite does not already pin.
+    """
+    return BatteryState(
+        reader,
+        BatteryMonitor(average_window=1, halt_confirmations=1, floor_confirmations=1),
+    )
+
+
+def battery_state(pct: int) -> BatteryState:
+    """A debounced battery pinned at one level.
+
+    For the many tests that need a battery to exist but do not exercise the
+    debounce: a fixed percentage produces the same verdict however often it is
+    sampled.
+    """
+    return BatteryState(FakeBatteryReader(pct))
+
+
+class FakeTelemetryBatteryReader(BatteryTelemetryReader):
+    """A battery source that reports voltage and external power as well.
+
+    The PiJuice shape. Every field is settable after construction so a test can
+    walk a trace - a sagging voltage, a charger being connected - through one
+    reader without rebuilding it.
+    """
+
+    def __init__(
+        self,
+        pct: int,
+        voltage_mv: int = 3900,
+        external_power: bool = False,
+    ) -> None:
+        self.pct = pct
+        self.voltage_mv = voltage_mv
+        self.external_power = external_power
+
+    def get_charge_pct(self) -> int:
+        return self.pct
+
+    def get_battery_voltage_mv(self) -> int:
+        return self.voltage_mv
+
+    def is_externally_powered(self) -> bool:
+        return self.external_power
+
+
+class ScriptedBatteryReader(BatteryTelemetryReader):
+    """Walks a scripted trace of samples, one per read, holding the last.
+
+    Lets a test drive the recording loop through a whole battery trace -
+    noisy, sagging, charging, recovering - without any timing or threading of
+    its own: the loop's own cadence advances the trace.
+    """
+
+    def __init__(self, trace: list[tuple[int, int, bool]]) -> None:
+        assert trace, "a scripted battery reader needs at least one sample"
+        self._trace = list(trace)
+        self._index = -1
+        self.reads = 0
+
+    def _advance(self) -> tuple[int, int, bool]:
+        # One advance per percentage read; the voltage and power reads that
+        # follow it belong to the same sample.
+        return self._trace[min(self._index, len(self._trace) - 1)]
+
+    def get_charge_pct(self) -> int:
+        self._index += 1
+        self.reads += 1
+        return self._advance()[0]
+
+    def get_battery_voltage_mv(self) -> int:
+        return self._advance()[1]
+
+    def is_externally_powered(self) -> bool:
+        return self._advance()[2]
 
 
 class TriggerableBatteryReader(BatteryReader):
@@ -147,6 +237,121 @@ class FakeCommandRunner(CommandRunner):
             output_path = Path(args[args.index("copy") + 1])
             if input_path.exists():
                 output_path.write_bytes(input_path.read_bytes())
+
+
+class RaisingCommandRunner(CommandRunner):
+    """Every command fails - the polkit-refusal shape for the power-off."""
+
+    def __init__(self, message: str = "Interactive authentication required") -> None:
+        self._message = message
+        self.calls: list[list[str]] = []
+
+    def run(self, args: list[str]) -> None:
+        self.calls.append(args)
+        raise subprocess.CalledProcessError(1, args, stderr=self._message)
+
+
+class FakePiJuicePower:
+    """Stands in for ``pijuice.power``, recording the halt sequence it is sent.
+
+    Models the vendor library's two failure shapes, which are different: a call
+    can raise (the I2C transfer itself failed) or it can return an ``error``
+    key (the HAT answered and refused). Neither may stop a power-off.
+    """
+
+    def __init__(
+        self,
+        raise_on: set[str] | None = None,
+        error_on: dict[str, str] | None = None,
+    ) -> None:
+        self._raise_on = raise_on or set()
+        self._error_on = error_on or {}
+        self.calls: list[tuple[str, int]] = []
+
+    def _record(self, name: str, value: int) -> dict:
+        if name in self._raise_on:
+            raise OSError(121, "Remote I/O error")
+        self.calls.append((name, value))
+        return {"error": self._error_on.get(name, "NO_ERROR")}
+
+    def SetWakeUpOnCharge(self, arg: int, non_volatile: bool = False) -> dict:
+        return self._record("SetWakeUpOnCharge", arg)
+
+    def SetSystemPowerSwitch(self, state: int) -> dict:
+        return self._record("SetSystemPowerSwitch", state)
+
+    def SetPowerOff(self, delay: int) -> dict:
+        return self._record("SetPowerOff", delay)
+
+
+class FakePiJuiceStatus:
+    """Stands in for ``pijuice.status``, in the shapes the vendor library returns.
+
+    Every read is a fresh dict built from the current fields, so a test can
+    change the HAT's state between two reads the way a charger being connected
+    would.
+    """
+
+    def __init__(
+        self,
+        charge_pct: int = 85,
+        voltage_mv: int = 3900,
+        battery: str = "NORMAL",
+        power_input: str = "NOT_PRESENT",
+        power_input_5v_io: str = "NOT_PRESENT",
+    ) -> None:
+        self.charge_pct = charge_pct
+        self.voltage_mv = voltage_mv
+        self.battery = battery
+        self.power_input = power_input
+        self.power_input_5v_io = power_input_5v_io
+
+    def GetChargeLevel(self) -> dict:
+        return {"data": self.charge_pct, "error": "NO_ERROR"}
+
+    def GetBatteryVoltage(self) -> dict:
+        return {"data": self.voltage_mv, "error": "NO_ERROR"}
+
+    def GetStatus(self) -> dict:
+        return {
+            "data": {
+                "isFault": False,
+                "isButton": False,
+                "battery": self.battery,
+                "powerInput": self.power_input,
+                "powerInput5vIo": self.power_input_5v_io,
+            },
+            "error": "NO_ERROR",
+        }
+
+
+def fake_pijuice(status: FakePiJuiceStatus | None = None, **kwargs) -> SimpleNamespace:
+    """A stand-in PiJuice carrying a ``status`` and a ``power`` namespace."""
+    return SimpleNamespace(
+        status=FakePiJuiceStatus(**kwargs) if status is None else status,
+        power=FakePiJuicePower(),
+    )
+
+
+class FakePowerController:
+    """Records the power-off a halt asked for instead of performing one.
+
+    No test may ever reach a real ``systemctl poweroff``, so this is what every
+    loop test is wired with and the real controllers are tested on their own.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.power_offs: list[int] = []
+
+    @property
+    def powered_off(self) -> bool:
+        with self._lock:
+            return bool(self.power_offs)
+
+    def power_off(self, *, wake_on_charge_pct: int) -> None:
+        with self._lock:
+            self.power_offs.append(wake_on_charge_pct)
 
 
 class FakeCaptureRunner(InterruptibleCommandRunner):

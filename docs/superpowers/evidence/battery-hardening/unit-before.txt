@@ -1,0 +1,48 @@
+$ git archive 5073cce firmware | tar -x   # the base commit's firmware, untouched
+$ cp <new test files> tests/
+$ uv run --locked --extra dev pytest tests/test_battery.py tests/test_power.py tests/test_drivers.py -q
+
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_battery.py ____________________
+ImportError while importing test module '<tmpdir>/firmware/tests/test_battery.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+<python>/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_battery.py:3: in <module>
+    from tests.fakes import FakeBatteryReader, FakeTelemetryBatteryReader
+tests/fakes.py:11: in <module>
+    from visio_recorder.battery import (
+E   ImportError: cannot import name 'BatteryMonitor' from 'visio_recorder.battery' (<tmpdir>/firmware/visio_recorder/battery.py)
+_____________________ ERROR collecting tests/test_power.py _____________________
+ImportError while importing test module '<tmpdir>/firmware/tests/test_power.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+<python>/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_power.py:3: in <module>
+    from tests.fakes import FakeCommandRunner, FakePiJuicePower, RaisingCommandRunner
+tests/fakes.py:11: in <module>
+    from visio_recorder.battery import (
+E   ImportError: cannot import name 'BatteryMonitor' from 'visio_recorder.battery' (<tmpdir>/firmware/visio_recorder/battery.py)
+____________________ ERROR collecting tests/test_drivers.py ____________________
+ImportError while importing test module '<tmpdir>/firmware/tests/test_drivers.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+<python>/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_drivers.py:12: in <module>
+    from tests.fakes import FakePiJuiceStatus, fake_pijuice
+tests/fakes.py:11: in <module>
+    from visio_recorder.battery import (
+E   ImportError: cannot import name 'BatteryMonitor' from 'visio_recorder.battery' (<tmpdir>/firmware/visio_recorder/battery.py)
+=========================== short test summary info ============================
+ERROR tests/test_battery.py
+ERROR tests/test_power.py
+ERROR tests/test_drivers.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!!
+3 errors in 0.15s

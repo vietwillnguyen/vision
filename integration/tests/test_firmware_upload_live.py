@@ -32,6 +32,7 @@ from typing import Any, cast
 import pytest
 from supabase import Client, create_client
 
+from visio_recorder.battery import BatteryState
 from visio_recorder.led import LedPattern
 from visio_recorder.muxer import SubprocessCommandRunner, mux_segment
 from visio_recorder.recording_loop import (
@@ -90,8 +91,20 @@ def owner(live_supabase_env) -> Iterator[_Owner]:
 
 
 class _HealthyBattery:
+    """A gauge-only source, the shape a pendant without a PiJuice presents.
+
+    ``retry_pending_segments`` takes the debounced ``BatteryState`` the main
+    recording loop publishes rather than a reader, because the debounce is
+    stateful and the upload worker must not fold readings of its own into it.
+    ``_healthy_battery_state`` wraps this in one.
+    """
+
     def get_charge_pct(self) -> int:
         return 85
+
+
+def _healthy_battery_state() -> BatteryState:
+    return BatteryState(_HealthyBattery())
 
 
 class _RecordingLed:
@@ -163,7 +176,7 @@ def test_the_in_process_retry_clears_a_segment_that_already_reached_storage(
         queue_dir=queue_dir,
         storage_client=storage,
         led_driver=led,
-        battery_reader=_HealthyBattery(),
+        battery=_healthy_battery_state(),
         device_id=owner.device_id,
         upload_limit=_limit(),
         upload_health=health,

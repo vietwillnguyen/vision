@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
-from visio_recorder.battery import BatteryReader, read_battery_status
+from visio_recorder.battery import BatteryState
 from visio_recorder.led import LedDriver, LedState, apply_led_state
 from visio_recorder.muxer import CommandRunner, mux_segment
 from visio_recorder.upload_limit import (
@@ -26,6 +26,12 @@ UPLOAD_FAILURES_TO_CRITICAL = 3
 RETRY_BASE_SEC = 30.0
 RETRY_MAX_SEC = 480.0
 
+# How long a battery halt waits for the upload queue to drain before powering
+# off. Two minutes at the 1.5 W power budget is about 0.05 Wh out of an 11.1 Wh
+# pack, so the cost is not the energy: it is that a bound has to exist at all,
+# because a dying battery is exactly when an upload is most likely to hang on a
+# weak signal and an unbounded wait ends in a brownout rather than a power-off.
+UPLOAD_DRAIN_TIMEOUT_SEC = 120.0
 # The pipeline's RESTART_GAP_TOLERANCE_SEC: a press this long after a segment
 # ends still flags that segment, so it is how long the segment must wait for
 # its flags before it is sent.
@@ -141,14 +147,34 @@ class UploadHealth:
 
 
 def next_led_state(
-    battery_is_low: bool, is_uploading: bool, upload_critical: bool = False
+    battery_is_low: bool,
+    is_uploading: bool,
+    upload_critical: bool = False,
+    battery_halted: bool = False,
 ) -> LedState:
     """The one LED state a given set of conditions calls for.
 
-    ``upload_critical`` outranks everything: a device losing footage is worth
-    more than reporting a low battery or an upload in flight, and it is also
-    what the battery-halt path already does by applying Critical last.
+    The conditions are not mutually exclusive - a pendant can be low on
+    battery, uploading and halting at once - so this is a priority ladder, and
+    it is the single place that ladder is written down. The pendant spec's LED
+    state machine section owns the target design; its pure resolver replaces
+    this function as the capture region, health conditions and the states the
+    recording stop/start control design adds land.
+
+    ``battery_halted`` is first. A halt is terminal, and the solid red is the
+    pendant's only chance to tell the wearer *why* it is about to go dark;
+    "charge me" is the one actionable message at that moment. It is Halted,
+    not Critical: Critical's flash means "still recording, needs you", while a
+    halt has stopped recording. The halt path applies it last, after the
+    upload worker is joined, so no drained segment's LED restore can paint
+    over it - the invariant this function exists to hold.
+
+    ``upload_critical`` outranks the running states below it for the same
+    reason the halt outranks it: a device losing footage is worth more than
+    reporting a low battery or an upload in flight.
     """
+    if battery_halted:
+        return LedState.HALTED
     if upload_critical:
         return LedState.CRITICAL
     if battery_is_low:
@@ -156,6 +182,22 @@ def next_led_state(
     if is_uploading:
         return LedState.UPLOADING
     return LedState.RECORDING
+
+
+class LoopOutcome(Enum):
+    """Why the recording loop returned, and so what the daemon does next.
+
+    ``RECOVERED`` is the one that is not an ending: external power appeared
+    while a battery halt was draining its queue, so the power-off was
+    cancelled and the loop should be re-entered rather than the process
+    exiting. Without it a pendant plugged in at the wrong moment would power
+    off anyway and wait for the charge wake, which is the "stays down until
+    someone intervenes" behaviour this replaces.
+    """
+
+    STOPPED = "stopped"
+    HALTED = "halted"
+    RECOVERED = "recovered"
 
 
 def wait_out_restart_gap(
@@ -462,7 +504,7 @@ def retry_pending_segments(
     queue_dir: Path,
     storage_client: StorageClient,
     led_driver: LedDriver,
-    battery_reader: BatteryReader,
+    battery: BatteryState,
     device_id: str,
     upload_limit: UploadLimit,
     upload_health: UploadHealth,
@@ -501,7 +543,9 @@ def retry_pending_segments(
     pipeline's late-marker handling is the backstop.
     """
     paths = pending_segments(queue_dir)
-    battery_status = read_battery_status(battery_reader)
+    # Read, never sampled: the main loop owns the debounce, and folding a
+    # worker-thread reading into it would corrupt the moving average.
+    battery_verdict = battery.current()
 
     def drain(show_uploading: Callable[[], None]) -> UploadOutcome:
         def before_first_attempt() -> None:
@@ -517,7 +561,7 @@ def retry_pending_segments(
     return _upload_showing_led(
         upload=drain,
         led_driver=led_driver,
-        battery_is_low=battery_status.is_low,
+        battery_is_low=battery_verdict.is_low,
         upload_health=upload_health,
     )
 
@@ -543,7 +587,7 @@ def on_segment_complete(
     storage_client: StorageClient,
     status_client: StatusClient,
     led_driver: LedDriver,
-    battery_reader: BatteryReader,
+    battery: BatteryState,
     device_id: str,
     segments_uploaded_today: int,
     framerate: int,
@@ -563,7 +607,7 @@ def on_segment_complete(
         storage_client=storage_client,
         status_client=status_client,
         led_driver=led_driver,
-        battery_reader=battery_reader,
+        battery=battery,
         device_id=device_id,
         segments_uploaded_today=segments_uploaded_today,
         disk_stats_reader=disk_stats_reader,
@@ -581,7 +625,7 @@ def upload_segment(
     storage_client: StorageClient,
     status_client: StatusClient,
     led_driver: LedDriver,
-    battery_reader: BatteryReader,
+    battery: BatteryState,
     device_id: str,
     segments_uploaded_today: int,
     disk_stats_reader: DiskStatsReader,
@@ -608,7 +652,8 @@ def upload_segment(
     Critical escalation that means lost video.
     """
     upload_health = UploadHealth() if upload_health is None else upload_health
-    battery_status = read_battery_status(battery_reader)
+    # Read, never sampled: the main loop owns the debounce.
+    battery_verdict = battery.current()
 
     def upload(show_uploading: Callable[[], None]) -> UploadOutcome:
         show_uploading()
@@ -622,7 +667,7 @@ def upload_segment(
     outcome = _upload_showing_led(
         upload=upload,
         led_driver=led_driver,
-        battery_is_low=battery_status.is_low,
+        battery_is_low=battery_verdict.is_low,
         upload_health=upload_health,
     )
     segments_uploaded_today += outcome.uploaded
@@ -630,7 +675,7 @@ def upload_segment(
 
     status = build_device_status(
         device_id=device_id,
-        battery_pct=battery_status.pct,
+        battery_pct=battery_verdict.pct,
         disk_stats_reader=disk_stats_reader,
         data_dir=data_dir,
         queue_dir=queue_dir,

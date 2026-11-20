@@ -29,12 +29,12 @@
      `sha256sum` output, so the whole set can be verified in one pipe into
      `sha256sum -c -`. See docs/architecture-regeneration.md; enforced by
      scripts/hooks/pre-commit. -->
-<!-- source-sha256: 8563d6d1c00deb8fa375d3c1d0a52f0315ee5a4675b0a41e3d507813ed83bbba  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
+<!-- source-sha256: 7da9edc66369b6c05324e81f8682ce1e87f124754fac6d88d90dd991c04ae8cb  docs/superpowers/specs/2026-07-04-visio-pendant-design.md -->
 <!-- source-sha256: 5c69cba05e162e68661ad31f40f2246250609ca6ca6ab41108b8449c7cc5f74e  docs/superpowers/specs/2026-07-20-wifi-reonboard-qr-screen-design.md -->
 <!-- source-sha256: 88f83c8220c765424ac9d01d5ce7a7d0605dfc0fb5042aa9a672c3fc9d0e7e59  docs/superpowers/specs/2026-07-21-visio-device-provisioning-design.md -->
 <!-- source-sha256: 094d493fc847aa8a8ddd523a2500b03cdb51da4f5516bffad3f104401ed75277  docs/superpowers/specs/2026-11-18-visio-recording-control-design.md -->
-<!-- regenerated-at: 2026-11-19 (merged interruptible capture and bounded shutdown into local-first flag markers: the stop drain
-     flushes markers before the cut-short segment without the restart-gap wait, on a 5 s bound) -->
+<!-- regenerated-at: 2026-11-20 (merged local-first flag markers and interruptible capture into the battery halt: the halt drains
+     markers-first on the stop bound, a pending stop caps the drain at 15 s, and no flag blink paints over Halted) -->
 
 <div class="navbar bg-base-100 border-b border-base-content/10 sticky top-0 z-30 px-4 lg:px-8">
   <div class="navbar-start gap-2">
@@ -109,14 +109,14 @@
 flowchart TD
   subgraph HW["Pendant Hardware"]
     direction TB
-    HW1["RPi Zero 2W + Camera Module 3 Wide\nPiJuice pHAT + 3000mAh LiPo"]
+    HW1["RPi Zero 2W\n+ Camera Module 3 Wide\nPiJuice pHAT\n+ 3000mAh LiPo"]
     HW2["rolling 5-min H.264 segments to SD card"]
     HW3["WS2812B LED on SPI0 MOSI (GPIO 10):\nstatus LED resolved from concurrent regions:\ncapture: booting / scanning / setup-needed / stopped / recording / shutting-down / halted\nhealth while recording: critical / low-battery (uploads never shown)"]
   end
   subgraph CLOUD["Cloud Storage + AI Pipeline"]
     direction TB
     C1["Supabase Storage (S3-compatible)"]
-    C2["nightly scoring: Whisper speech,\nFFmpeg motion, Claude Haiku scene"]
+    C2["nightly scoring:\nWhisper speech,\nFFmpeg motion,\nClaude Haiku scene"]
     C3["highlight selection + FFmpeg assembly"]
   end
   subgraph APP["Mobile Companion App"]
@@ -194,24 +194,24 @@ flowchart TD
         <h3 class="font-semibold mb-2">Startup composition</h3>
         <pre class="mermaid">
 flowchart TD
-  A["systemd starts visio-recorder\nEnvironmentFile=/etc/visio-recorder.env"] --> B{"battery below 10%?"}
-  B -- yes --> B1["CRITICAL LED, exit 0"]
+  A["systemd starts\nvisio-recorder\nEnvironmentFile=\n/etc/visio-recorder.env"] --> B{"3 debounced samples:\nunder 10% or\nunder 3300 mV,\nand not externally\npowered?"}
+  B -- yes --> B1["HALTED LED (solid red),\narm wake on charge,\npower off cleanly"]
   B -- no --> C{"session.json exists?"}
-  C -- "no (first boot)" --> D["QR onboarding: WiFi NM keyfile\n+ Supabase auth, up to 60 attempts"]
+  C -- "no (first boot)" --> D["QR onboarding:\nWiFi NM keyfile\n+ Supabase auth,\nup to 60 attempts"]
   D -- "never succeeds" --> D1["exit 1"]
   D -- "succeeds" --> D2["nmcli connection reload\n+ up visio"]
   D2 -- "activation fails" --> D3["CRITICAL LED, exit 1\n(systemd retries)"]
   D2 -- ok --> E
-  C -- yes --> C1["best-effort nmcli reload + up\n(if keyfile exists; never fatal)"]
+  C -- yes --> C1["best-effort nmcli\nreload + up\n(if keyfile exists;\nnever fatal)"]
   C1 --> E["load_or_create_device_id"]
   E --> F{"device_registered marker exists?"}
   F -- no --> G["register_device, then touch marker"]
   F -- yes --> H
-  G --> H["flush_pending queue\n(flag markers before segments)"]
-  H --> R["recover_orphaned_segments\n(mux + queue leftover .h264/.mp4;\nkeep non-empty captures on mux failure)"]
+  G --> H["flush_pending queue\n(flag markers\nbefore segments)"]
+  H --> R["recover_orphaned_\nsegments\n(mux + queue leftover\n.h264/.mp4; keep\nnon-empty captures\non mux failure)"]
   R -- "recovered any" --> H2["flush_pending again"]
   R -- none --> I0
-  H2 --> I0["start flag-upload worker,\nregister GPIO 17 flag-button listener\n(press handler acks on the LedController)"]
+  H2 --> I0["start flag-upload\nworker, register\nGPIO 17 flag-button\nlistener (press handler\nacks on the LedController)"]
   I0 --> I["run_recording_loop"]
         </pre>
       </div>
@@ -220,20 +220,25 @@ flowchart TD
         <pre class="mermaid">
 flowchart TD
   M["main thread"] -- "rpicam-vid -s per 1-min segment,\ncancellable mid-capture" --> Q["queue.Queue"]
-  Q -- "get(timeout=until deadline)" --> W["upload worker thread\n(sole owner of upload state)"]
-  W -- "after the 3 s restart gap,\nflush pending markers first,\nwait up to 30 s\n(stopping: no gap wait, 5 s)" --> FW["flag-upload worker thread\n(sole owner of every marker upload)"]
+  Q -- "get(timeout=until deadline)" --> W["upload worker thread\n(sole owner of\nupload state)"]
+  W -- "after the 3 s restart gap,\nflush pending markers first,\nwait up to 30 s\n(stopping or halting:\nno gap wait, 5 s)" --> FW["flag-upload worker thread\n(sole owner of\nevery marker upload)"]
   FW --> S["Supabase Storage"]
   W -- "mux + upload" --> S
-  W -- "retry deadline passed,\nnew segments or not;\nnever while stopping" --> R["retry everything still queued\n(30 s doubling to 480 s)"]
+  W -- "retry deadline passed,\nnew segments or not;\nnever while stopping" --> R["retry everything\nstill queued\n(30 s doubling\nto 480 s)"]
   R --> S
-  W --> H["UploadHealth\n(consecutive-failure counter)"]
-  H -- "3 in a row: latched" --> CRIT["CRITICAL LED held through\nevery following segment's upload"]
+  W --> H["UploadHealth\n(consecutive-failure\ncounter)"]
+  H -- "3 in a row: latched" --> CRIT["CRITICAL LED held\nthrough every\nfollowing segment's\nupload"]
   H -- "any success" --> RESET["reset counter, LED back to green/yellow"]
-  M -- "SIGTERM / SIGINT" --> CUT["cancel the in-flight capture:\nSIGUSR2, then SIGTERM, then SIGKILL;\nthe short segment is queued like any other"]
-  CUT --> Q
-  M -- "battery halt or stop signal" --> DRAIN["drain queue, join() worker"]
-  DRAIN --> OFF["upsert recording_active=false\n(any exit path; never raises)"]
-  OFF --> HALT["apply CRITICAL after worker fully joins (halt only)"]
+  M -- "SIGTERM / SIGINT" --> CUT["cancel the in-flight capture:\nSIGUSR2, then SIGTERM, then SIGKILL;\nthe short segment is queued\nby the main thread, a stop\nnot a halt"]
+  CUT --> DRAIN
+  M -- "stop signal" --> DRAIN["drain queue, join() worker"]
+  M -- "BatteryMonitor\nreturns a confirmed\nhalt (charge\nor voltage)" --> DRAINH["drain queue,\njoin(120 s) - bounded\non a dying battery,\n15 s once a stop\nis pending"]
+  DRAIN --> OFF["upsert\nrecording_active=false\nbefore and after the drain\n(any exit path;\nnever raises)"]
+  DRAINH --> OFF
+  OFF --> HALT["apply HALTED after the join (halt only);\nno flag blink over it"]
+  HALT --> RECHK{"external power\nappeared during\nthe drain?"}
+  RECHK -- yes --> RESUME["cancel the halt,\nre-enter the loop"]
+  RECHK -- no --> PWR["arm wake on\ncharge (25%),\nSetSystemPowerSwitch(0),\nSetPowerOff(60),\nsystemctl poweroff"]
         </pre>
       </div>
     </div>
@@ -252,6 +257,7 @@ flowchart TD
           </tbody>
         </table>
       </div>
+      <p class="text-sm text-base-content/80 mt-2">As built (PR #101): today's <span class="font-mono text-xs bg-base-200 rounded px-1">next_led_state</span> resolves a confirmed battery halt to <span class="font-mono text-xs bg-base-200 rounded px-1">LedState.HALTED</span>, red and solid, ahead of every other state, and the halt path applies it after the worker join so nothing can paint over it. Looks and priority belong to the LED state machine card below (the Halted, battery row).</p>
       <p class="text-sm text-base-content/80 mt-2"><span class="font-mono text-xs bg-base-200 rounded px-1">Ws2812LedDriver</span> writes one SPI transfer per colour to <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/spidev0.0</span> through py-spidev (<span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>: no root, no <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span>, nothing compiled on the device). Each WS2812B bit is one byte at a 6.4 MHz request - <span class="font-mono text-xs bg-base-200 rounded px-1">0xC0</span> for a 0, <span class="font-mono text-xs bg-base-200 rounded px-1">0xF0</span> for a 1 - sent green, red, blue, MSB first, between two 240-byte zero resets (300 us latch). Both Zero 2W core clocks divide to a real 6.25 MHz, giving 320/960 ns and 640/640 ns pulses, at least 40 ns inside the WS2812B-V5 datasheet windows (legacy pre-V5 parts fall 10-40 ns outside theirs, a bench check). Pulsing and flashing render solid on the single pixel. <span class="font-mono text-xs bg-base-200 rounded px-1">LedController</span> wraps the driver as the pixel's single owner (built, PR #100), and the Flag saved overlay is built too: a 150 ms magenta blink played on the controller's own thread, then restored to the resolved state. Looks and priority belong to the LED state machine card below. The device needs <span class="font-mono text-xs bg-base-200 rounded px-1">dtparam=spi=on</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> (the kernel caches the core clock at probe, so a scaling core clock would skew the SPI rate) and the daemon user in the <span class="font-mono text-xs bg-base-200 rounded px-1">spi</span> group.</p>
     </div>
 
@@ -388,10 +394,33 @@ stateDiagram-v2
         <li>Flag markers travel with their footage. <span class="font-mono text-xs bg-base-200 rounded px-1">flush_pending</span> drains markers before segments (<span class="font-mono text-xs bg-base-200 rounded px-1">markers_before_segments</span>), and while the daemon runs the upload worker asks the flag-upload worker to flush its pending markers - before the segment it just recorded and before each retry round - and waits, the flush itself bounded at 30 s. Before that flush the worker waits until the segment's end plus the 3 s restart gap, since a press in that gap flags the segment that just ended and its marker would otherwise be uploaded after that segment; the gap wait is capped at the gap, so it never holds an upload longer than 3 s, and a retry round waits on the newest segment the run has queued. Once the loop is stopping (a stop, shutdown or battery halt) the gap is not waited and the flush is bounded at 5 s (<span class="font-mono text-xs bg-base-200 rounded px-1">STOP_MARKER_FLUSH_TIMEOUT_SEC</span>): markers on the card still go up ahead of every segment the drain uploads, the cut-short last segment included, without a 30 s flush spending systemd's <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span>; flags are only taken while recording, and a press in those last seconds goes up on the flag-upload worker's retries or the next boot's flush. A capture that wrote no footage is discarded before the worker sees it, so it costs no flush and does not move the end time a retry round waits on. Markers keep exactly one uploader, so the two threads never race one, and if the flush cannot finish the segment is still uploaded: footage outranks marker ordering, and the pipeline's late-marker handling is the backstop.</li>
         <li>Device registration retries independently of device-ID persistence (a separate <span class="font-mono text-xs bg-base-200 rounded px-1">device_registered</span> marker, not <span class="font-mono text-xs bg-base-200 rounded px-1">device.json</span> existence) — closes a retry gap found by <code>no-mistakes</code>' review step.</li>
         <li><span class="font-mono text-xs bg-base-200 rounded px-1">device_status.recording_active</span> is upserted true before the first capture and false after the worker drain on every exit path (stop, halt, capture failure); both pushes log and swallow errors.</li>
+        <li>The stop path's <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout; the halt path's is bounded by <span class="font-mono text-xs bg-base-200 rounded px-1">UPLOAD_DRAIN_TIMEOUT_SEC</span> (120 s). On a halt the HALTED LED is applied after the join, so it is the final state and never raced by a slow in-flight upload. The bound exists because a dying battery is exactly when an upload is most likely to hang on a weak signal, and waiting forever for it ends in a brownout rather than a power-off. A stop pending or arriving during the halt drain caps the rest of it at <span class="font-mono text-xs bg-base-200 rounded px-1">STOP_HALT_DRAIN_TIMEOUT_SEC</span> (15 s), so the power-off still lands inside <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span>; a stop that cuts a capture short ends as a stop, and the next boot's battery check confirms the halt.</li>
         <li>Shutdown is bounded by the unit, not by the segment length: <span class="font-mono text-xs bg-base-200 rounded px-1">KillMode=mixed</span> so systemd signals only the daemon (the default control-group mode would signal <span class="font-mono text-xs bg-base-200 rounded px-1">rpicam-vid</span> too and lose the segment the daemon is finalising), and <span class="font-mono text-xs bg-base-200 rounded px-1">TimeoutStopSec=30</span> in place of systemd's 90 s default, which the old segment-long stop used to run into.</li>
-        <li>Halt-path <span class="font-mono text-xs bg-base-200 rounded px-1">worker_thread.join()</span> has no timeout — the CRITICAL LED is guaranteed to be the final state, never raced by a slow in-flight upload.</li>
         <li>The upload-failure CRITICAL LED is <em>latched</em>, not momentary: both of <span class="font-mono text-xs bg-base-200 rounded px-1">on_segment_complete</span>'s LED states are derived from the shared <span class="font-mono text-xs bg-base-200 rounded px-1">UploadHealth</span> counter, and <span class="font-mono text-xs bg-base-200 rounded px-1">upload_critical</span> outranks low battery and uploading in <span class="font-mono text-xs bg-base-200 rounded px-1">next_led_state</span>. Red therefore survives the following segments' upload blue and recording green until the success that resets the counter. Previously the worker applied red only after those two colours had already been written, so a sustained outage looked normal for most of every segment.</li>
+        <li>A battery halt is a shutdown sequence, not an exit: no decision is taken on one gauge sample (a moving average plus consecutive confirmations), a voltage floor sits beside the percentage because the gauge lags under camera and WiFi load, nothing halts while externally powered, and a confirmed halt drains the queue under a bound, shows Halted solid red, then arms wake-on-charge and powers off cleanly. The old behaviour flashed red and exited 0, leaving an idle Pi to discharge to zero and brown out mid-write - the single most likely way this device corrupts an SD card. Recovery needs no human either way: charge arriving during the drain cancels the halt and re-enters the loop with the upload-failure latch and the day's upload count intact, a failed re-read never blocks the power-off, a gauge that stays unreadable for three readings halts rather than recording blind, and charge arriving after it is caught by the HAT's wake. See the battery and power management card above.</li>
       </ul>
+    </div>
+
+    <div class="card bg-base-100 shadow p-4 space-y-2">
+      <h3 class="font-semibold text-sm">Battery and power management</h3>
+      <p class="text-xs text-base-content/70">A fuel gauge reports state of charge, not energy, and the pendant's own load - a 4 Mbps hardware H.264 encode plus a WiFi upload burst - makes both the reported percentage and the cell's terminal voltage dip and recover. So no decision is taken on one sample, and a confirmed halt ends in a clean power-off rather than an exit that leaves an idle Pi discharging until it browns out mid-write.</p>
+      <div class="overflow-x-auto rounded-box border border-base-content/10">
+        <table class="table table-xs">
+          <thead><tr><th>Threshold</th><th>Value</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td class="font-mono">BATTERY_WARN_PCT</td><td>20</td><td>sets the low-battery latch (yellow LED)</td></tr>
+            <tr><td class="font-mono">BATTERY_WARN_CLEAR_PCT</td><td>25</td><td>clears it - a 20-25 % hysteresis band, so a battery hovering at the line does not flicker the LED all afternoon</td></tr>
+            <tr><td class="font-mono">BATTERY_HALT_PCT</td><td>10</td><td>halts after <span class="font-mono">HALT_CONFIRMATIONS</span> (3) consecutive smoothed samples below it; the same count of consecutive <em>failed</em> readings halts too, with reason <span class="font-mono">unreadable</span>, while a single failed reading keeps the last verdict; at boot the first reading is retried that many times and an unreadable gauge refuses the boot and powers off</td></tr>
+            <tr><td class="font-mono">BATTERY_FLOOR_MV</td><td>3300</td><td>halts after <span class="font-mono">FLOOR_CONFIRMATIONS</span> (2) consecutive <em>raw</em> samples below it - the floor exists because the percentage lags under load, so smoothing it would reintroduce the lag it covers</td></tr>
+            <tr><td class="font-mono">PCT_AVERAGE_WINDOW</td><td>5</td><td>samples in the percentage moving average; a shorter run averages what has arrived rather than running unguarded</td></tr>
+            <tr><td class="font-mono">WAKE_ON_CHARGE_PCT</td><td>25</td><td><span class="font-mono text-xs bg-base-200 rounded px-1">SetWakeUpOnCharge</span> level, armed before the power-off so the HAT re-powers the Pi on its own</td></tr>
+            <tr><td class="font-mono">UPLOAD_DRAIN_TIMEOUT_SEC</td><td>120</td><td>how long a halt waits for the queue to drain before powering off</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-base-content/70">10 % and 3300 mV are PiJuice's own shipped defaults for the same two jobs (<span class="font-mono text-xs bg-base-200 rounded px-1">min_charge.threshold</span> and <span class="font-mono text-xs bg-base-200 rounded px-1">min_bat_voltage.threshold</span>), which keeps the firmware's software halt and the HAT's independent system-task backstop from disagreeing about when the battery is empty. <strong>No halt is ever returned while externally powered</strong> (<span class="font-mono text-xs bg-base-200 rounded px-1">powerInput</span> or <span class="font-mono text-xs bg-base-200 rounded px-1">powerInput5vIo</span> reading <span class="font-mono text-xs bg-base-200 rounded px-1">PRESENT</span>, or the battery reading <span class="font-mono text-xs bg-base-200 rounded px-1">NOT_PRESENT</span>): both confirmation counts reset, which is what PiJuice's own <span class="font-mono text-xs bg-base-200 rounded px-1">pijuice_sys.py</span> does too. The decision lives in one pure object, <span class="font-mono text-xs bg-base-200 rounded px-1">BatteryMonitor</span>, which reads no hardware and keeps no clock, so noisy, sagging, charging and recovering traces are ordinary test inputs.</p>
+      <p class="text-xs text-base-content/70">The battery is sampled on the main loop thread at the cadence it already was - once per segment - and no monitor thread is added, because a second thread would need a share of the LED and the single-owner invariant is worth more than a faster poll. The honest consequence is that the software voltage floor reacts in <span class="font-mono text-xs bg-base-200 rounded px-1">FLOOR_CONFIRMATIONS</span> x the segment length, about two minutes. The margin that covers is the PiJuice's own system task (<span class="font-mono text-xs bg-base-200 rounded px-1">min_charge</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">min_bat_voltage</span>, <span class="font-mono text-xs bg-base-200 rounded px-1">wakeup_on_charge</span>), which halts the Pi whether or not the daemon is healthy; arming it needs the HAT, so it is a bench step rather than firmware. <span class="font-mono text-xs bg-base-200 rounded px-1">systemctl poweroff</span> is privileged and the daemon is not root, so a polkit rule for <span class="font-mono text-xs bg-base-200 rounded px-1">org.freedesktop.login1.power-off</span> ships beside the systemd unit. A confirmed halt always powers off; there is no switch to suppress it.</p>
+      <p class="text-xs text-base-content/70"><span class="font-mono text-xs bg-base-200 rounded px-1">BatteryReader</span> stays a one-method protocol (<span class="font-mono text-xs bg-base-200 rounded px-1">get_charge_pct</span>); voltage and external-power state are a second, richer <span class="font-mono text-xs bg-base-200 rounded px-1">BatteryTelemetryReader</span>, and a percentage-only source is read for percentage alone with no voltage to compare against a floor. That is what keeps <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_BATTERY_SOURCE=none</span> (the USB power bank, a fixed 100 %) provably unchanged by all of the above.</p>
     </div>
 
     <div class="card bg-base-100 shadow p-4 space-y-2">
@@ -519,7 +548,7 @@ flowchart TD
       <span><strong>LED SPI rewire: provisioning follow-ups and bench checks open (2026-11).</strong> The firmware now drives the LED over SPI0 MOSI, freeing GPIO 18 for I2S audio and removing the <span class="font-mono text-xs bg-base-200 rounded px-1">/dev/mem</span> need that kept the daemon on root. Draft PR #26 still installs and checks <span class="font-mono text-xs bg-base-200 rounded px-1">rpi_ws281x</span>; it needs <span class="font-mono text-xs bg-base-200 rounded px-1">python3-spidev</span>, SPI and <span class="font-mono text-xs bg-base-200 rounded px-1">core_freq_fixed=1</span> enabled, and a <span class="font-mono text-xs bg-base-200 rounded px-1">spidev</span> preflight check. Dropping root additionally needs onboarding to create the WiFi profile with <span class="font-mono text-xs bg-base-200 rounded px-1">nmcli connection add</span> instead of writing a keyfile (NetworkManager rejects non-root-owned keyfiles, and its D-Bus policy denies <span class="font-mono text-xs bg-base-200 rounded px-1">ReloadConnections</span> to non-root callers), a <span class="font-mono text-xs bg-base-200 rounded px-1">visio</span> user in <span class="font-mono text-xs bg-base-200 rounded px-1">video gpio i2c spi</span> and a polkit rule for <span class="font-mono text-xs bg-base-200 rounded px-1">settings.modify.system</span> + <span class="font-mono text-xs bg-base-200 rounded px-1">network-control</span>. On the bench: move the data wire to header pin 19, check each colour, confirm a 3.3 V data line drives the WS2812B reliably, and confirm the fitted part is a WS2812B-V5. Full list: <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md#led-spi-rewire-follow-ups-for-pr-26">provisioning spec, LED SPI rewire follow-ups</a>.</span>
     </div>
     <div class="alert alert-warning alert-soft" role="alert">
-      <span><strong>PiJuice deferred to a USB power bank (2026-07-21).</strong> The spec's PiJuice Zero pHAT is currently blocked on availability; bring-up and integration testing run on a generic USB power bank into the Pi's power input instead — no HAT, no I2C battery telemetry. Firmware handles this via a new <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_BATTERY_SOURCE</span> config (<span class="font-mono text-xs bg-base-200 rounded px-1">pijuice</span> default, or <span class="font-mono text-xs bg-base-200 rounded px-1">none</span> → a new <span class="font-mono text-xs bg-base-200 rounded px-1">UnmeteredPowerReader</span> that reports a fixed 100% so the halt/low-battery thresholds never false-trigger while mains-equivalent powered), and the preflight check treats missing PiJuice hardware as a warning, not a startup-blocking failure. See <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">the provisioning &amp; preflight spec</a>. <span class="font-mono text-xs bg-base-200 rounded px-1">BatteryReader</span> is a <span class="font-mono text-xs bg-base-200 rounded px-1">Protocol</span>, so a real replacement (PiSugar 2/3, a generic I2C-fuel-gauge UPS HAT, or a hand-built TP4056/IP5306 + MAX17048 combo) is a contained future swap, not a firmware rewrite.</span>
+      <span><strong>PiJuice deferred to a USB power bank (2026-07-21).</strong> The spec's PiJuice Zero pHAT is currently blocked on availability; bring-up and integration testing run on a generic USB power bank into the Pi's power input instead — no HAT, no I2C battery telemetry. Firmware handles this via a new <span class="font-mono text-xs bg-base-200 rounded px-1">VISIO_BATTERY_SOURCE</span> config (<span class="font-mono text-xs bg-base-200 rounded px-1">pijuice</span> default, or <span class="font-mono text-xs bg-base-200 rounded px-1">none</span> → a new <span class="font-mono text-xs bg-base-200 rounded px-1">UnmeteredPowerReader</span> that reports a fixed 100% so the halt/low-battery thresholds never false-trigger while mains-equivalent powered), and the preflight check treats missing PiJuice hardware as a warning, not a startup-blocking failure. See <a class="link link-primary" href="superpowers/specs/2026-07-21-visio-device-provisioning-design.md">the provisioning &amp; preflight spec</a>. <span class="font-mono text-xs bg-base-200 rounded px-1">BatteryReader</span> is a <span class="font-mono text-xs bg-base-200 rounded px-1">Protocol</span>, so a real replacement (PiSugar 2/3, a generic I2C-fuel-gauge UPS HAT, or a hand-built TP4056/IP5306 + MAX17048 combo) is a contained future swap, not a firmware rewrite. It stays a one-method protocol for exactly that reason: the battery-hardening work put voltage and external-power telemetry in a <em>second</em> protocol rather than widening this one, so a source that can only report a percentage - this power bank included - needs no change and reaches none of the new halt paths.</span>
     </div>
   </section>
 

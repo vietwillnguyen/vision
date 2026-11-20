@@ -39,6 +39,12 @@ def test_critical_state_is_flashing_red():
     assert driver.calls == [RED]
 
 
+def test_halted_state_is_solid_red():
+    driver = FakeLedDriver()
+    apply_led_state(driver, LedState.HALTED)
+    assert driver.calls == [((255, 0, 0), LedPattern.SOLID)]
+
+
 def test_flag_ack_is_solid_magenta():
     # Magenta is the last unused primary pair and the complement of the green
     # the wearer sees most of the time, so the blink reads against its usual
@@ -166,3 +172,17 @@ def test_close_is_idempotent():
     controller = LedController(FakeLedDriver(), sleep=lambda _: None)
     controller.close()
     controller.close()
+
+
+def test_ack_while_halted_writes_nothing():
+    # Halted is terminal: the pendant is about to power off and nothing is
+    # recording, so there is nothing for a flag to acknowledge, and the red
+    # must stay the last frame on the wire.
+    driver = FakeLedDriver()
+    controller = LedController(driver, sleep=lambda _: None)
+    apply_led_state(controller, LedState.HALTED)
+
+    controller.ack_flag()
+    controller.close()
+
+    assert driver.calls == [((255, 0, 0), LedPattern.SOLID)]
