@@ -52,4 +52,27 @@ describe('TimelineScrubber', () => {
     );
     expect(screen.getByTestId('thumb-5')).toBeTruthy();
   });
+
+  it('opens a clip on a plain press, which is all web offers', async () => {
+    const onSlotPress = jest.fn();
+    await render(
+      <TimelineScrubber slots={slots} onSlotPress={onSlotPress} onSlotLongPress={jest.fn()} />,
+    );
+    await fireEvent.press(screen.getByTestId('slot-5'));
+    expect(onSlotPress).toHaveBeenCalledWith(slots[1]);
+  });
+
+  it('labels each clip with its start time and each hour on the strip', async () => {
+    await render(
+      <TimelineScrubber
+        slots={[
+          { startMinute: 540, segment: null, isFlagged: false },
+          { startMinute: 545, segment: { ...seg, manuallyFlagged: false }, isFlagged: false },
+        ]}
+        onSlotLongPress={jest.fn()}
+      />,
+    );
+    expect(screen.getByText('09:00')).toBeTruthy();
+    expect(screen.getByLabelText('Clip at 09:05')).toBeTruthy();
+  });
 });

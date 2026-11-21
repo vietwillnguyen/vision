@@ -26,4 +26,33 @@ describe('AuthContainer', () => {
       expect(screen.getByTestId('auth-error')).toHaveTextContent('Invalid login credentials'),
     );
   });
+
+  it('hides the demo entry when the build carries no demo config', async () => {
+    await render(<AuthContainer signIn={jest.fn()} demo={null} />);
+    expect(screen.queryByTestId('view-demo-button')).toBeNull();
+  });
+
+  it('signs in as the demo account from public config without touching the form', async () => {
+    const signIn = jest.fn().mockResolvedValue(null);
+    await render(
+      <AuthContainer signIn={signIn} demo={{ email: 'demo@example.com', password: 'pw' }} />,
+    );
+    expect(screen.getByText(/read-only/i)).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('view-demo-button'));
+    expect(signIn).toHaveBeenCalledWith('demo@example.com', 'pw');
+    expect(screen.queryByTestId('email-error')).toBeNull();
+  });
+
+  it('explains a demo that cannot be opened', async () => {
+    const signIn = jest.fn().mockResolvedValue('Invalid login credentials');
+    await render(
+      <AuthContainer signIn={signIn} demo={{ email: 'demo@example.com', password: 'pw' }} />,
+    );
+    await fireEvent.press(screen.getByTestId('view-demo-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('auth-error')).toHaveTextContent(
+        'The demo is unavailable right now (Invalid login credentials).',
+      ),
+    );
+  });
 });

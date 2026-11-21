@@ -9,9 +9,26 @@ import type { VisionClient } from '../lib/supabase';
 type DeviceContainerProps = NativeStackScreenProps<DeviceStackParamList, 'DeviceHome'> & {
   client: VisionClient;
   deviceId: string;
+  deviceName?: string | null;
+  readOnly?: boolean;
 };
 
-export function DeviceContainer({ client, deviceId, navigation }: DeviceContainerProps) {
+export function DeviceContainer({
+  client,
+  deviceId,
+  deviceName = null,
+  readOnly = false,
+  navigation,
+}: DeviceContainerProps) {
   const state = useDeviceStatus(client, deviceId);
-  return <DeviceScreen state={state} onReonboardPress={() => navigation.navigate('Reonboard')} />;
+  return (
+    <DeviceScreen
+      state={state}
+      deviceName={deviceName}
+      readOnly={readOnly}
+      onReonboardPress={() => {
+        if (!readOnly) navigation.navigate('Reonboard');
+      }}
+    />
+  );
 }

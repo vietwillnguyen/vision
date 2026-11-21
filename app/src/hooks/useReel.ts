@@ -113,3 +113,55 @@ function mapReelRow(row: ReelRow): Reel {
     style: parseReelStyle(row.style),
   };
 }
+
+export type LatestReelDateState =
+  { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; date: string | null };
+
+/**
+ * The date of the device's most recent reel, or null when it has none.
+ *
+ * The read-only demo browses that day instead of today, so a demo seeded once
+ * keeps showing its reel and footage however long ago it was seeded.
+ */
+export function useLatestReelDate(
+  client: VisionClient,
+  deviceId: string,
+  enabled: boolean,
+): LatestReelDateState {
+  const [state, setState] = useState<LatestReelDateState>({ kind: 'loading' });
+
+  useResetOnInputChange([client, deviceId, enabled], () => setState({ kind: 'loading' }));
+
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    let isMounted = true;
+
+    client
+      .from('reels')
+      .select('date')
+      .eq('device_id', deviceId)
+      .order('date', { ascending: false })
+      .limit(1)
+      .then(
+        ({ data, error }) => {
+          if (!isMounted) return;
+          if (error || !data) {
+            setState({ kind: 'error', message: error?.message ?? 'reel fetch failed' });
+          } else {
+            setState({ kind: 'ready', date: data.length > 0 ? data[0].date : null });
+          }
+        },
+        (error: unknown) => {
+          if (isMounted) setState({ kind: 'error', message: String(error) });
+        },
+      );
+
+    return () => {
+      isMounted = false;
+    };
+  }, [client, deviceId, enabled]);
+
+  return state;
+}

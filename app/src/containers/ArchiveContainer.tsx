@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { Button, Share, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ReelPlayer } from '../components/ReelPlayer';
 import { useReel, useReelsInRange } from '../hooks/useReel';
-import { useSignedUrl } from '../hooks/useSignedUrl';
+import { useSignedUrlState } from '../hooks/useSignedUrl';
+import { canShare, shareUrl } from '../lib/share';
 import { buildHeatmapCells } from '../logic/heatmap';
 import { utcDateString, utcRangeEndingAt } from '../logic/dates';
+import { formatDayLabel } from '../logic/readOnly';
 import { buildReelSignedUrlRequest } from '../logic/segmentExport';
 import { ArchiveScreen } from '../screens/ArchiveScreen';
 import { colors, spacing } from '../theme';
@@ -30,7 +32,7 @@ export function ArchiveContainer({
   const reelsState = useReelsInRange(client, deviceId, utcDateString(start), utcDateString(end));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const selectedReel = useReel(client, deviceId, selectedDate);
-  const signedUrl = useSignedUrl(
+  const video = useSignedUrlState(
     client,
     selectedReel.kind === 'ready' && selectedReel.reel.s3Key
       ? buildReelSignedUrlRequest(selectedReel.reel.s3Key)
@@ -55,34 +57,39 @@ export function ArchiveContainer({
   }
 
   if (selectedDate) {
+    const videoUri = video.kind === 'ready' ? video.url : null;
+    const videoError =
+      selectedReel.kind === 'none'
+        ? 'No reel was made for this day.'
+        : selectedReel.kind === 'ready' && !selectedReel.reel.s3Key
+          ? 'This reel has no video file yet.'
+          : video.kind === 'error'
+            ? `Couldn't load the reel video (${video.message}).`
+            : null;
     return (
       <View style={styles.playerWrap}>
+        <Pressable
+          testID="back-to-archive"
+          accessibilityRole="button"
+          accessibilityLabel="Back to archive"
+          onPress={() => setSelectedDate(null)}
+          hitSlop={8}
+          style={styles.back}
+        >
+          <Text style={styles.backText}>‹ Archive</Text>
+        </Pressable>
         {selectedReel.kind === 'error' ? (
           <Text style={styles.error} accessibilityLabel="Reel error">
             {selectedReel.message}
           </Text>
         ) : (
-          <>
-            <ReelPlayer
-              videoUri={signedUrl}
-              title={selectedDate}
-              onShare={() => {
-                if (signedUrl) Share.share({ url: signedUrl, message: signedUrl });
-              }}
-            />
-            {selectedReel.kind === 'none' ? (
-              <Text style={styles.muted}>No reel for this day.</Text>
-            ) : null}
-          </>
-        )}
-        <View style={styles.backWrap}>
-          <Button
-            title="Back to archive"
-            color={colors.textMuted}
-            accessibilityLabel="Back to archive"
-            onPress={() => setSelectedDate(null)}
+          <ReelPlayer
+            videoUri={videoUri}
+            videoError={videoError}
+            title={formatDayLabel(selectedDate)}
+            onShare={canShare() ? () => videoUri && shareUrl(videoUri) : undefined}
           />
-        </View>
+        )}
       </View>
     );
   }
@@ -99,7 +106,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   playerWrap: { flex: 1, backgroundColor: colors.background },
-  backWrap: { padding: spacing.md },
+  back: { alignSelf: 'flex-start', paddingHorizontal: spacing.md, paddingTop: spacing.md },
+  backText: { color: colors.accent, fontSize: 16 },
   muted: { color: colors.textMuted, fontSize: 16, textAlign: 'center' },
   error: { color: colors.danger, fontSize: 16 },
 });

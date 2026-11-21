@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
 import { DeviceScreen } from '../../src/screens/DeviceScreen';
@@ -51,5 +51,21 @@ describe('DeviceScreen', () => {
   it('labels the re-onboard button for accessibility', async () => {
     await render(<DeviceScreen state={READY} onReonboardPress={jest.fn()} />);
     expect(screen.getByLabelText('Re-onboard device WiFi')).toBeTruthy();
+  });
+
+  it('disables Wi-Fi setup for a read-only account and explains why', async () => {
+    const onReonboardPress = jest.fn();
+    await render(
+      <DeviceScreen
+        state={READY}
+        onReonboardPress={onReonboardPress}
+        deviceName="Visio bench prototype"
+        readOnly
+      />,
+    );
+    expect(screen.getByText('Visio bench prototype')).toBeTruthy();
+    expect(screen.getByTestId('reonboard-disabled-note')).toHaveTextContent(/read-only demo/);
+    await fireEvent.press(screen.getByTestId('reonboard-button'));
+    expect(onReonboardPress).not.toHaveBeenCalled();
   });
 });

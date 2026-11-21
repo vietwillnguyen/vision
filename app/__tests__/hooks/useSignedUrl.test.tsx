@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
 
-import { useSignedUrl } from '../../src/hooks/useSignedUrl';
+import { useSignedUrl, useSignedUrlState } from '../../src/hooks/useSignedUrl';
 import type { VisionClient } from '../../src/lib/supabase';
 
 function fakeStorageClient(signedUrl: string | null) {
@@ -34,5 +34,22 @@ describe('useSignedUrl', () => {
     const { client } = fakeStorageClient('https://signed/url.mp4');
     const { result } = await renderHook(() => useSignedUrl(client, null));
     expect(result.current).toBeNull();
+  });
+});
+
+describe('useSignedUrlState', () => {
+  it('reports a signing failure instead of staying pending', async () => {
+    const { client } = fakeStorageClient(null);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const request = { bucket: 'reels' as const, path: 'dev-1/r.mp4', expiresInSec: 3600 };
+    const { result } = await renderHook(() => useSignedUrlState(client, request));
+    await waitFor(() => expect(result.current).toEqual({ kind: 'error', message: 'not found' }));
+    warn.mockRestore();
+  });
+
+  it('is idle without a request', async () => {
+    const { client } = fakeStorageClient('https://signed/url.mp4');
+    const { result } = await renderHook(() => useSignedUrlState(client, null));
+    expect(result.current).toEqual({ kind: 'idle' });
   });
 });

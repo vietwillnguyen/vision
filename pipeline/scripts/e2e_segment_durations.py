@@ -44,8 +44,9 @@ from typing import Any, cast
 from supabase import create_client
 
 from pipeline.adapters.ffmpeg_media import FfmpegMediaProbe, SubprocessRunner
-from pipeline.adapters.supabase_store import SupabaseStore
-from pipeline.orchestrator import DeviceRecord, OrchestratorDeps, run_nightly
+from pipeline.demo.footage import mux_command
+from pipeline.demo.seed import OneDeviceStore, RecordingPush
+from pipeline.orchestrator import OrchestratorDeps, run_nightly
 from pipeline.scoring.audio import TranscriptionResult
 
 DAY = date(2026, 7, 14)
@@ -90,13 +91,9 @@ def make_segment(
             "-f", "h264", str(h264),
         ]
     )  # fmt: skip
-    # Identical to firmware/visio_recorder/muxer.py:mux_segment.
-    _run(
-        [
-            "ffmpeg", "-y", "-framerate", str(FRAMERATE),
-            "-i", str(h264), "-c", "copy", str(mp4),
-        ]
-    )  # fmt: skip
+    # Identical to firmware/visio_recorder/muxer.py:mux_segment; the integration
+    # suite's test_demo_firmware_contract.py holds the two equal.
+    _run(mux_command(h264, FRAMERATE))
     h264.unlink()
     return mp4
 
@@ -148,26 +145,6 @@ class StubVision:
         stem = frame_paths[0].parent.name.removesuffix("_frames") if frame_paths else ""
         location = next((s[3] for s in SEGMENTS if s[0] == stem), "indoor")
         return json.dumps({"score": 6, "location": location, "people": False})
-
-
-class RecordingPush:
-    def __init__(self) -> None:
-        self.sent: list[tuple[str, str, str]] = []
-
-    def send(self, to_token: str, title: str, body: str) -> None:
-        self.sent.append((to_token, title, body))
-
-
-class OneDeviceStore(SupabaseStore):
-    """Restricts the run to the harness device, so leftover rows from other
-    local runs are not processed alongside it."""
-
-    def __init__(self, client: Any, device_id: str) -> None:
-        super().__init__(client)
-        self._device_id = device_id
-
-    def list_devices(self) -> list[DeviceRecord]:
-        return [d for d in super().list_devices() if d.device_id == self._device_id]
 
 
 def main() -> int:

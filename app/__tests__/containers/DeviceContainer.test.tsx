@@ -37,7 +37,8 @@ it('wires useDeviceStatus into DeviceScreen', async () => {
     />,
   );
   await waitFor(() => expect(screen.getByText('Battery: 55%')).toBeTruthy());
-  expect(screen.getByText('Paused')).toBeTruthy();
+  // The PRD's word for not recording (J14); "Paused" suggested a resume button.
+  expect(screen.getByText('Stopped')).toBeTruthy();
 });
 
 it('navigates to Reonboard when the re-onboard button is pressed', async () => {

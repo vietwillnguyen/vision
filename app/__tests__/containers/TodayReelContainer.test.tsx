@@ -61,7 +61,7 @@ describe('TodayReelContainer', () => {
     await waitFor(() => expect(screen.getByText("Today's reel isn't ready yet.")).toBeTruthy());
   });
 
-  it('renders placeholder when reel has empty s3_key', async () => {
+  it('says the reel has no video when its row has an empty s3_key', async () => {
     const rowWithEmptyKey = { ...REEL_ROW, s3_key: '' };
     await render(
       <TodayReelContainer
@@ -70,7 +70,12 @@ describe('TodayReelContainer', () => {
         now={() => new Date('2026-07-18T15:00:00Z')}
       />,
     );
-    await waitFor(() => expect(screen.getByText('Preparing playback...')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByLabelText('Reel video error')).toHaveTextContent(
+        'This reel has no video file yet.',
+      ),
+    );
+    expect(screen.queryByText('Preparing playback...')).toBeNull();
     expect(screen.queryByTestId('video-view')).toBeNull();
   });
 });

@@ -1,4 +1,8 @@
-import { buildTimelineSlots } from '../../src/logic/timeline';
+import {
+  buildTimelineSlots,
+  formatMinuteOfDay,
+  trimToRecordedHours,
+} from '../../src/logic/timeline';
 import type { Segment } from '../../src/types';
 
 function segment(overrides: Partial<Segment>): Segment {
@@ -55,5 +59,33 @@ describe('buildTimelineSlots', () => {
     expect(slots).toHaveLength(206);
     expect(slots[205].startMinute).toBe(1435);
     expect(slots[205].segment).toBe(seg);
+  });
+});
+
+describe('trimToRecordedHours', () => {
+  const dayStart = new Date('2026-07-04T00:00:00.000Z');
+
+  it('keeps every one-minute segment of a run in its own slot', () => {
+    const first = segment({ id: 'a', recordedAt: '2026-07-04T09:05:00.000Z', durationSec: 60 });
+    const second = segment({ id: 'b', recordedAt: '2026-07-04T09:06:01.000Z', durationSec: 60 });
+    const slots = trimToRecordedHours(buildTimelineSlots([first, second], dayStart, 1), 1);
+    expect(slots.filter((s) => s.segment).map((s) => s.segment?.id)).toEqual(['a', 'b']);
+  });
+
+  it('draws whole hours from the first recording to the last', () => {
+    const early = segment({ id: 'a', recordedAt: '2026-07-04T09:05:00.000Z' });
+    const late = segment({ id: 'b', recordedAt: '2026-07-04T10:39:00.000Z' });
+    const slots = trimToRecordedHours(buildTimelineSlots([early, late], dayStart, 1), 1);
+    expect(slots).toHaveLength(120);
+    expect(slots[0].startMinute).toBe(9 * 60);
+    expect(slots[119].startMinute).toBe(10 * 60 + 59);
+  });
+
+  it('draws nothing on a day with no footage', () => {
+    expect(trimToRecordedHours(buildTimelineSlots([], dayStart, 1), 1)).toEqual([]);
+  });
+
+  it('formats a minute of the day as HH:MM', () => {
+    expect(formatMinuteOfDay(9 * 60 + 5)).toBe('09:05');
   });
 });

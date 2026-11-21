@@ -19,6 +19,8 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
+      "name": "Visio",
+      "shortName": "Visio",
       "favicon": "./assets/favicon.png"
     },
     "plugins": ["expo-video"]

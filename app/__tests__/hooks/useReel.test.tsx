@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
 
-import { useReel, useReelsInRange } from '../../src/hooks/useReel';
+import { useLatestReelDate, useReel, useReelsInRange } from '../../src/hooks/useReel';
 import type { VisionClient } from '../../src/lib/supabase';
 
 const ROW = {
@@ -77,5 +77,28 @@ describe('useReelsInRange', () => {
     await waitFor(() =>
       expect(result.current).toMatchObject({ kind: 'ready', reels: [{ id: 'r1' }] }),
     );
+  });
+});
+
+describe('useLatestReelDate', () => {
+  it('returns the most recent reel date', async () => {
+    const client = fakeReelClient([{ date: '2026-11-20' }]);
+    const { result } = await renderHook(() => useLatestReelDate(client, 'dev-1', true));
+    await waitFor(() => expect(result.current).toEqual({ kind: 'ready', date: '2026-11-20' }));
+  });
+
+  it('returns null when the device has no reel yet', async () => {
+    const client = fakeReelClient([]);
+    const { result } = await renderHook(() => useLatestReelDate(client, 'dev-1', true));
+    await waitFor(() => expect(result.current).toEqual({ kind: 'ready', date: null }));
+  });
+
+  it('queries nothing when disabled', async () => {
+    const from = jest.fn();
+    const { result } = await renderHook(() =>
+      useLatestReelDate({ from } as unknown as VisionClient, 'dev-1', false),
+    );
+    expect(from).not.toHaveBeenCalled();
+    expect(result.current).toEqual({ kind: 'loading' });
   });
 });

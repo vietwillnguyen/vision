@@ -58,6 +58,7 @@ anonymous rate limits shared runners kept hitting, so a stale list fails CI.
 - `firmware/` and `pipeline/` are consumed by `integration/` as path dependencies. Both need their `[build-system]` table and their `py.typed` marker to stay put, or `integration/` silently degrades every cross-package call to `Any` and `python -m` stops resolving outside the package directory.
 - Under jest-expo, `global.fetch` is React Native's XHR polyfill and resolves with `status`/`body` undefined against plain http localhost - live tests must inject a real fetch. `WebSocket` is *not* replaced, so Node's native one is used directly.
 - `app/AGENTS.md` pins the Expo SDK doc version to read before writing app code.
+- A new `public` table needs restrictive `<table>_read_only_{insert,update,delete}` policies like the ones `20261121120000_read_only_accounts.sql` creates, or `read_only_users.test.sql` fails: the public demo's password is published, so its account must stay unable to write anything. Runbook: [`docs/demo-mode.md`](docs/demo-mode.md).
 
 ## Maintaining this file
 
