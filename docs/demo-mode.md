@@ -28,7 +28,7 @@ eval "$(supabase status -o env)"
 
 cd pipeline
 SUPABASE_URL=$API_URL SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY \
-VISIO_DEMO_PASSWORD=visio-demo-local \
+VISIO_DEMO_PASSWORD=<any local password> \
   uv run --locked python -m pipeline.demo --placeholder
 ```
 
@@ -43,7 +43,7 @@ Then point the app at the stack and the demo account in `app/.env` (gitignored):
 EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
 EXPO_PUBLIC_SUPABASE_ANON_KEY=<ANON_KEY from supabase status>
 EXPO_PUBLIC_DEMO_EMAIL=demo@vision.vnlabs.dev
-EXPO_PUBLIC_DEMO_PASSWORD=visio-demo-local
+EXPO_PUBLIC_DEMO_PASSWORD=<the same password>
 ```
 
 and run `npx expo start --web` from `app/`.
