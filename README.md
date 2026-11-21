@@ -66,7 +66,7 @@ All three also carry a `workflow_dispatch` trigger, which exists for [`dependabo
 The firmware and pipeline jobs run `uv run --locked --extra dev pytest` on Python 3.11 - the floor all three packages declare (`requires-python = ">=3.11"`), so CI gates the oldest interpreter the firmware supports rather than the Python 3.13 the device's Raspberry Pi OS trixie ships; `--locked` enforces the committed `uv.lock`.
 The app job runs `npm ci`, a regeneration check on the committed database types (see [Generated database types](#generated-database-types)), `npx tsc --noEmit`, and `npx jest --ci` on Node 22.
 The `npm ci` step raises npm's fetch retries to 5 with 10-60s backoff to ride out transient registry failures ([#12](https://github.com/vietwillnguyen/vision/issues/12)); the settings are scoped to that step's env rather than a committed `.npmrc`, so local `npm install` keeps npm defaults.
-The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the nine suites in [`supabase/tests/database/`](supabase/tests/database).
+The integration job additionally runs a `Run pgTAP database tests` step - `supabase test db` against the local Supabase instance that job already starts - gating the database contract (RLS policies, table grants, and storage bucket policies) defined by the ten suites in [`supabase/tests/database/`](supabase/tests/database).
 It is a step inside that job rather than a job of its own because the suites finish in about a second, so a dedicated job would spend a third `supabase start` to save nothing, and because a new job would have to be added as a required status check in branch protection before it actually gated anything, whereas a step inherits the existing job's protection immediately.
 The step runs before the pytest step: each suite wraps itself in `begin`/`rollback`, so it leaves the freshly migrated database untouched for the tests that follow.
 The Supabase CLI is pinned through the workflow-level `SUPABASE_CLI_VERSION` env var rather than `version: latest`, so CI cannot change underneath a commit; Dependabot bumps action refs but not action inputs, so that pin is a manual bump.
@@ -344,6 +344,12 @@ cd app && npm run gen:types    # wraps scripts/gen-db-types.sh; needs Docker and
 That one command writes both generated artifacts from a live local Supabase instance: the TypeScript types above, and `integration/tests/fixtures/public_schema.json`, the `information_schema` dump the Python row-shape contract test reads (generated TypeScript does nothing for `pipeline/`).
 It starts and stops the stack itself, or reuses a running one after applying any migrations that stack is missing.
 The `app` job in [`tests.yml`](.github/workflows/tests.yml) re-runs it against the instance it has already started and fails on any diff, so a migration cannot land without a regeneration.
+
+## Public demo
+
+A read-only demo account lets anyone browse a real reel and its raw clips in the web build without a pendant.
+Read-only is enforced in the database (restrictive RLS on every table and on storage, plus triggers on the account's login), the seed tool `python -m pipeline.demo` builds the demo day with the real nightly pipeline, and the app shows **View demo** only when the build carries `EXPO_PUBLIC_DEMO_EMAIL` and `EXPO_PUBLIC_DEMO_PASSWORD`.
+[`docs/demo-mode.md`](docs/demo-mode.md) is the runbook: seeding locally and on a separate hosted project, exporting and hosting the web build, and the privacy rules for demo footage.
 
 ## Cross-service integration suite (Epic 5)
 

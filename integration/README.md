@@ -48,6 +48,11 @@ to end" bullet. It needs `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
 (`conftest.py`'s `live_supabase_env` fixture skips the test automatically
 when they're unset, e.g. in this sandbox where Docker is unavailable).
 
+`tests/test_read_only_demo_live.py` seeds a public-demo account with `pipeline.demo` (tiny generated clips, stub scoring, the real nightly pipeline), signs in as it with the anon key and attempts every write a visitor could make through the REST, Storage and Auth APIs, checking that each is refused and nothing changed.
+`supabase/tests/database/read_only_users.test.sql` proves the same denials as policy decisions in SQL; this proves the HTTP surfaces end at them.
+`tests/test_demo_firmware_contract.py` holds the demo seed's copy of the firmware's ffmpeg mux commands and flag-marker names equal to the firmware's own, since the pipeline package cannot import the firmware.
+See [`docs/demo-mode.md`](../docs/demo-mode.md).
+
 This suite runs in CI: `.github/workflows/tests.yml`'s `integration` job
 starts a local Supabase instance via `supabase/setup-cli` + `supabase
 start`, exports its connection details into `SUPABASE_*` env vars, then runs

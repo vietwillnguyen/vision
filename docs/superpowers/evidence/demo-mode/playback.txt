@@ -1,0 +1,6 @@
+Headless Chrome, 390x844, signed in through "View demo", after visiting every tab.
+Each mounted <video> was rewound, played muted for 2 s, then paused.
+
+Today's Reel   reels/<demo-device>/20261120.mp4: played to 2.00s of 59.80s at 1280x720, error=none
+Raw Footage    segments/<demo-device>/20261120_090500.mp4: played to 2.00s of 59.93s at 1280x720, error=none
+Archive        reels/<demo-device>/20261120.mp4: played to 2.00s of 59.80s at 1280x720, error=none

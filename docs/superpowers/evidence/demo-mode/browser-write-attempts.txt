@@ -1,0 +1,11 @@
+signed in as demo@vision.vnlabs.dev (app_metadata.read_only=true)
+READ  devices -> [{"device_id":"07ca384d-b06d-4e92-9ade-ffeb5bdd780a","name":"Visio bench prototype"}]
+READ  segments -> 8 rows
+WRITE rename device -> HTTP 200 []
+WRITE add device -> HTTP 403 {"code":"42501","details":null,"hint":null,"message":"new row violates row-level security policy \"devices_read_only_insert\" for table \"de
+WRITE clip preference -> HTTP 200 []
+WRITE delete device -> HTTP 200 []
+WRITE upload segment -> HTTP 400 {"statusCode":"403","error":"Unauthorized","message":"new row violates row-level security policy"}
+WRITE delete reel -> HTTP 200 []
+WRITE change password -> HTTP 500 {"code":500,"error_code":"unexpected_failure","msg":"Error during password storage","error_id":"b44d9773-e2e6-4a4b-8e0a-ec58ca2e893c"}
+AFTER devices -> [{"name":"Visio bench prototype"}]
