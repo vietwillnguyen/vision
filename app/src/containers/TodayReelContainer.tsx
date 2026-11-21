@@ -1,9 +1,10 @@
 import React from 'react';
-import { Share, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { ReelPlayer } from '../components/ReelPlayer';
 import { useReel } from '../hooks/useReel';
-import { useSignedUrl } from '../hooks/useSignedUrl';
+import { useSignedUrlState } from '../hooks/useSignedUrl';
+import { canShare, shareUrl } from '../lib/share';
 import { utcDateString } from '../logic/dates';
 import { buildReelSignedUrlRequest } from '../logic/segmentExport';
 import { colors, spacing } from '../theme';
@@ -13,16 +14,23 @@ interface TodayReelContainerProps {
   client: VisionClient;
   deviceId: string;
   now?: () => Date;
+  /** Heading over the player; the demo names its sample day instead. */
+  title?: string;
+  subtitle?: string | null;
+  caption?: string | null;
 }
 
 export function TodayReelContainer({
   client,
   deviceId,
   now = () => new Date(),
+  title = "Today's Reel",
+  subtitle = null,
+  caption = null,
 }: TodayReelContainerProps) {
   const today = utcDateString(now());
   const reelState = useReel(client, deviceId, today);
-  const signedUrl = useSignedUrl(
+  const video = useSignedUrlState(
     client,
     reelState.kind === 'ready' && reelState.reel.s3Key
       ? buildReelSignedUrlRequest(reelState.reel.s3Key)
@@ -53,15 +61,20 @@ export function TodayReelContainer({
     );
   }
 
+  const videoUri = video.kind === 'ready' ? video.url : null;
+  const videoError = !reelState.reel.s3Key
+    ? 'This reel has no video file yet.'
+    : video.kind === 'error'
+      ? `Couldn't load the reel video (${video.message}).`
+      : null;
   return (
     <ReelPlayer
-      videoUri={signedUrl}
-      title="Today's Reel"
-      onShare={() => {
-        if (signedUrl) {
-          Share.share({ url: signedUrl, message: signedUrl });
-        }
-      }}
+      videoUri={videoUri}
+      videoError={videoError}
+      title={title}
+      subtitle={subtitle}
+      caption={caption}
+      onShare={canShare() ? () => videoUri && shareUrl(videoUri) : undefined}
     />
   );
 }

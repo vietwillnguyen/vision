@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import type { AuthFormErrors } from '../logic/authValidation';
 import { colors, spacing } from '../theme';
@@ -12,6 +12,9 @@ interface AuthScreenProps {
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onSubmit: () => void;
+  /** Present only when the build carries public demo config. */
+  onViewDemo?: () => void;
+  demoPending?: boolean;
 }
 
 export function AuthScreen({
@@ -22,6 +25,8 @@ export function AuthScreen({
   onEmailChange,
   onPasswordChange,
   onSubmit,
+  onViewDemo,
+  demoPending = false,
 }: AuthScreenProps) {
   return (
     <View style={styles.container}>
@@ -64,15 +69,42 @@ export function AuthScreen({
           {authError}
         </Text>
       ) : null}
-      <View style={styles.buttonWrap}>
-        <Button
-          testID="submit-button"
-          title="Sign In"
-          color={colors.accent}
-          accessibilityLabel="Sign in"
-          onPress={onSubmit}
-        />
-      </View>
+      <Pressable
+        testID="submit-button"
+        accessibilityRole="button"
+        accessibilityLabel="Sign in"
+        onPress={onSubmit}
+        style={({ pressed }) => [styles.signIn, pressed ? styles.signInPressed : null]}
+      >
+        <Text style={styles.signInText}>Sign in</Text>
+      </Pressable>
+      {onViewDemo ? (
+        <View style={styles.demo}>
+          <View style={styles.divider}>
+            <View style={styles.rule} />
+            <Text style={styles.dividerText}>or</Text>
+            <View style={styles.rule} />
+          </View>
+          <Pressable
+            testID="view-demo-button"
+            accessibilityRole="button"
+            accessibilityLabel="View demo"
+            accessibilityState={{ busy: demoPending, disabled: demoPending }}
+            disabled={demoPending}
+            onPress={onViewDemo}
+            style={({ pressed }) => [styles.demoButton, pressed ? styles.demoButtonPressed : null]}
+          >
+            {demoPending ? (
+              <ActivityIndicator color={colors.accent} />
+            ) : (
+              <Text style={styles.demoButtonText}>View demo</Text>
+            )}
+          </Pressable>
+          <Text style={styles.demoCaption}>
+            Browse a sample day from the bench prototype. Read-only, no account needed.
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -100,5 +132,35 @@ const styles = StyleSheet.create({
   },
   fieldError: { color: colors.danger, marginBottom: spacing.sm },
   authError: { color: colors.danger, marginTop: spacing.sm, textAlign: 'center' },
-  buttonWrap: { marginTop: spacing.md },
+  signIn: {
+    backgroundColor: colors.accent,
+    borderRadius: 8,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.md,
+  },
+  signInPressed: { opacity: 0.85 },
+  signInText: { color: colors.text, fontSize: 16, fontWeight: '600' },
+  demo: { marginTop: spacing.lg },
+  divider: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
+  rule: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.textMuted },
+  dividerText: { color: colors.textMuted, marginHorizontal: spacing.sm },
+  demoButton: {
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderRadius: 8,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  demoButtonPressed: { backgroundColor: colors.surface },
+  demoButtonText: { color: colors.accent, fontSize: 16, fontWeight: '600' },
+  demoCaption: {
+    color: colors.textMuted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
 });

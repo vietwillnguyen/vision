@@ -164,4 +164,63 @@ describe('RawFootageContainer', () => {
     expect(names[0]).toMatch(/^s1-\d+\.mp4$/);
     alertSpy.mockRestore();
   });
+
+  it('plays a clip on a plain tap', async () => {
+    const { client } = fakeClient();
+    await render(
+      <RawFootageContainer
+        client={client}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T15:00:00Z')}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
+    await fireEvent.press(screen.getByTestId('slot-480'));
+    await waitFor(() => expect(screen.getByTestId('video-view')).toBeTruthy());
+  });
+
+  it('offers no reel preferences to a read-only account and says why', async () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const { client, updateCalls } = fakeClient();
+    await render(
+      <RawFootageContainer
+        client={client}
+        deviceId="dev-1"
+        readOnly
+        now={() => new Date('2026-07-18T15:00:00Z')}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('slot-480')).toBeTruthy());
+    expect(screen.getByTestId('read-only-note')).toHaveTextContent(/read-only/);
+    await fireEvent(screen.getByTestId('slot-480'), 'longPress');
+    expect(alertSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId('segment-preview')).toBeTruthy());
+    expect(updateCalls).toEqual([]);
+    alertSpy.mockRestore();
+  });
+
+  it('says so on a day with no footage', async () => {
+    const empty = {
+      from: () => {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          gte: () => chain,
+          lt: () => chain,
+          order: () => Promise.resolve({ data: [], error: null }),
+        };
+        return chain;
+      },
+    } as unknown as VisionClient;
+    await render(
+      <RawFootageContainer
+        client={empty}
+        deviceId="dev-1"
+        now={() => new Date('2026-07-18T15:00:00Z')}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText('No footage was recorded on this day.')).toBeTruthy(),
+    );
+  });
 });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { Session } from '@supabase/supabase-js';
 import React from 'react';
 import { StyleSheet } from 'react-native';
@@ -30,7 +30,11 @@ jest.mock('../src/lib/supabase', () => ({ supabase: {}, supabaseClientOptions: {
 
 const SESSION = { access_token: 'tok', user: { id: 'u1' } } as unknown as Session;
 
-function fakeClient(session: Session | null, devices: Record<string, unknown>[]) {
+function fakeClient(
+  session: Session | null,
+  devices: Record<string, unknown>[],
+  reels: Record<string, unknown>[] = [],
+) {
   // Scope `limit()` results per table so the devices fixture only feeds the
   // `devices` query - otherwise it would also satisfy `reels`/other queries
   // that end in `.limit()` and confuse assertions about rendered text.
@@ -56,7 +60,8 @@ function fakeClient(session: Session | null, devices: Record<string, unknown>[])
       signInWithPassword: jest.fn(),
       signOut: jest.fn(),
     },
-    from: (table: string) => makeChain(table === 'devices' ? devices : []),
+    from: (table: string) =>
+      makeChain(table === 'devices' ? devices : table === 'reels' ? reels : []),
     channel: () => ({ on: () => ({ subscribe: () => ({}) }) }),
     removeChannel: () => {},
     storage: {
@@ -119,5 +124,39 @@ describe('AppRoot', () => {
     await waitFor(() =>
       expect(screen.getByText('No device linked to this account yet.')).toBeTruthy(),
     );
+  });
+
+  it('offers the demo on the sign-in screen only when the build configures it', async () => {
+    await render(<AppRoot client={fakeClient(null, [])} demo={null} />);
+    await waitFor(() => expect(screen.getByTestId('email-input')).toBeTruthy());
+    expect(screen.queryByTestId('view-demo-button')).toBeNull();
+  });
+
+  it('marks a read-only session as the demo on every tab and browses its newest reel day', async () => {
+    const demoSession = {
+      access_token: 'tok',
+      user: { id: 'demo', app_metadata: { read_only: true } },
+    } as unknown as Session;
+    const client = fakeClient(
+      demoSession,
+      [{ device_id: 'dev-1', name: 'Visio bench prototype' }],
+      [{ date: '2026-11-20' }],
+    );
+    await render(<AppRoot client={client} />);
+    await waitFor(() => expect(screen.getByTestId('demo-banner')).toBeTruthy());
+    expect(screen.getByText('Demo - sample footage')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Sample reel')).toBeTruthy());
+    expect(screen.getAllByText('Fri 20 Nov 2026').length).toBeGreaterThan(0);
+
+    await fireEvent.press(screen.getByTestId('exit-demo-button'));
+    expect(client.auth.signOut).toHaveBeenCalled();
+  });
+
+  it('shows no demo banner to an ordinary owner', async () => {
+    await render(
+      <AppRoot client={fakeClient(SESSION, [{ device_id: 'dev-1', name: 'Pendant' }])} />,
+    );
+    await waitFor(() => expect(screen.getByText("Today's Reel")).toBeTruthy());
+    expect(screen.queryByTestId('demo-banner')).toBeNull();
   });
 });

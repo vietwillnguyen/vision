@@ -16,9 +16,16 @@ export function ArchiveScreen({ cells, onDayPress }: ArchiveScreenProps) {
       style={styles.container}
       contentContainerStyle={styles.grid}
     >
+      <View style={styles.header}>
+        <Text style={styles.title} accessibilityRole="header">
+          Archive
+        </Text>
+        <Text style={styles.subtitle}>Last 30 days. Tap a highlighted day to watch its reel.</Text>
+      </View>
       {cells.map((cell) => (
         <Pressable
           key={cell.date}
+          style={styles.cellWrap}
           testID={`heatmap-cell-${cell.date}`}
           accessibilityLabel={`Day ${cell.date}, ${cell.hasReel ? 'reel available' : 'no reel'}`}
           onPress={() => onDayPress(cell.date)}
@@ -37,11 +44,15 @@ export function ArchiveScreen({ cells, onDayPress }: ArchiveScreenProps) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', padding: spacing.md },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', padding: spacing.md - spacing.xs },
+  header: { width: '100%', paddingHorizontal: spacing.xs, marginBottom: spacing.sm },
+  title: { color: colors.text, fontSize: 20, fontWeight: '600' },
+  subtitle: { color: colors.textMuted, fontSize: 14, marginTop: 2 },
+  // Five per row, sized to the screen rather than a fixed 56px, so the grid
+  // fills a phone's width instead of leaving a ragged gap on the right.
+  cellWrap: { width: '20%', padding: spacing.xs },
   cell: {
-    width: 56,
-    height: 56,
-    margin: spacing.xs,
+    aspectRatio: 1,
     borderRadius: 8,
     backgroundColor: colors.surface,
     alignItems: 'center',

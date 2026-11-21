@@ -15,17 +15,34 @@ const Stack = createNativeStackNavigator<DeviceStackParamList>();
 interface DeviceStackProps {
   client: VisionClient;
   deviceId: string;
+  deviceName?: string | null;
+  readOnly?: boolean;
 }
 
-export function DeviceStack({ client, deviceId }: DeviceStackProps) {
+export function DeviceStack({
+  client,
+  deviceId,
+  deviceName = null,
+  readOnly = false,
+}: DeviceStackProps) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="DeviceHome">
-        {(props) => <DeviceContainer {...props} client={client} deviceId={deviceId} />}
+        {(props) => (
+          <DeviceContainer
+            {...props}
+            client={client}
+            deviceId={deviceId}
+            deviceName={deviceName}
+            readOnly={readOnly}
+          />
+        )}
       </Stack.Screen>
-      <Stack.Screen name="Reonboard">
-        {(props) => <ReonboardContainer {...props} client={client} />}
-      </Stack.Screen>
+      {readOnly ? null : (
+        <Stack.Screen name="Reonboard">
+          {(props) => <ReonboardContainer {...props} client={client} />}
+        </Stack.Screen>
+      )}
     </Stack.Navigator>
   );
 }
