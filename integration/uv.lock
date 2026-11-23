@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -2751,7 +2751,7 @@ dependencies = [
 requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.2.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.5" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.6" },
     { name = "supabase", specifier = ">=2.34.1" },
 ]
 provides-extras = ["dev"]
