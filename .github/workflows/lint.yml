@@ -34,7 +34,7 @@ jobs:
         working-directory: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           # Python 3.11 is the floor all three packages declare, same as
           # tests.yml - lint on the oldest interpreter the code must support.
